@@ -429,22 +429,25 @@ public:
         return result;
     }
 
-    // Registry of browser ClientHello profiles. Sticky for the whole app session: this client
-    // consistently presents ONE browser's JA4 (a real browser never changes its fingerprint
-    // between connections), while different installs/launches pick a different profile, so the
-    // fork's fingerprint is not a single universal marker (the weakness of one hard-coded hello).
-    // Adding a profile = author its builder + extend the modulo and switch below. New profiles
-    // should be derived from REAL browser captures: a JA4 that matches no real browser is worse
-    // than reusing a correct one.
+    // Registry of VERIFIED-fresh browser ClientHello profiles, selected sticky per app session
+    // (a real browser keeps one fingerprint; different installs pick different ones -> population
+    // diversity). Add a profile only from a real capture whose JA4 is confirmed both realistic
+    // and distinct; a wrong/duplicate JA4 is worse than a single good one.
+    //
+    // WARNING: getDefault() (the upstream Telegram hello) must NEVER be listed here. A JA4 dump
+    // shows its fingerprint IS the known-BLOCKED one: t13d1516h2_8daaf6152771_d8a2da3f94cd
+    // (JA4 hashes only extension TYPES, so its ML-KEM key_share does not change the hash). The
+    // whole point of switching to getFirefoxDefault was to stop emitting that fingerprint.
     static const TlsHello &pickProfile() {
+        static const TlsHello *const profiles[] = {
+            &getFirefoxDefault(), // JA4 t13d1616h2_86a278354501_eeeea6562960 (fresh, Firefox-like)
+        };
+        static const uint32_t count = sizeof(profiles) / sizeof(profiles[0]);
         static int chosen = -1;
         if (chosen < 0) {
-            chosen = (int) secureRandomBounded(2);
+            chosen = (int) secureRandomBounded(count);
         }
-        switch (chosen) {
-            case 0:  return getFirefoxDefault(); // Firefox-like JA4 (no padding ext, fixed ECH len)
-            default: return getDefault();        // post-quantum Chrome-like JA4 (X25519MLKEM768)
-        }
+        return *profiles[chosen];
     }
 
     // Refresh GREASE per connection. The profile builders are static singletons, so without this
