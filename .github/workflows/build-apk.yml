@@ -94,6 +94,9 @@ jobs:
             echo "::warning::No KEYSTORE_BASE64 secret — signing with the PUBLIC dummy key. Add your own keystore for a real fork."
           fi
 
+      - name: Reset ccache stats
+        run: ccache -z || true
+
       - name: Build Standalone universal APK
         env:
           USE_CCACHE: '1'
@@ -113,7 +116,19 @@ jobs:
           if [ -n "$KEYSTORE_PASSWORD" ]; then
             SIGN_ARGS="-PRELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD -PRELEASE_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD} -PRELEASE_KEY_ALIAS=${KEY_ALIAS:-zastogram}"
           fi
-          ./gradlew :TMessagesProj_AppStandalone:assembleAfatStandalone $SIGN_ARGS --stacktrace
+          ./gradlew --build-cache --profile :TMessagesProj_AppStandalone:assembleAfatStandalone $SIGN_ARGS --stacktrace
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s || true
+
+      - name: Upload Gradle profile report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-profile-report
+          path: '**/build/reports/profile/*.html'
+          if-no-files-found: ignore
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
