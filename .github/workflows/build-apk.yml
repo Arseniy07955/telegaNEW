@@ -57,6 +57,12 @@ jobs:
           sudo cp "$BT/30.0.3/dx" "$BT/35.0.0/dx"
           sudo cp "$BT/30.0.3/lib/dx.jar" "$BT/35.0.0/lib/dx.jar"
 
+      - name: Set up ccache (caches native object files across runs)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-afat-standalone
+          max-size: 4G
+
       - name: Inject your api_id / api_hash (optional, from repo secrets)
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -84,6 +90,7 @@ jobs:
 
       - name: Build Standalone universal APK
         env:
+          USE_CCACHE: '1'
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}

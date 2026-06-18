@@ -120,7 +120,14 @@ android {
         externalNativeBuild {
             cmake {
                 version '3.10.2'
-                arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                def cmakeArgs = ['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21'] //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                // CI speedup: route NDK compiles through ccache so unchanged native sources
+                // (webrtc/openh264/ffmpeg/boringssl) reuse cached object files across runs.
+                // Enabled only when USE_CCACHE=1 (GitHub Actions); local builds are unaffected.
+                if (System.getenv('USE_CCACHE') == '1') {
+                    cmakeArgs << '-DCMAKE_C_COMPILER_LAUNCHER=ccache' << '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'
+                }
+                arguments(*cmakeArgs)
             }
         }
     }
