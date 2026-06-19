@@ -128,8 +128,15 @@ def main() -> int:
         "MTProxy diagnostics must log selected FakeTLS profile",
     )
     require(
-        "send(socketFd, tempBuffer->bytes, size, 0)" in cpp,
-        "ClientHello must be sent whole like the working tsrman path",
+        "pendingClientHello" in combined
+        and "sendPendingClientHello" in combined
+        and "client_hello_send_progress" in cpp
+        and "send(socketFd, pendingClientHello->bytes + pendingClientHelloOffset" in cpp,
+        "ClientHello must keep a pending buffer until the whole FakeTLS hello is sent",
+    )
+    require(
+        "send(socketFd, tempBuffer->bytes, size, 0)" not in cpp,
+        "ClientHello must not be sent through a single unchecked send()",
     )
     require(
         "remaining > 2878" in cpp,
@@ -206,6 +213,26 @@ def main() -> int:
         and "clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS" in cpp
         and "admission_freeze_observed" in cpp,
         "FakeTLS freeze cooldown must stay disabled while diagnosing TSPU-style temporary endpoint bans",
+    )
+    require(
+        "MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true" in cpp
+        and "server_hello_timeout_close" in cpp
+        and "closeSocket(1, ETIMEDOUT)" in cpp,
+        "FakeTLS server-hello freezes must close the dead socket instead of waiting for the generic timeout",
+    )
+    require(
+        "recv_eof" in cpp
+        and "closeSocket(1, 0)" in cpp,
+        "TCP EOF must close the socket immediately instead of waiting for the generic timeout",
+    )
+    require(
+        "err == EINTR" in cpp
+        and "continue;" in cpp,
+        "FakeTLS send/recv loops must retry EINTR instead of treating it as a socket failure",
+    )
+    require(
+        "pending_hello=%u/%u" in cpp,
+        "MTProxy disconnect diagnostics must include pending ClientHello progress",
     )
     require(
         "pacingDeferred" not in combined,

@@ -81,8 +81,11 @@ private:
     bool tlsBufferSized = true;
     NativeByteBuffer *tlsBuffer = nullptr;
     ByteArray *tempBuffer = nullptr;
+    ByteArray *pendingClientHello = nullptr;
     ByteArray *pendingTlsFrame = nullptr;
     size_t bytesRead = 0;
+    uint32_t pendingClientHelloSize = 0;
+    uint32_t pendingClientHelloOffset = 0;
     uint32_t pendingTlsFrameSize = 0;
     uint32_t pendingTlsFrameOffset = 0;
     uint32_t pendingTlsPayloadSize = 0;
@@ -113,6 +116,9 @@ private:
     void releaseProxyHandshakeAdmission(bool succeeded, const char *reason);
     void markProxyHandshakeClientHelloSent();
     void markProxyHandshakeFreezeIfNeeded();
+    void clearPendingClientHello();
+    bool buildPendingClientHello(uint32_t size);
+    bool sendPendingClientHello();
     void clearPendingTlsFrame();
     bool buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t remaining);
     bool sendPendingTlsFrame();

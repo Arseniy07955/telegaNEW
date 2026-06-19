@@ -58,6 +58,7 @@ static constexpr int32_t MT_PROXY_HANDSHAKE_TIMER_FREEZE = 2;
 static constexpr int64_t MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS = 4500;
 static constexpr bool MT_PROXY_HANDSHAKE_ADMISSION_ENABLED = false;
 static constexpr bool MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED = false;
+static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
 
 struct MtProxyHandshakeQueuedRequest {
     ConnectionSocket *socket = nullptr;
@@ -983,6 +984,7 @@ ConnectionSocket::ConnectionSocket(int32_t instance) {
 
 ConnectionSocket::~ConnectionSocket() {
     cancelProxyHandshakeAdmission();
+    clearPendingClientHello();
     clearPendingTlsFrame();
     if (proxyHandshakeAdmissionTimer != nullptr) {
         delete proxyHandshakeAdmissionTimer;
@@ -1206,7 +1208,60 @@ void ConnectionSocket::markProxyHandshakeFreezeIfNeeded() {
     if (elapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_detected key=%s elapsed=%ld", this, proxyHandshakeAdmissionKey.c_str(), (long) elapsed);
         releaseProxyHandshakeAdmission(false, "freeze_timeout");
+        if (MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED) {
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup server_hello_timeout_close elapsed=%ld", this, (long) elapsed);
+            closeSocket(1, ETIMEDOUT);
+        }
     }
+}
+
+void ConnectionSocket::clearPendingClientHello() {
+    if (pendingClientHello != nullptr) {
+        delete pendingClientHello;
+        pendingClientHello = nullptr;
+    }
+    pendingClientHelloSize = 0;
+    pendingClientHelloOffset = 0;
+}
+
+bool ConnectionSocket::buildPendingClientHello(uint32_t size) {
+    if (pendingClientHello != nullptr || size == 0) {
+        return false;
+    }
+    pendingClientHelloSize = size;
+    pendingClientHelloOffset = 0;
+    pendingClientHello = new ByteArray(size);
+    std::memcpy(pendingClientHello->bytes, tempBuffer->bytes, size);
+    return true;
+}
+
+bool ConnectionSocket::sendPendingClientHello() {
+    while (pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize) {
+        ssize_t sentLength = send(socketFd, pendingClientHello->bytes + pendingClientHelloOffset, pendingClientHelloSize - pendingClientHelloOffset, 0);
+        if (sentLength < 0) {
+            int err = errno;
+            if (err == EINTR) {
+                continue;
+            }
+            if (err == EAGAIN || err == EWOULDBLOCK) {
+                adjustWriteOp();
+                return true;
+            }
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) ClientHello pending send failed errno=%d", this, err);
+            closeSocket(1, -1);
+            return false;
+        }
+        if (sentLength == 0) {
+            adjustWriteOp();
+            return true;
+        }
+        pendingClientHelloOffset += (uint32_t) sentLength;
+        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+        if (pendingClientHelloOffset < pendingClientHelloSize && LOGS_ENABLED) {
+            DEBUG_D("connection(%p) mtproxy_startup client_hello_send_progress bytes=%u expected=%u", this, pendingClientHelloOffset, pendingClientHelloSize);
+        }
+    }
+    return true;
 }
 
 void ConnectionSocket::clearPendingTlsFrame() {
@@ -1256,6 +1311,9 @@ bool ConnectionSocket::sendPendingTlsFrame() {
         ssize_t sentLength = send(socketFd, pendingTlsFrame->bytes + pendingTlsFrameOffset, pendingTlsFrameSize - pendingTlsFrameOffset, 0);
         if (sentLength < 0) {
             int err = errno;
+            if (err == EINTR) {
+                continue;
+            }
             if (err == EAGAIN || err == EWOULDBLOCK) {
                 adjustWriteOp();
                 return true;
@@ -1284,6 +1342,7 @@ bool ConnectionSocket::sendPendingTlsFrame() {
 
 void ConnectionSocket::openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType) {
     cancelProxyHandshakeAdmission();
+    clearPendingClientHello();
     clearPendingTlsFrame();
     currentNetworkType = networkType;
     isIpv6 = ipv6;
@@ -1496,7 +1555,7 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
 
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d error=%d proxy_state=%d tls_state=%d bytes_read=%zu pending=%u/%u", this, reason, error, (int) proxyAuthState, (int) tlsState, bytesRead, pendingTlsFrameOffset, pendingTlsFrameSize);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d error=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u", this, reason, error, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize);
     releaseProxyHandshakeAdmission(false, "closeSocket");
     cancelProxyHandshakeAdmission();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);
@@ -1513,6 +1572,7 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     tlsState = 0;
     onConnectedSent = false;
     mtproxySocketConnectedLogged = false;
+    clearPendingClientHello();
     clearPendingTlsFrame();
     outgoingByteStream->clean();
     if (tlsBuffer != nullptr) {
@@ -1537,7 +1597,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 int err = errno;
 //                if (LOGS_ENABLED) DEBUG_D("connection(%p) recv resulted with %d, errno=%d", this, readCount, err);
                 if (readCount < 0) {
-                    if (err == EAGAIN) {
+                    if (err == EINTR) {
+                        continue;
+                    }
+                    if (err == EAGAIN || err == EWOULDBLOCK) {
                         break;
                     }
                     closeSocket(1, -1);
@@ -1548,6 +1611,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     buffer->limit((uint32_t) readCount);
                     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
                     if (proxyAuthState == 11) {
+                        if (pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize && LOGS_ENABLED) {
+                            DEBUG_D("connection(%p) mtproxy_startup server_data_before_client_hello_complete pending_hello=%u/%u read=%d", this, pendingClientHelloOffset, pendingClientHelloSize, (int) readCount);
+                        }
                         if (LOGS_ENABLED) DEBUG_D("connection(%p) TLS received %d", this, (int) readCount);
                         size_t newBytesRead = bytesRead + readCount;
                         if (newBytesRead > 64 * 1024) {
@@ -1736,7 +1802,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         }
                     }
                 } else if (readCount == 0) {
-                    break;
+                    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect recv_eof proxy_state=%d tls_state=%d", this, (int) proxyAuthState, (int) tlsState);
+                    closeSocket(1, 0);
+                    return;
                 }
 //                if (readCount != READ_BUFFER_SIZE) {
 //                    break;
@@ -1779,13 +1847,22 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         memcpy(tempBuffer->bytes + 11, tempBuffer->bytes + 64 * 1024, 32);
                         bytesRead = 0;
 
-                        ssize_t sentLength = send(socketFd, tempBuffer->bytes, size, 0);
-                        if (sentLength < 0) {
-                            if (LOGS_ENABLED) DEBUG_E("connection(%p) send failed", this);
+                        if (!buildPendingClientHello(size)) {
+                            if (LOGS_ENABLED) DEBUG_E("connection(%p) ClientHello pending buffer build failed", this);
                             closeSocket(1, -1);
                             return;
                         }
-                        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup client_hello_sent bytes=%d expected=%u domain_len=%d", this, (int) sentLength, size, (int) currentSecretDomain.size());
+                    }
+                    if (proxyAuthState == 11 && pendingClientHello != nullptr) {
+                        uint32_t size = pendingClientHelloSize;
+                        if (!sendPendingClientHello()) {
+                            return;
+                        }
+                        if (pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize) {
+                            return;
+                        }
+                        clearPendingClientHello();
+                        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup client_hello_sent bytes=%u expected=%u domain_len=%d", this, size, size, (int) currentSecretDomain.size());
                         markProxyHandshakeClientHelloSent();
                         adjustWriteOp();
                     }
@@ -1924,8 +2001,9 @@ void ConnectionSocket::adjustWriteOp() {
         return;
     }
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
+    bool hasPendingClientHello = pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize;
     bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
-    if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10) {
+    if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;
