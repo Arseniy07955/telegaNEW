@@ -678,6 +678,33 @@ void ConnectionsManager::cleanUp(bool resetKeys, int32_t datacenterId) {
     });
 }
 
+void ConnectionsManager::scheduleNextProxyCheck() {
+    if (proxyCheckQueue.empty()) {
+        return;
+    }
+    ProxyCheckInfo *proxyCheckInfo = proxyCheckQueue[0].release();
+    proxyCheckQueue.erase(proxyCheckQueue.begin());
+    if (LOGS_ENABLED) DEBUG_D("proxy_check_next queued=%d", (int32_t) proxyCheckQueue.size());
+    scheduleCheckProxyInternal(proxyCheckInfo);
+}
+
+void ConnectionsManager::finishProxyCheck(std::vector<std::unique_ptr<ProxyCheckInfo>>::iterator iter, int64_t time, const char *reason, bool requestFound) {
+    ProxyCheckInfo *proxyCheckInfo = iter->get();
+    if (LOGS_ENABLED) DEBUG_D(
+        "proxy_check_finish result=%s reason=%s request_found=%d ping_id=%" PRId64 " address=%s:%u connection_num=%d queued=%d",
+        time >= 0 ? "ok" : "fail",
+        reason,
+        requestFound ? 1 : 0,
+        proxyCheckInfo->pingId,
+        proxyCheckInfo->address.c_str(),
+        (uint32_t) proxyCheckInfo->port,
+        proxyCheckInfo->connectionNum,
+        (int32_t) proxyCheckQueue.size());
+    proxyCheckInfo->onRequestTime(time);
+    proxyActiveChecks.erase(iter);
+    scheduleNextProxyCheck();
+}
+
 void ConnectionsManager::onConnectionClosed(Connection *connection, int reason) {
     if (reason == 1) {
         lastProtocolUsefullData = false;
@@ -749,7 +776,7 @@ void ConnectionsManager::onConnectionClosed(Connection *connection, int reason) 
         sendingPushPing = false;
         lastPushPingTime = getCurrentTimeMonotonicMillis() - nextPingTimeOffset + 4000;
     } else if (connection->getConnectionType() == ConnectionTypeProxy) {
-        scheduleTask([&, connection] {
+        scheduleTask([&, connection, reason] {
             for (auto iter = proxyActiveChecks.begin(); iter != proxyActiveChecks.end(); iter++) {
                 ProxyCheckInfo *proxyCheckInfo = iter->get();
                 if (proxyCheckInfo->connectionNum == connection->getConnectionNum()) {
@@ -760,19 +787,14 @@ void ConnectionsManager::onConnectionClosed(Connection *connection, int reason) 
                             request->completed = true;
                             DEBUG_D("2) erase request %d 0x%" PRIx64, request->requestToken, request->messageId);
                             runningRequests.erase(iter2);
-                            proxyCheckInfo->onRequestTime(-1);
                             found = true;
                             break;
                         }
                     }
-                    if (found) {
-                        proxyActiveChecks.erase(iter);
-                        if (!proxyCheckQueue.empty()) {
-                            proxyCheckInfo = proxyCheckQueue[0].release();
-                            proxyCheckQueue.erase(proxyCheckQueue.begin());
-                            checkProxyInternal(proxyCheckInfo);
-                        }
+                    if (!found && LOGS_ENABLED) {
+                        DEBUG_D("proxy_check_finish request_missing close_reason=%d ping_id=%" PRId64 " connection_num=%d", reason, proxyCheckInfo->pingId, proxyCheckInfo->connectionNum);
                     }
+                    finishProxyCheck(iter, -1, "connection_closed", found);
                     break;
                 }
             }
@@ -1171,25 +1193,24 @@ void ConnectionsManager::processServerResponse(TLObject *message, int64_t messag
                 for (auto iter = proxyActiveChecks.begin(); iter != proxyActiveChecks.end(); iter++) {
                     ProxyCheckInfo *proxyCheckInfo = iter->get();
                     if (proxyCheckInfo->pingId == response->ping_id) {
+                        bool found = false;
+                        int64_t ping = -1;
                         for (auto iter2 = runningRequests.begin(); iter2 != runningRequests.end(); iter2++) {
                             Request *request = iter2->get();
                             if (request->requestToken == proxyCheckInfo->requestToken) {
-                                int64_t ping = llabs(getCurrentTimeMonotonicMillis() - request->startTimeMillis);
+                                ping = llabs(getCurrentTimeMonotonicMillis() - request->startTimeMillis);
                                 if (LOGS_ENABLED) DEBUG_D("got ping response for request %p, %" PRId64, request->rawRequest, ping);
                                 request->completed = true;
-                                proxyCheckInfo->onRequestTime(ping);
                                 DEBUG_D("3) erase request %d 0x%" PRIx64, request->requestToken, request->messageId);
                                 runningRequests.erase(iter2);
+                                found = true;
                                 break;
                             }
                         }
-                        proxyActiveChecks.erase(iter);
-
-                        if (!proxyCheckQueue.empty()) {
-                            proxyCheckInfo = proxyCheckQueue[0].release();
-                            proxyCheckQueue.erase(proxyCheckQueue.begin());
-                            scheduleCheckProxyInternal(proxyCheckInfo);
+                        if (!found && LOGS_ENABLED) {
+                            DEBUG_D("proxy_check_finish request_missing pong_id=%" PRId64 " connection_num=%d", proxyCheckInfo->pingId, proxyCheckInfo->connectionNum);
                         }
+                        finishProxyCheck(iter, ping, found ? "pong" : "pong_request_missing", found);
                         break;
                     }
                 }

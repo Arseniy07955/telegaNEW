@@ -12,10 +12,12 @@
 #include <pthread.h>
 #include <queue>
 #include <functional>
+#include <memory>
 #include <sys/epoll.h>
 #include <map>
 #include <atomic>
 #include <unordered_set>
+#include <vector>
 #include "Defines.h"
 
 #ifdef ANDROID
@@ -135,6 +137,8 @@ private:
 
     void scheduleCheckProxyInternal(ProxyCheckInfo *proxyCheckInfo);
     void checkProxyInternal(ProxyCheckInfo *proxyCheckInfo);
+    void finishProxyCheck(std::vector<std::unique_ptr<ProxyCheckInfo>>::iterator iter, int64_t time, const char *reason, bool requestFound);
+    void scheduleNextProxyCheck();
 
     int32_t instanceNum = 0;
     uint32_t configVersion = 5;
