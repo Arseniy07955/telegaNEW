@@ -250,11 +250,12 @@ public class ProxyCheckScheduler {
         }
         activeRequest = null;
         String normalizedDiagnostic = normalizedDiagnosticForResult(time, diagnostic);
+        String displayDiagnostic = displayDiagnosticForResult(request, time, normalizedDiagnostic);
         long appliedTime = appliedTimeForResult(request, time);
         long callbackTime = callbackTimeForResult(request, time);
-        String appliedDiagnostic = shouldPreserveConnectedState(request, time) ? ProxyCheckDiagnostics.OK : normalizedDiagnostic;
-        log("finish result=" + (callbackTime == -1 ? "fail" : "ok") + " phase=" + normalizedDiagnostic + " diagnostic=" + normalizedDiagnostic + " time=" + callbackTime + " applied_time=" + appliedTime + " raw_time=" + time + " endpoint=" + endpoint(request.proxyInfo) + " queued=" + queue.size() + " cancelled=" + request.cancelled + " listeners=" + request.activeListenerCount());
-        rememberCheckResult(request, callbackTime, normalizedDiagnostic);
+        String appliedDiagnostic = shouldPreserveConnectedState(request, time) ? ProxyCheckDiagnostics.OK : displayDiagnostic;
+        log("finish result=" + (callbackTime == -1 ? "fail" : "ok") + " phase=" + normalizedDiagnostic + " diagnostic=" + displayDiagnostic + " time=" + callbackTime + " applied_time=" + appliedTime + " raw_time=" + time + " endpoint=" + endpoint(request.proxyInfo) + " queued=" + queue.size() + " cancelled=" + request.cancelled + " listeners=" + request.activeListenerCount());
+        rememberCheckResult(request, callbackTime, displayDiagnostic);
         for (int i = 0, count = request.listeners.size(); i < count; i++) {
             Listener listener = request.listeners.get(i);
             if (listener.cancelled) {
@@ -263,7 +264,7 @@ public class ProxyCheckScheduler {
             applyMeasuredResult(listener.proxyInfo, appliedTime, appliedDiagnostic);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, listener.proxyInfo);
             if (listener.callback != null) {
-                listener.callback.onProxyChecked(listener.proxyInfo, callbackTime, normalizedDiagnostic);
+                listener.callback.onProxyChecked(listener.proxyInfo, callbackTime, displayDiagnostic);
             }
         }
         notifyRequestFinishedIfDrained(request);
@@ -275,6 +276,17 @@ public class ProxyCheckScheduler {
             return ProxyCheckDiagnostics.OK;
         }
         return ProxyCheckDiagnostics.normalize(diagnostic);
+    }
+
+    private static String displayDiagnosticForResult(Request request, long time, String normalizedDiagnostic) {
+        if (time != -1 || !ProxyCheckDiagnostics.TCP_NOT_CONNECTED.equals(normalizedDiagnostic)) {
+            return normalizedDiagnostic;
+        }
+        String previousDiagnostic = lastEndpointDiagnostic(request.proxyInfo);
+        if (ProxyCheckDiagnostics.TCP_NOT_CONNECTED.equals(previousDiagnostic) || ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED.equals(previousDiagnostic)) {
+            return ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED;
+        }
+        return normalizedDiagnostic;
     }
 
     private static long appliedTimeForResult(Request request, long time) {

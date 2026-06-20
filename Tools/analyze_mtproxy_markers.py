@@ -211,6 +211,7 @@ class Attempt:
             "server_hello_hmac_timeout": "server_hello_hmac_timeout",
             "server_hello_timeout_close": "server_hello_timeout_close",
             "TLS server hello hmac wait": "server_hello_hmac_wait",
+            "admission_tcp_failure_cooldown": "admission_tcp_failure_cooldown",
             "admission_freeze_detected": "admission_freeze_detected",
             "on_connected": "on_connected",
             "first_tls_app_sent": "first_tls_app_sent",

@@ -617,7 +617,7 @@ public class SharedConfig {
             } else {
                 mtProxyConnectionPatternMode = preferences.getBoolean("mtProxyHandshakeAdmission", false) ? 1 : 0;
             }
-            if (mtProxyConnectionPatternMode < 0 || mtProxyConnectionPatternMode > 3) {
+            if (mtProxyConnectionPatternMode < 0 || mtProxyConnectionPatternMode > 4) {
                 mtProxyConnectionPatternMode = 0;
             }
             mtProxyRecordSizingMode = preferences.getInt("mtProxyRecordSizingMode", 0);

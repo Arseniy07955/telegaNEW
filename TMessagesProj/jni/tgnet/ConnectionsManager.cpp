@@ -3495,7 +3495,7 @@ static int32_t normalizeMtProxyClientHelloFragmentation(int32_t mtProxyClientHel
 }
 
 static int32_t normalizeMtProxyConnectionPatternMode(int32_t mtProxyConnectionPatternMode) {
-    if (mtProxyConnectionPatternMode >= 0 && mtProxyConnectionPatternMode <= 3) {
+    if (mtProxyConnectionPatternMode >= 0 && mtProxyConnectionPatternMode <= 4) {
         return mtProxyConnectionPatternMode;
     }
     return 0;

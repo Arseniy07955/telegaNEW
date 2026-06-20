@@ -9,9 +9,11 @@ public class ProxyCheckDiagnostics {
 
     public static final String OK = "ok";
     public static final String CHECKING = "checking";
+    public static final String WAITING_TCP = "waiting_tcp";
     public static final String START_FAILED = "start_failed";
     public static final String TCP_NOT_CONNECTED = "tcp_not_connected";
     public static final String TCP_CONNECTED_NO_PONG = "tcp_connected_no_pong";
+    public static final String NETWORK_BLOCK_SUSPECTED = "network_block_suspected";
     public static final String CLIENT_HELLO_SENT_NO_SERVER_HELLO = "client_hello_sent_no_server_hello";
     public static final String SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch";
     public static final String POST_HANDSHAKE_NO_APPDATA = "post_handshake_no_appdata";
@@ -26,9 +28,11 @@ public class ProxyCheckDiagnostics {
         switch (diagnostic) {
             case OK:
             case CHECKING:
+            case WAITING_TCP:
             case START_FAILED:
             case TCP_NOT_CONNECTED:
             case TCP_CONNECTED_NO_PONG:
+            case NETWORK_BLOCK_SUSPECTED:
             case CLIENT_HELLO_SENT_NO_SERVER_HELLO:
             case SERVER_HELLO_HMAC_MISMATCH:
             case POST_HANDSHAKE_NO_APPDATA:
@@ -63,6 +67,12 @@ public class ProxyCheckDiagnostics {
             }
             if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+            }
+            if (proxyInfo.checking) {
+                return LocaleController.getString(R.string.ProxyStatusCheckingConnection);
+            }
+            if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
             }
             return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
         }
@@ -100,6 +110,9 @@ public class ProxyCheckDiagnostics {
         if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
+        if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+            return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
+        }
         return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
     }
 
@@ -132,12 +145,16 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.Available);
             case CHECKING:
                 return LocaleController.getString(R.string.ProxyStatusCheckingConnection);
+            case WAITING_TCP:
+                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
             case START_FAILED:
                 return LocaleController.getString(R.string.ProxyStatusStartFailed);
             case TCP_NOT_CONNECTED:
                 return LocaleController.getString(R.string.ProxyStatusTcpNotConnected);
             case TCP_CONNECTED_NO_PONG:
                 return LocaleController.getString(R.string.ProxyStatusTcpConnectedNoPong);
+            case NETWORK_BLOCK_SUSPECTED:
+                return LocaleController.getString(R.string.ProxyStatusNetworkBlockSuspected);
             case CLIENT_HELLO_SENT_NO_SERVER_HELLO:
                 return LocaleController.getString(R.string.ProxyStatusClientHelloNoServerHello);
             case SERVER_HELLO_HMAC_MISMATCH:

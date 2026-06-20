@@ -24,6 +24,7 @@ checks = [
     (SCHEDULER, "markConnected", "scheduler must expose a single path for real connected-state observations"),
     (SCHEDULER, "nextAllowedCheckTime", "scheduler must expose a single debounce policy for UI and rotation"),
     (SCHEDULER, "rememberCheckResult", "scheduler must update endpoint cooldowns from measured check results"),
+    (SCHEDULER, "displayDiagnosticForResult", "scheduler must translate repeated TCP failures into a user-facing network-block phase"),
     (SCHEDULER, "skip_backoff", "scheduler must log when a repeated endpoint check is intentionally suppressed"),
     (SCHEDULER, "endpointKey", "scheduler must deduplicate checks by proxy endpoint, not ProxyInfo object identity"),
     (SCHEDULER, "toLowerCase(Locale.US)", "scheduler endpoint key must normalize host names without device-locale surprises"),
@@ -202,13 +203,13 @@ if "shouldCheck(request.proxyInfo, request.force)" not in scheduler_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: queued starts must re-check cooldown before opening native sockets")
     sys.exit(1)
-if "rememberCheckResult(request, callbackTime, normalizedDiagnostic);" not in scheduler_text:
+if "rememberCheckResult(request, callbackTime, displayDiagnostic);" not in scheduler_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: finishRequest must update endpoint backoff before listener fan-out")
     sys.exit(1)
-if "rememberCheckResult(request, callbackTime, normalizedDiagnostic);" in scheduler_text:
+if "rememberCheckResult(request, callbackTime, displayDiagnostic);" in scheduler_text:
     finish_start = scheduler_text.find("private static void finishRequest(")
-    remember_index = scheduler_text.find("rememberCheckResult(request, callbackTime, normalizedDiagnostic);", finish_start)
+    remember_index = scheduler_text.find("rememberCheckResult(request, callbackTime, displayDiagnostic);", finish_start)
     fanout_index = scheduler_text.find("for (int i = 0, count = request.listeners.size();", finish_start)
     if remember_index == -1 or fanout_index == -1 or remember_index > fanout_index:
         print("Proxy check scheduler guard failed:")

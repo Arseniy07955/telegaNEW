@@ -13,6 +13,8 @@ DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCh
 checks = [
     (STRINGS, 'name="ProxyStatusConnectingSlow"', "missing slow connecting proxy status string"),
     (STRINGS, 'name="ProxyStatusCheckingConnection"', "missing proxy checking status string"),
+    (STRINGS, 'name="ProxyStatusWaitingTcp"', "missing current-proxy TCP wait status string"),
+    (STRINGS, 'name="ProxyStatusNetworkBlockSuspected"', "missing network-block suspected status string"),
     (STRINGS, 'name="ProxyStatusUnchecked"', "missing passive unchecked proxy status string"),
     (STRINGS, 'name="ProxyStatusNotRespondingNow"', "missing temporary proxy failure string"),
     (STRINGS, 'name="ProxyStatusTcpNotConnected"', "missing TCP failure proxy status string"),
@@ -24,6 +26,9 @@ checks = [
     (STRINGS, 'name="UseProxyTelegramInfoStealth"', "missing MTProto stealth hint string"),
     (DIAGNOSTICS, "ProxyStatusConnectingSlow", "diagnostic map does not use slow connecting text"),
     (DIAGNOSTICS, "ProxyStatusCheckingConnection", "diagnostic map does not use checking text"),
+    (DIAGNOSTICS, "ProxyStatusWaitingTcp", "diagnostic map does not expose current-proxy TCP wait text"),
+    (DIAGNOSTICS, "ProxyStatusNetworkBlockSuspected", "diagnostic map does not expose network-block suspected text"),
+    (DIAGNOSTICS, "network_block_suspected", "diagnostic map must use a readable network-block phase string"),
     (DIAGNOSTICS, "ProxyStatusUnchecked", "diagnostic map must show passive proxy rows as unchecked"),
     (DIAGNOSTICS, "ProxyStatusTcpConnectedNoPong", "diagnostic map does not expose post-TCP/no-pong text"),
     (DIAGNOSTICS, "headerStatusText", "diagnostic map must provide proxy-window header status text"),

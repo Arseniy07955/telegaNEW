@@ -133,6 +133,7 @@ public class ConnectionsManager extends BaseController {
     public final static int MT_PROXY_CONNECTION_PATTERN_SOFT = 1;
     public final static int MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
     public final static int MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
+    public final static int MT_PROXY_CONNECTION_PATTERN_BROWSER = 4;
     public final static int WSS_TRANSPORT_OFF = SharedConfig.TRANSPORT_LEGACY_PROXY;
     public final static int WSS_TRANSPORT_OFFICIAL = SharedConfig.TRANSPORT_WSS_OFFICIAL;
     public final static int WSS_TRANSPORT_CUSTOM = SharedConfig.TRANSPORT_WSS_CUSTOM;
@@ -1065,7 +1066,7 @@ public class ConnectionsManager extends BaseController {
 
     private static int resolveMtProxyConnectionPatternMode() {
         int mode = SharedConfig.mtProxyConnectionPatternMode;
-        if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_BROWSER) {
             return mode;
         }
         return MT_PROXY_CONNECTION_PATTERN_OFF;

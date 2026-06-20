@@ -75,13 +75,24 @@ static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_OFF = 0;
 static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_SOFT = 1;
 static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
 static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
+static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_BROWSER = 4;
 static constexpr int64_t MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS = 4500;
 static constexpr int64_t MT_PROXY_SERVER_HELLO_HMAC_WAIT_MS = 900;
+static constexpr int32_t MT_PROXY_HANDSHAKE_SOFT_ACTIVE_LIMIT = 2;
+static constexpr int32_t MT_PROXY_HANDSHAKE_BROWSER_RECENT_SUCCESS_LIMIT = 2;
+static constexpr uint32_t MT_PROXY_HANDSHAKE_BROWSER_HEAVY_DELAY_BASE_MS = 2600;
+static constexpr int64_t MT_PROXY_HANDSHAKE_RECENT_SUCCESS_WINDOW_MS = 120000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_SUCCESS_COOLDOWN_RESET_MS = 60000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_BROWSER_FREEZE_COOLDOWN_MAX_MS = 16000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_QUIET_FREEZE_COOLDOWN_MAX_MS = 12000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_STRICT_FREEZE_COOLDOWN_MAX_MS = 25000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_BROWSER_FAILURE_COOLDOWN_MAX_MS = 8000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_QUIET_FAILURE_COOLDOWN_MAX_MS = 5000;
+static constexpr int64_t MT_PROXY_HANDSHAKE_STRICT_FAILURE_COOLDOWN_MAX_MS = 12000;
 static constexpr int64_t MT_PROXY_STARTUP_COVER_SOFT_WINDOW_MS = 12000;
 static constexpr int64_t MT_PROXY_STARTUP_COVER_STRICT_WINDOW_MS = 20000;
 static constexpr uint32_t MT_PROXY_STARTUP_COVER_SOFT_FRAMES = 8;
 static constexpr uint32_t MT_PROXY_STARTUP_COVER_STRICT_FRAMES = 14;
-static constexpr bool MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED = false;
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
 static constexpr size_t MT_PROXY_TLS_SERVER_RESPONSE_MAX_BYTES = 64 * 1024;
 static constexpr size_t MT_PROXY_TLS_DIGEST_SIZE = 32;
@@ -153,6 +164,7 @@ struct MtProxyHandshakeEndpointState {
     int32_t activeHandshakes = 0;
     int32_t recentSuccesses = 0;
     int32_t freezePenalty = 0;
+    int32_t tcpFailurePenalty = 0;
     int64_t lastGrantTime = 0;
     int64_t lastSuccessTime = 0;
     int64_t cooldownUntil = 0;
@@ -205,7 +217,7 @@ static bool mtProxyVerifyServerHelloHmac(const std::string &secret, const uint8_
 }
 
 static int32_t normalizeMtProxyConnectionPatternMode(int32_t mode) {
-    if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_STRICT) {
+    if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_BROWSER) {
         return mode;
     }
     return MT_PROXY_CONNECTION_PATTERN_OFF;
@@ -215,6 +227,8 @@ static const char *mtProxyConnectionPatternModeName(int32_t mode) {
     switch (normalizeMtProxyConnectionPatternMode(mode)) {
         case MT_PROXY_CONNECTION_PATTERN_SOFT:
             return "soft";
+        case MT_PROXY_CONNECTION_PATTERN_BROWSER:
+            return "browser";
         case MT_PROXY_CONNECTION_PATTERN_QUIET:
             return "quiet";
         case MT_PROXY_CONNECTION_PATTERN_STRICT:
@@ -231,7 +245,20 @@ static bool mtProxyConnectionPatternUsesAdmission(int32_t mode) {
 
 static bool mtProxyConnectionPatternUsesCooldown(int32_t mode) {
     mode = normalizeMtProxyConnectionPatternMode(mode);
-    return mode == MT_PROXY_CONNECTION_PATTERN_QUIET || mode == MT_PROXY_CONNECTION_PATTERN_STRICT;
+    return mode == MT_PROXY_CONNECTION_PATTERN_BROWSER || mode == MT_PROXY_CONNECTION_PATTERN_QUIET || mode == MT_PROXY_CONNECTION_PATTERN_STRICT;
+}
+
+static bool mtProxyCooldownBlocksPriority(const MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode, int32_t priority) {
+    if (!mtProxyConnectionPatternUsesCooldown(mode) || state.cooldownUntil <= now) {
+        return false;
+    }
+    if (priority <= MT_PROXY_HANDSHAKE_PRIORITY_BYPASS) {
+        return false;
+    }
+    if (state.tcpFailurePenalty > 0) {
+        return priority > MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
+    }
+    return priority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA;
 }
 
 static uint32_t mtProxyHandshakeGrantDelay(int32_t mode) {
@@ -242,20 +269,28 @@ static uint32_t mtProxyHandshakeGrantDelay(int32_t mode) {
     if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET) {
         return 1200 + secureRandomBounded(1301);
     }
+    if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER) {
+        return 450 + secureRandomBounded(551);
+    }
     return 90 + secureRandomBounded(161);
 }
 
 static uint32_t mtProxyHandshakeSpacingDelay(const MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
     mode = normalizeMtProxyConnectionPatternMode(mode);
-    if (mode != MT_PROXY_CONNECTION_PATTERN_QUIET && mode != MT_PROXY_CONNECTION_PATTERN_STRICT) {
+    if (mode != MT_PROXY_CONNECTION_PATTERN_BROWSER && mode != MT_PROXY_CONNECTION_PATTERN_QUIET && mode != MT_PROXY_CONNECTION_PATTERN_STRICT) {
         return 0;
     }
     if (state.lastGrantTime <= 0) {
         return 0;
     }
-    uint32_t minGap = mode == MT_PROXY_CONNECTION_PATTERN_STRICT
-            ? 1000 + secureRandomBounded(751)
-            : 650 + secureRandomBounded(451);
+    uint32_t minGap;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        minGap = 1000 + secureRandomBounded(751);
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET) {
+        minGap = 650 + secureRandomBounded(451);
+    } else {
+        minGap = 450 + secureRandomBounded(551);
+    }
     int64_t elapsed = now - state.lastGrantTime;
     if (elapsed >= (int64_t) minGap) {
         return 0;
@@ -279,13 +314,32 @@ static uint32_t mtProxyHandshakeRetryDelay(int64_t now, int64_t cooldownUntil, i
     } else if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET) {
         uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 800 : 1600;
         delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 1001 : 1601);
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER) {
+        uint32_t baseDelay;
+        uint32_t jitter;
+        if (priority <= MT_PROXY_HANDSHAKE_PRIORITY_GENERIC) {
+            baseDelay = 500;
+            jitter = 701;
+        } else if (priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA) {
+            baseDelay = 900;
+            jitter = 1101;
+        } else if (priority <= MT_PROXY_HANDSHAKE_PRIORITY_PUSH) {
+            baseDelay = 1400;
+            jitter = 1301;
+        } else {
+            baseDelay = MT_PROXY_HANDSHAKE_BROWSER_HEAVY_DELAY_BASE_MS;
+            jitter = 2601;
+        }
+        delay = baseDelay + secureRandomBounded(jitter);
     } else {
         uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 180 : 420;
         delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 181 : 421);
     }
     if (mtProxyConnectionPatternUsesCooldown(mode) && cooldownUntil > now) {
         int64_t cooldownDelay = cooldownUntil - now;
-        int64_t maxDelay = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? 12000 : 5000;
+        int64_t maxDelay = mode == MT_PROXY_CONNECTION_PATTERN_STRICT
+                ? MT_PROXY_HANDSHAKE_STRICT_FAILURE_COOLDOWN_MAX_MS
+                : (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER ? MT_PROXY_HANDSHAKE_BROWSER_FAILURE_COOLDOWN_MAX_MS : MT_PROXY_HANDSHAKE_QUIET_FAILURE_COOLDOWN_MAX_MS);
         if (cooldownDelay > maxDelay) {
             cooldownDelay = maxDelay;
         }
@@ -304,8 +358,14 @@ static int32_t mtProxyHandshakeActiveLimit(const MtProxyHandshakeEndpointState &
     if (mtProxyConnectionPatternUsesCooldown(mode) && state.cooldownUntil > now) {
         return 1;
     }
-    if (mode == MT_PROXY_CONNECTION_PATTERN_SOFT && state.recentSuccesses >= 2 && now - state.lastSuccessTime < 120000) {
-        return 2;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_SOFT) {
+        return MT_PROXY_HANDSHAKE_SOFT_ACTIVE_LIMIT;
+    }
+    if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER && state.recentSuccesses >= 1 && now - state.lastSuccessTime < MT_PROXY_HANDSHAKE_RECENT_SUCCESS_WINDOW_MS) {
+        return MT_PROXY_HANDSHAKE_BROWSER_RECENT_SUCCESS_LIMIT;
+    }
+    if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET && state.recentSuccesses >= 2 && now - state.lastSuccessTime < MT_PROXY_HANDSHAKE_RECENT_SUCCESS_WINDOW_MS) {
+        return MT_PROXY_HANDSHAKE_SOFT_ACTIVE_LIMIT;
     }
     return 1;
 }
@@ -337,7 +397,7 @@ static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHa
     int bestIndex = -1;
     for (int i = 0; i < (int) state.queuedRequests.size(); i++) {
         const auto &candidate = state.queuedRequests[i];
-        if (mtProxyConnectionPatternUsesCooldown(mode) && state.cooldownUntil > now && candidate.priority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA) {
+        if (mtProxyCooldownBlocksPriority(state, now, mode, candidate.priority)) {
             continue;
         }
         if (bestIndex < 0 || candidate.priority < state.queuedRequests[bestIndex].priority ||
@@ -356,20 +416,113 @@ static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHa
     return true;
 }
 
-static void mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int64_t now) {
+static void mtProxyClampCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int64_t maxCooldownMs) {
+    if (maxCooldownMs <= 0) {
+        state.cooldownUntil = now;
+        return;
+    }
+    int64_t maxCooldownUntil = now + maxCooldownMs;
+    if (state.cooldownUntil > maxCooldownUntil) {
+        state.cooldownUntil = maxCooldownUntil;
+    }
+}
+
+static void mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (!mtProxyConnectionPatternUsesCooldown(mode)) {
+        return;
+    }
     if (state.freezePenalty < 3) {
         state.freezePenalty++;
     }
+    state.tcpFailurePenalty = 0;
     state.recentSuccesses = 0;
     int64_t base;
-    if (state.freezePenalty <= 1) {
-        base = 30000;
-    } else if (state.freezePenalty == 2) {
-        base = 90000;
+    int64_t jitter;
+    int64_t maxCooldown;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        maxCooldown = MT_PROXY_HANDSHAKE_STRICT_FREEZE_COOLDOWN_MAX_MS;
+        if (state.freezePenalty <= 1) {
+            base = 8000;
+        } else if (state.freezePenalty == 2) {
+            base = 14000;
+        } else {
+            base = 20000;
+        }
+        jitter = secureRandomBounded(5001);
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER) {
+        maxCooldown = MT_PROXY_HANDSHAKE_BROWSER_FREEZE_COOLDOWN_MAX_MS;
+        if (state.freezePenalty <= 1) {
+            base = 5000;
+        } else if (state.freezePenalty == 2) {
+            base = 9000;
+        } else {
+            base = 13000;
+        }
+        jitter = secureRandomBounded(3001);
     } else {
-        base = 180000;
+        maxCooldown = MT_PROXY_HANDSHAKE_QUIET_FREEZE_COOLDOWN_MAX_MS;
+        if (state.freezePenalty <= 1) {
+            base = 4000;
+        } else if (state.freezePenalty == 2) {
+            base = 7000;
+        } else {
+            base = 10000;
+        }
+        jitter = secureRandomBounded(2501);
     }
-    state.cooldownUntil = now + base + secureRandomBounded(15001);
+    state.cooldownUntil = now + base + jitter;
+    mtProxyClampCooldown(state, now, maxCooldown);
+}
+
+static void mtProxyApplyTcpFailureCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (!mtProxyConnectionPatternUsesCooldown(mode)) {
+        return;
+    }
+    if (state.tcpFailurePenalty < 3) {
+        state.tcpFailurePenalty++;
+    }
+    state.recentSuccesses = 0;
+    int64_t base;
+    int64_t jitter;
+    int64_t maxCooldown;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        maxCooldown = MT_PROXY_HANDSHAKE_STRICT_FAILURE_COOLDOWN_MAX_MS;
+        if (state.tcpFailurePenalty <= 1) {
+            base = 4500;
+        } else if (state.tcpFailurePenalty == 2) {
+            base = 8000;
+        } else {
+            base = 11000;
+        }
+        jitter = secureRandomBounded(2501);
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER) {
+        maxCooldown = MT_PROXY_HANDSHAKE_BROWSER_FAILURE_COOLDOWN_MAX_MS;
+        if (state.tcpFailurePenalty <= 1) {
+            base = 2200;
+        } else if (state.tcpFailurePenalty == 2) {
+            base = 4000;
+        } else {
+            base = 6500;
+        }
+        jitter = secureRandomBounded(1801);
+    } else {
+        maxCooldown = MT_PROXY_HANDSHAKE_QUIET_FAILURE_COOLDOWN_MAX_MS;
+        if (state.tcpFailurePenalty <= 1) {
+            base = 1800;
+        } else if (state.tcpFailurePenalty == 2) {
+            base = 3000;
+        } else {
+            base = 4500;
+        }
+        jitter = secureRandomBounded(1201);
+    }
+    int64_t nextCooldown = now + base + jitter;
+    if (state.cooldownUntil < nextCooldown) {
+        state.cooldownUntil = nextCooldown;
+    }
+    mtProxyClampCooldown(state, now, maxCooldown);
 }
 
 static void mtProxyApplyFailureCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
@@ -377,26 +530,42 @@ static void mtProxyApplyFailureCooldown(MtProxyHandshakeEndpointState &state, in
     if (!mtProxyConnectionPatternUsesCooldown(mode)) {
         return;
     }
+    state.tcpFailurePenalty = 0;
     state.recentSuccesses = 0;
-    int64_t base = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? 8000 : 3000;
-    int64_t jitter = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? secureRandomBounded(12001) : secureRandomBounded(5001);
+    int64_t base;
+    int64_t jitter;
+    int64_t maxCooldown;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        base = 4000;
+        jitter = secureRandomBounded(4001);
+        maxCooldown = MT_PROXY_HANDSHAKE_STRICT_FAILURE_COOLDOWN_MAX_MS;
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_BROWSER) {
+        base = 2500;
+        jitter = secureRandomBounded(2501);
+        maxCooldown = MT_PROXY_HANDSHAKE_BROWSER_FAILURE_COOLDOWN_MAX_MS;
+    } else {
+        base = 1500;
+        jitter = secureRandomBounded(2001);
+        maxCooldown = MT_PROXY_HANDSHAKE_QUIET_FAILURE_COOLDOWN_MAX_MS;
+    }
     int64_t nextCooldown = now + base + jitter;
     if (state.cooldownUntil < nextCooldown) {
         state.cooldownUntil = nextCooldown;
     }
+    mtProxyClampCooldown(state, now, maxCooldown);
 }
 
 static void mtProxyRecordHandshakeSuccess(MtProxyHandshakeEndpointState &state, int64_t now) {
+    if (state.lastSuccessTime <= 0 || now - state.lastSuccessTime > MT_PROXY_HANDSHAKE_SUCCESS_COOLDOWN_RESET_MS) {
+        state.recentSuccesses = 0;
+    }
     if (state.recentSuccesses < 4) {
         state.recentSuccesses++;
     }
     state.lastSuccessTime = now;
-    if (state.freezePenalty > 0) {
-        state.freezePenalty--;
-    }
-    if (state.freezePenalty == 0) {
-        state.cooldownUntil = 0;
-    }
+    state.freezePenalty = 0;
+    state.tcpFailurePenalty = 0;
+    state.cooldownUntil = 0;
 }
 
 #ifndef EPOLLRDHUP
@@ -1351,7 +1520,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
     mtProxyRemoveQueuedRequestLocked(this);
     MtProxyHandshakeEndpointState &state = proxyHandshakeEndpoints[proxyHandshakeAdmissionKey];
     int32_t limit = mtProxyHandshakeActiveLimit(state, now, connectionPatternMode);
-    bool cooldownBlocks = mtProxyConnectionPatternUsesCooldown(connectionPatternMode) && state.cooldownUntil > now && proxyHandshakeAdmissionPriority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA;
+    bool cooldownBlocks = mtProxyCooldownBlocksPriority(state, now, connectionPatternMode, proxyHandshakeAdmissionPriority);
     if (cooldownBlocks || state.activeHandshakes >= limit || mtProxyHandshakeHasHigherPriorityQueued(state, proxyHandshakeAdmissionPriority)) {
         MtProxyHandshakeQueuedRequest request;
         request.socket = this;
@@ -1487,10 +1656,14 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
     }
     int64_t clientHelloElapsed = proxyHandshakeClientHelloSentTime > 0 ? now - proxyHandshakeClientHelloSentTime : 0;
     bool shouldApplyFreezeCooldown = proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime > 0 && clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS;
+    bool shouldApplyTcpFailureCooldown = proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime <= 0 && strcmp(reason, "cancel") != 0;
     if (succeeded) {
         mtProxyRecordHandshakeSuccess(state, now);
+    } else if (shouldApplyTcpFailureCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+        mtProxyApplyTcpFailureCooldown(state, now, connectionPatternMode);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_tcp_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), state.tcpFailurePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
     } else if (shouldApplyFreezeCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
-        mtProxyApplyFreezeCooldown(state, now);
+        mtProxyApplyFreezeCooldown(state, now, connectionPatternMode);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
     } else if (!succeeded && proxyHandshakeAdmissionActive && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
         mtProxyApplyFailureCooldown(state, now, connectionPatternMode);

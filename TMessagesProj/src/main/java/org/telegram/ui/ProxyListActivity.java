@@ -104,6 +104,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private static final int[] MT_PROXY_CONNECTION_PATTERN_OPTIONS = new int[] {
             ConnectionsManager.MT_PROXY_CONNECTION_PATTERN_OFF,
             ConnectionsManager.MT_PROXY_CONNECTION_PATTERN_SOFT,
+            ConnectionsManager.MT_PROXY_CONNECTION_PATTERN_BROWSER,
             ConnectionsManager.MT_PROXY_CONNECTION_PATTERN_QUIET,
             ConnectionsManager.MT_PROXY_CONNECTION_PATTERN_STRICT,
     };
@@ -797,6 +798,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         return new String[] {
                 getString(R.string.MtProxyConnectionPatternOff),
                 getString(R.string.MtProxyConnectionPatternSoft),
+                getString(R.string.MtProxyConnectionPatternBrowser),
                 getString(R.string.MtProxyConnectionPatternQuiet),
                 getString(R.string.MtProxyConnectionPatternStrict),
         };

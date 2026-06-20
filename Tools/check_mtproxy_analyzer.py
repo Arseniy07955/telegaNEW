@@ -50,6 +50,11 @@ def main():
             "logcat.txt:9: 06-20 15:00:00.200 connection(0x2) mtproxy_startup admission_grant "
             "admission_mode=strict connection_pattern=strict key=blocked.example:443:cdn.example priority=20 active=1 max=1\n"
         )
+        handle.write(
+            "logcat.txt:9: 06-20 15:00:00.250 connection(0x2) mtproxy_startup admission_tcp_failure_cooldown "
+            "admission_mode=strict connection_pattern=strict reason=closeSocket key=blocked.example:443:cdn.example "
+            "penalty=1 cooldown_ms=5200\n"
+        )
         handle.write("logcat.txt:10: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:11: connection(0x2) mtproxy_startup socket_connected elapsed=80\n")
         handle.write("logcat.txt:12: connection(0x2) mtproxy_startup client_hello_sent bytes=1897\n")
@@ -166,6 +171,10 @@ def main():
     require(
         "patterns=strict=" in result.stdout,
         "analyzer burst summary must include connection-pattern mix",
+    )
+    require(
+        "admission_tcp_failure_cooldown" in result.stdout,
+        "analyzer must preserve the pre-ClientHello TCP-failure cooldown marker",
     )
     require(
         "blocked.example:443 client_hello_sent_no_server_hello: 1" in result.stdout,

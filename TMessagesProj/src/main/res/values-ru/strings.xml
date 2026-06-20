@@ -265,11 +265,13 @@
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
     <string name="ProxyStatusConnectingSlow">Подключаемся, это может занять время</string>
     <string name="ProxyStatusCheckingConnection">Проверяем подключение...</string>
+    <string name="ProxyStatusWaitingTcp">Ждём TCP-подключение к прокси...</string>
     <string name="ProxyStatusUnchecked">Не проверено</string>
     <string name="ProxyStatusNotRespondingNow">Сейчас не отвечает</string>
     <string name="ProxyStatusStartFailed">Проверка не запустилась</string>
     <string name="ProxyStatusTcpNotConnected">TCP не открылся: сервер или порт недоступен</string>
     <string name="ProxyStatusTcpConnectedNoPong">TCP открылся, но MTProxy не ответил</string>
+    <string name="ProxyStatusNetworkBlockSuspected">Похоже на сетевую блокировку до ответа MTProxy</string>
     <string name="ProxyStatusClientHelloNoServerHello">ClientHello отправлен, ServerHello не пришёл</string>
     <string name="ProxyStatusServerHelloHmacMismatch">ServerHello не прошёл HMAC-проверку MTProxy</string>
     <string name="ProxyStatusPostHandshakeNoAppData">Рукопожатие прошло, MTProto-данные не пришли</string>
@@ -289,6 +291,7 @@
     <string name="MtProxyConnectionPatternInfo">Меняет темп открытия FakeTLS-соединений к одному прокси. Тихий и строгий режимы уменьшают быстрые повторные попытки после timeout/freeze.</string>
     <string name="MtProxyConnectionPatternOff">Обычный</string>
     <string name="MtProxyConnectionPatternSoft">Мягкий</string>
+    <string name="MtProxyConnectionPatternBrowser">Браузерный</string>
     <string name="MtProxyConnectionPatternQuiet">Тихий</string>
     <string name="MtProxyConnectionPatternStrict">Строгий</string>
     <string name="MtProxyRecordSizing">Размер TLS-записей</string>
