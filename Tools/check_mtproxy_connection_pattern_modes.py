@@ -199,10 +199,11 @@ def main() -> None:
         and "mtproxy_startup reconnect_backoff" in connection_cpp
         and "mtproxy_startup reconnect_hold" in connection_cpp
         and "getProxyCheckDiagnostic()" in connection_cpp
-        and "connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
+        and "connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
+        and "reconnect_backoff_suppressed" in connection_cpp
         and "mtProxyReconnectBackoffMs" in connection_h
         and "mtProxyReconnectHoldUntil" in connection_h,
-        "Connection layer must back off MTProxy pre-TCP and handshake reconnects instead of restarting generic/media every second",
+        "Connection layer must back off real MTProxy failures but not suppressed idle/post-appdata closes",
     )
     reconnect_base = connection_cpp[
         connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs"):

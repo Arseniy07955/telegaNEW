@@ -124,6 +124,8 @@ class Attempt:
         end = self.event_times.get(end_event)
         if start is None or end is None:
             return ""
+        if end < start:
+            return ""
         return str(round((end - start) * 1000))
 
     def add(self, line_no: int, text: str) -> None:
@@ -234,6 +236,10 @@ class Attempt:
             "server_hello_hmac_ok": "server_hello_hmac_ok",
             "server_hello_hmac_timeout": "server_hello_hmac_timeout",
             "server_hello_timeout_close": "server_hello_timeout_close",
+            "close_ignored_already_closed": "close_ignored_already_closed",
+            "connection_close_ignored_already_notified": "connection_close_ignored_already_notified",
+            "reconnect_backoff_suppressed": "reconnect_backoff_suppressed",
+            "admission_timer_ignored": "admission_timer_ignored",
             "TLS server hello hmac wait": "server_hello_hmac_wait",
             "admission_queue": "admission_queue",
             "admission_tcp_failure_cooldown": "admission_tcp_failure_cooldown",

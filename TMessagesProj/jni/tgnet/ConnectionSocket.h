@@ -39,6 +39,7 @@ public:
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
     void setMtProxyHandshakePriority(int32_t priority);
     const char *getProxyCheckDiagnostic();
+    bool isProxyCloseDiagnosticSuppressed();
 
 protected:
     int32_t instanceNum;
@@ -74,6 +75,8 @@ private:
     int socketFd = -1;
     time_t timeout = 12;
     bool onConnectedSent = false;
+    bool socketCloseNotified = false;
+    bool proxyCloseDiagnosticSuppressed = false;
     int64_t lastEventTime = 0;
     EventObject *eventObject;
     int32_t currentNetworkType;
@@ -153,6 +156,7 @@ private:
     bool proxyHandshakeAdmissionIpv6 = false;
     bool mtproxySocketConnectedLogged = false;
     uint32_t proxyHandshakeAdmissionGeneration = 0;
+    uint32_t proxyHandshakeAdmissionTimerGeneration = 0;
     int32_t proxyHandshakeAdmissionPriority = 0;
     int32_t proxyHandshakeAdmissionTimerMode = 0;
     int64_t proxyHandshakeAdmissionStartTime = 0;

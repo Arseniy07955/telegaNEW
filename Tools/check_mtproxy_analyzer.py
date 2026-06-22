@@ -94,6 +94,20 @@ def main():
         "idle post-handshake sockets that never sent app-data must not be reported as post_handshake_no_appdata",
     )
 
+    reused_pointer_latency = Attempt(key="reused-pointer-latency")
+    reused_pointer_latency.add(
+        1,
+        "06-20 15:00:02.000 connection(0x13) mtproxy_startup client_hello_sent bytes=1897",
+    )
+    reused_pointer_latency.add(
+        2,
+        "06-20 15:00:01.900 connection(0x13) mtproxy_startup server_hello_hmac_ok bytes=2219",
+    )
+    require(
+        reused_pointer_latency.timing_ms("client_hello_sent", "server_hello_hmac_ok") == "",
+        "analyzer must ignore negative event latency caused by reused pointers or out-of-order marker grouping",
+    )
+
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         marker_path = Path(handle.name)
         handle.write("logcat.txt:1: connection(0x1) mtproxy_startup socket_connect_start ipv6=0 state=0\n")

@@ -142,7 +142,7 @@ void Connection::suspendConnection(bool idle) {
     if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) suspend", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType);
     connectionState = idle ? TcpConnectionStageIdle : TcpConnectionStageSuspended;
     dropConnection();
-    ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionClosed(this, 0);
+    notifyConnectionClosedOnce(0, "suspendConnection");
     generation++;
     firstPacketSent = false;
     if (restOfTheData != nullptr) {
@@ -365,8 +365,9 @@ void Connection::connect() {
     if (waitForReconnectTimer) {
         return;
     }
+    connectionCloseNotified = false;
     if (!ConnectionsManager::getInstance(currentDatacenter->instanceNum).isNetworkAvailable()) {
-        ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionClosed(this, 0);
+        notifyConnectionClosedOnce(0, "network_unavailable_connect");
         return;
     }
     if (connectionState == TcpConnectionStageConnected || connectionState == TcpConnectionStageConnecting) {
@@ -733,6 +734,15 @@ inline std::string *Connection::getCurrentSecret(uint8_t secretType) {
     }
 }
 
+void Connection::notifyConnectionClosedOnce(int32_t reason, const char *source) {
+    if (connectionCloseNotified) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup connection_close_ignored_already_notified source=%s reason=%d", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, source != nullptr ? source : "unknown", reason);
+        return;
+    }
+    connectionCloseNotified = true;
+    ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionClosed(this, reason);
+}
+
 inline void Connection::encryptKeyWithSecret(uint8_t *bytes, uint8_t secretType) {
     if (secretType == 0) {
         return;
@@ -777,17 +787,19 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
     if (connectionState != TcpConnectionStageSuspended && connectionState != TcpConnectionStageIdle) {
         connectionState = TcpConnectionStageIdle;
     }
-    ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionClosed(this, reason);
+    notifyConnectionClosedOnce(reason, "onDisconnectedInternal");
     connectionToken = 0;
 
     const char *mtProxyReconnectDiagnostic = getProxyCheckDiagnostic();
     uint32_t mtProxyReconnectDelay = 0;
-    if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+    if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
         mtProxyReconnectDelay = mtProxyNextReconnectBackoffMs(connectionType, mtProxyReconnectBackoffMs);
         mtProxyReconnectBackoffMs = mtProxyReconnectDelay;
         mtProxyReconnectHoldUntil = now + mtProxyReconnectDelay;
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff phase=%s delay_ms=%u failed=%u", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic, mtProxyReconnectDelay, failedConnectionCount + 1);
+    } else if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff_suppressed phase=%s", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic);
     }
 
     uint32_t datacenterId = currentDatacenter->getDatacenterId();

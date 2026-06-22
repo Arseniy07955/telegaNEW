@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "socket": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp",
     "socket_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h",
+    "connection": ROOT / "TMessagesProj/jni/tgnet/Connection.cpp",
+    "connection_header": ROOT / "TMessagesProj/jni/tgnet/Connection.h",
     "diagnostics": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java",
     "values": ROOT / "TMessagesProj/src/main/res/values/strings.xml",
     "values_ru": ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml",
@@ -37,11 +39,13 @@ def require(condition, message):
 def main():
     socket = read("socket")
     header = read("socket_header")
+    connection = read("connection")
+    connection_header = read("connection_header")
     diagnostics = read("diagnostics")
     analyzer = read("analyzer")
     values = read("values")
     values_ru = read("values_ru")
-    combined = "\n".join([socket, header, diagnostics, analyzer, values, values_ru])
+    combined = "\n".join([socket, header, connection, connection_header, diagnostics, analyzer, values, values_ru])
 
     require(
         "MT_PROXY_HANDSHAKE_TIMER_ENDPOINT_BACKOFF" in socket,
@@ -137,9 +141,74 @@ def main():
         "recordMtProxyEndpointFailure(proxyCheckDiagnostic.c_str()" in socket,
         "closeSocket must feed close diagnostics back into endpoint resilience state",
     )
+    timer_start = socket.find("void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer")
+    timer_end = socket.find("void ConnectionSocket::grantProxyHandshakeAdmission", timer_start)
+    timer_body = socket[timer_start:timer_end]
+    require(
+        "proxyHandshakeAdmissionTimerGeneration" in header
+        and "proxyHandshakeAdmissionTimerGeneration = proxyHandshakeAdmissionGeneration;" in timer_body
+        and "uint32_t timerGeneration = proxyHandshakeAdmissionTimerGeneration;" in timer_body
+        and "timerGeneration != proxyHandshakeAdmissionGeneration || mode == 0" in timer_body
+        and "admission_timer_ignored" in timer_body
+        and '"admission_timer_ignored": "admission_timer_ignored"' in analyzer,
+        "shared MTProxy timer must ignore callbacks from cancelled/replaced handshake generations",
+    )
     close_start = socket.find("void ConnectionSocket::closeSocket")
     close_end = socket.find("void ConnectionSocket::onDisconnected", close_start)
     close_body = socket[close_start:close_end]
+    open_connection_start = socket.find("void ConnectionSocket::openConnection(std::string address")
+    open_connection_end = socket.find("void ConnectionSocket::openConnectionInternal", open_connection_start)
+    open_connection_body = socket[open_connection_start:open_connection_end]
+    require(
+        "socketCloseNotified" in header
+        and "socketCloseNotified = false;" in open_connection_body
+        and "if (socketCloseNotified)" in close_body
+        and "close_ignored_already_closed" in close_body
+        and '"close_ignored_already_closed": "close_ignored_already_closed"' in analyzer
+        and "socketCloseNotified = true;" in close_body,
+        "closeSocket must be idempotent so one socket failure cannot publish multiple endpoint failures or reconnect backoffs",
+    )
+    suspend_start = connection.find("void Connection::suspendConnection(bool idle)")
+    suspend_end = connection.find("void Connection::onReceivedData", suspend_start)
+    suspend_body = connection[suspend_start:suspend_end]
+    disconnect_start = connection.find("void Connection::onDisconnectedInternal")
+    disconnect_end = connection.find("void Connection::onDisconnected(", disconnect_start)
+    disconnect_body = connection[disconnect_start:disconnect_end]
+    notify_start = connection.find("void Connection::notifyConnectionClosedOnce")
+    notify_end = connection.find("void Connection::onDisconnectedInternal", notify_start)
+    notify_body = connection[notify_start:notify_end]
+    raw_manager_close = "ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionClosed(this,"
+    require(
+        "connectionCloseNotified" in connection_header
+        and "void notifyConnectionClosedOnce(int32_t reason, const char *source);" in connection_header
+        and notify_start != -1
+        and "if (connectionCloseNotified)" in notify_body
+        and "connection_close_ignored_already_notified" in notify_body
+        and '"connection_close_ignored_already_notified": "connection_close_ignored_already_notified"' in analyzer
+        and "connectionCloseNotified = true;" in notify_body,
+        "Connection must centralize manager close notifications so socket close and suspend cannot both publish one close",
+    )
+    require(
+        "connectionCloseNotified = false;" in connection[connection.find("void Connection::connect()"):connection.find("inline std::string *Connection::getCurrentSecret", connection.find("void Connection::connect()"))]
+        and 'notifyConnectionClosedOnce(0, "network_unavailable_connect")' in connection,
+        "new connect attempts and no-network exits must use the one-shot Connection close notifier",
+    )
+    require(
+        'notifyConnectionClosedOnce(0, "suspendConnection")' in suspend_body
+        and raw_manager_close not in suspend_body,
+        "suspendConnection must not directly notify ConnectionsManager after dropConnection; use the one-shot notifier",
+    )
+    require(
+        'notifyConnectionClosedOnce(reason, "onDisconnectedInternal")' in disconnect_body
+        and raw_manager_close not in disconnect_body,
+        "onDisconnectedInternal must use the one-shot close notifier before reconnect/backoff handling",
+    )
+    require(
+        "!isProxyCloseDiagnosticSuppressed()" in disconnect_body
+        and "reconnect_backoff_suppressed" in disconnect_body
+        and '"reconnect_backoff_suppressed": "reconnect_backoff_suppressed"' in analyzer,
+        "suppressed close diagnostics must not still trigger reconnect_backoff in Connection",
+    )
     require(
         "suppressProxyCloseDiagnostic" in close_body
         and 'proxyCheckDiagnostic == "post_handshake_no_appdata"' in close_body
@@ -147,6 +216,8 @@ def main():
         and "!mtproxyFirstPlainDataSentLogged" in close_body
         and 'proxyCheckDiagnostic == "dropped_after_appdata"' in close_body
         and "mtproxyFirstTlsDataReceivedLogged || mtproxyFirstPlainDataReceivedLogged" in close_body
+        and "proxyCloseDiagnosticSuppressed = true;" in close_body
+        and "isProxyCloseDiagnosticSuppressed()" in header
         and "close_diagnostic_suppressed" in close_body,
         "closeSocket must suppress idle post-handshake closes and already-usable post-appdata closes before publishing a proxy failure",
     )
