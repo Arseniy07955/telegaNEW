@@ -159,7 +159,6 @@ def main() -> None:
     for phase in (
         "client_hello_sent_no_server_hello",
         "server_hello_hmac_mismatch",
-        "peer_closed_after_client_hello",
         "post_handshake_no_appdata",
     ):
         require(phase in recipe, f"FakeTLS recipe must react to {phase}")

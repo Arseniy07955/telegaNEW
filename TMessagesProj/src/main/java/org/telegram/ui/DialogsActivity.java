@@ -123,6 +123,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.NotificationsController;
+import org.telegram.messenger.ProxyCheckDiagnostics;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.UserConfig;
@@ -2860,6 +2861,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 .add(NotificationCenter.topicsDidLoaded)
                 .add(NotificationCenter.reloadHints)
                 .add(NotificationCenter.didUpdateConnectionState)
+                .add(NotificationCenter.proxyConnectionStageChanged)
                 .add(NotificationCenter.onDownloadingFilesChanged)
                 .add(NotificationCenter.needDeleteDialog)
                 .add(NotificationCenter.folderBecomeEmpty)
@@ -10001,7 +10003,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
         final boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
-        proxyMenuSubItem.setSubtext(getString(proxyEnabled ? (connected ? R.string.MenuProxyConnected : R.string.MenuProxyConnecting) : R.string.MenuProxyDisabled));
+        String proxyStatusText = proxyEnabled
+                ? ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, true, currentConnectionState)
+                : getString(R.string.MenuProxyDisabled);
+        proxyMenuSubItem.setSubtext(proxyStatusText);
         proxyDrawable.setConnected(proxyEnabled, connected, animated);
     }
 
@@ -10422,6 +10427,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 currentConnectionState = state;
                 updateProxyButton(true, false);
             }
+        } else if (id == NotificationCenter.proxyConnectionStageChanged) {
+            updateProxyButton(false, false);
         } else if (id == NotificationCenter.onDownloadingFilesChanged) {
             updateProxyButton(true, false);
             if (searchViewPager != null) {

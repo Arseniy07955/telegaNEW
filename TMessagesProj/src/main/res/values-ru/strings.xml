@@ -263,6 +263,9 @@
     <string name="RemindTodayAt">\'Отправить сегодня в\' HH:mm</string>
     <string name="RemindDayAt">\'Отправить\' d MMM \'в\' HH:mm</string>
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
+    <string name="Connected">Подключено</string>
+    <string name="Ping">Пинг: %1$d мс</string>
+    <string name="Available">Доступен</string>
     <string name="ProxyStatusConnectingSlow">Подключаемся, это может занять время</string>
     <string name="ProxyStatusCheckingConnection">Проверяем подключение...</string>
     <string name="ProxyStatusAdmissionQueue">Ждём слот подключения к прокси...</string>

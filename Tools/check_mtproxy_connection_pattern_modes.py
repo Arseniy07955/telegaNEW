@@ -189,13 +189,17 @@ def main() -> None:
         and "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode))" in socket_cpp,
         "admission release must be idempotent so post-handshake close/suspend cannot dequeue a second queued request",
     )
+    reconnect_backoff = connection_cpp[
+        connection_cpp.find("static bool mtProxyDiagnosticNeedsReconnectBackoff"):
+        connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs")
+    ]
     require(
         "mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
-        and "host_resolve_failed" in connection_cpp
-        and "tcp_not_connected" in connection_cpp
-        and "network_block_suspected" in connection_cpp
-        and "client_hello_sent_no_server_hello" in connection_cpp
-        and "server_hello_hmac_mismatch" in connection_cpp
+        and "host_resolve_failed" in reconnect_backoff
+        and "tcp_not_connected" in reconnect_backoff
+        and "client_hello_sent_no_server_hello" in reconnect_backoff
+        and "server_hello_hmac_mismatch" in reconnect_backoff
+        and "dropped_early_after_appdata" in reconnect_backoff
         and "mtproxy_startup reconnect_backoff" in connection_cpp
         and "mtproxy_startup reconnect_hold" in connection_cpp
         and "getProxyCheckDiagnostic()" in connection_cpp
@@ -204,6 +208,10 @@ def main() -> None:
         and "mtProxyReconnectBackoffMs" in connection_h
         and "mtProxyReconnectHoldUntil" in connection_h,
         "Connection layer must back off real MTProxy failures but not suppressed idle/post-appdata closes",
+    )
+    require(
+        "network_block_suspected" not in reconnect_backoff,
+        "network_block_suspected is a Java scheduler display/escalation phase and must not be a native reconnect diagnostic",
     )
     reconnect_base = connection_cpp[
         connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs"):

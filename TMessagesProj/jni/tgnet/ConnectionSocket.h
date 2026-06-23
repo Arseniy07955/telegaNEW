@@ -135,6 +135,7 @@ private:
     bool mtproxyFirstTlsDataReceivedLogged = false;
     bool mtproxyFirstPlainDataSentLogged = false;
     bool mtproxyFirstPlainDataReceivedLogged = false;
+    int64_t mtproxyFirstTlsFrameSentTime = 0;
     int64_t mtproxyFirstPlainDataSentTime = 0;
     int64_t mtproxyFirstDataReceivedTime = 0;
     uint32_t mtproxyTlsFrameCompletedCount = 0;
@@ -147,11 +148,13 @@ private:
     uint8_t proxyAuthState = 0;
     Timer *proxyHandshakeAdmissionTimer = nullptr;
     bool proxyHandshakeAdmissionQueued = false;
+    bool proxyHandshakeAdmissionQueuePublished = false;
     bool proxyHandshakeAdmissionActive = false;
     bool proxyHandshakeAdmissionReady = false;
     bool proxyEndpointBackoffReady = false;
     bool proxyEndpointTcpConnectActive = false;
     bool proxyEndpointTcpConnectReady = false;
+    bool proxyEndpointTcpConnectGatePublished = false;
     bool proxyEndpointDnsCoalesceReady = false;
     bool proxyHandshakeAdmissionIpv6 = false;
     bool mtproxySocketConnectedLogged = false;

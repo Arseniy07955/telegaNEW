@@ -81,6 +81,7 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 && !info.checking
                 && !ProxyCheckDiagnostics.hasFreshFailure(info)
                 && !ProxyCheckDiagnostics.hasFreshEndpointCooldown(info)
+                && !ProxyCheckDiagnostics.hasFreshUnresolvedLivePhase(info)
                 && !ProxyCheckScheduler.isEndpointBackedOff(info);
     }
 
@@ -100,8 +101,8 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
 
         SharedConfig.currentProxy = info;
         ProxyCheckScheduler.markConnectionStarting(info);
-        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyChangedByRotation);
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
         if ("fallback".equals(reason)) {
             log("switch fallback endpoint=" + endpoint(info) + " ping=" + info.ping);
@@ -152,6 +153,9 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 return;
             }
             String diagnostic = (String) args[0];
+            if (args.length < 2 || !(args[1] instanceof String) || !ProxyCheckScheduler.matchesEndpointStageKey(SharedConfig.currentProxy, (String) args[1])) {
+                return;
+            }
             if (!ProxyCheckDiagnostics.shouldAccelerateProxyRotation(diagnostic)) {
                 return;
             }

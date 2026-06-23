@@ -7,9 +7,11 @@
 package org.telegram.messenger;
 
 import android.os.SystemClock;
+import android.util.Base64;
 
 import org.telegram.tgnet.ConnectionsManager;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -176,8 +178,8 @@ public class ProxyCheckScheduler {
             return;
         }
         boolean changed = proxyInfo.checking || !proxyInfo.available || !isFresh(proxyInfo);
-        boolean preserveFreshFailure = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo);
-        if (!preserveFreshFailure) {
+        boolean preserveFreshProxyPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyCheckDiagnostics.hasFreshLivePhase(proxyInfo);
+        if (!preserveFreshProxyPhase) {
             proxyInfo.available = true;
             proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
             proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK;
@@ -229,6 +231,98 @@ public class ProxyCheckScheduler {
             return;
         }
         rememberEndpointFailure(state, proxyInfo, normalizedDiagnostic, now, "live_failure");
+    }
+
+    public static boolean matchesEndpointStageKey(SharedConfig.ProxyInfo proxyInfo, String endpointKey) {
+        if (proxyInfo == null || endpointKey == null || endpointKey.length() == 0) {
+            return false;
+        }
+        return endpointStageKeyForLiveStage(proxyInfo).equals(endpointKey);
+    }
+
+    public static String endpointStageKeyForLiveStage(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo == null) {
+            return "";
+        }
+        byte[] secret = decodedSecretForLiveStage(proxyInfo.secret);
+        String kind = secretKindForLiveStage(secret);
+        if ("none".equals(kind)) {
+            return networkEndpointKeyForLiveStage(proxyInfo);
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append(normalizeKeyPart(proxyInfo.address, false)).append(":").append(proxyInfo.port).append(":").append(kind);
+        if ("ee".equals(kind)) {
+            String domain = secretDomainForLiveStage(secret);
+            if (domain.length() > 0) {
+                builder.append(":").append(domain);
+            }
+        }
+        return builder.toString();
+    }
+
+    public static String networkEndpointKeyForLiveStage(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo == null) {
+            return "";
+        }
+        return normalizeKeyPart(proxyInfo.address, true) + ":" + proxyInfo.port;
+    }
+
+    private static byte[] decodedSecretForLiveStage(String secret) {
+        if (secret == null || secret.length() == 0) {
+            return new byte[0];
+        }
+        boolean allHex = true;
+        for (int i = 0, count = secret.length(); i < count; i++) {
+            char c = secret.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                allHex = false;
+                break;
+            }
+        }
+        if (allHex) {
+            int size = secret.length() / 2;
+            byte[] result = new byte[size];
+            for (int i = 0; i < size; i++) {
+                int high = Character.digit(secret.charAt(i * 2), 16);
+                int low = Character.digit(secret.charAt(i * 2 + 1), 16);
+                result[i] = (byte) (high * 16 + low);
+            }
+            return result;
+        }
+        int remainder = secret.length() & 3;
+        if (remainder == 1) {
+            return new byte[0];
+        }
+        String padded = secret;
+        if (remainder != 0) {
+            padded += remainder == 2 ? "==" : "=";
+        }
+        try {
+            return Base64.decode(padded, Base64.URL_SAFE | Base64.NO_WRAP);
+        } catch (IllegalArgumentException e) {
+            return new byte[0];
+        }
+    }
+
+    private static String secretKindForLiveStage(byte[] secret) {
+        if (secret == null || secret.length == 0) {
+            return "none";
+        }
+        int first = secret[0] & 0xff;
+        if (secret.length >= 17 && first == 0xdd) {
+            return "dd";
+        }
+        if (secret.length > 17 && first == 0xee) {
+            return "ee";
+        }
+        return "legacy";
+    }
+
+    private static String secretDomainForLiveStage(byte[] secret) {
+        if (secret == null || secret.length <= 17 || (secret[0] & 0xff) != 0xee) {
+            return "";
+        }
+        return new String(secret, 17, secret.length - 17, StandardCharsets.UTF_8);
     }
 
     private static boolean hasPending(SharedConfig.ProxyInfo proxyInfo) {
@@ -309,7 +403,6 @@ public class ProxyCheckScheduler {
         String displayDiagnostic = displayDiagnosticForResult(request, time, normalizedDiagnostic);
         long appliedTime = appliedTimeForResult(request, time);
         long callbackTime = callbackTimeForResult(request, time);
-        String appliedDiagnostic = shouldPreserveConnectedState(request, time) ? ProxyCheckDiagnostics.OK : displayDiagnostic;
         log("finish result=" + (callbackTime == -1 ? "fail" : "ok") + " phase=" + normalizedDiagnostic + " diagnostic=" + displayDiagnostic + " time=" + callbackTime + " applied_time=" + appliedTime + " raw_time=" + time + " endpoint=" + endpoint(request.proxyInfo) + " queued=" + queue.size() + " cancelled=" + request.cancelled + " listeners=" + request.activeListenerCount());
         rememberCheckResult(request, callbackTime, displayDiagnostic);
         for (int i = 0, count = request.listeners.size(); i < count; i++) {
@@ -317,6 +410,7 @@ public class ProxyCheckScheduler {
             if (listener.cancelled) {
                 continue;
             }
+            String appliedDiagnostic = appliedDiagnosticForResult(listener.proxyInfo, request, time, displayDiagnostic);
             applyMeasuredResult(listener.proxyInfo, appliedTime, appliedDiagnostic);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, listener.proxyInfo);
             if (listener.callback != null) {
@@ -351,6 +445,28 @@ public class ProxyCheckScheduler {
             return 0;
         }
         return time;
+    }
+
+    private static String appliedDiagnosticForResult(SharedConfig.ProxyInfo proxyInfo, Request request, long time, String displayDiagnostic) {
+        if (!shouldPreserveConnectedState(request, time)) {
+            return displayDiagnostic;
+        }
+        if (hasFreshConcreteProxyPhase(proxyInfo)) {
+            return ProxyCheckDiagnostics.normalize(proxyInfo.lastCheckDiagnostic);
+        }
+        return ProxyCheckDiagnostics.OK;
+    }
+
+    private static boolean hasFreshConcreteProxyPhase(SharedConfig.ProxyInfo proxyInfo) {
+        return ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyCheckDiagnostics.hasFreshLivePhase(proxyInfo) || ProxyCheckDiagnostics.hasFreshEndpointCooldown(proxyInfo);
+    }
+
+    private static void markCheckingIfNoFreshConcretePhase(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo == null || hasFreshConcreteProxyPhase(proxyInfo)) {
+            return;
+        }
+        proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.CHECKING;
+        proxyInfo.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();
     }
 
     private static long callbackTimeForResult(Request request, long time) {
@@ -419,7 +535,7 @@ public class ProxyCheckScheduler {
         long now = SystemClock.elapsedRealtime();
         state.lastDiagnostic = normalizedDiagnostic;
         state.lastCheckTime = now;
-        if (time != -1 || isConnectedCurrentProxy(request.currentAccount, request.proxyInfo)) {
+        if (time != -1 || shouldRememberConnectedCheckResult(request, time)) {
             rememberEndpointConnected(state, now);
             String networkKey = endpointNetworkKey(request.proxyInfo);
             if (networkKey != null && !networkKey.equals(key)) {
@@ -427,8 +543,16 @@ public class ProxyCheckScheduler {
             }
             return;
         }
+        if (shouldPreserveConnectedState(request, time)) {
+            log("finish_keep_proxy_phase endpoint=" + endpoint(request.proxyInfo));
+            return;
+        }
 
         rememberEndpointFailure(state, request.proxyInfo, state.lastDiagnostic, now, "proxy_check");
+    }
+
+    private static boolean shouldRememberConnectedCheckResult(Request request, long time) {
+        return shouldPreserveConnectedState(request, time) && !hasFreshConcreteProxyPhase(request.proxyInfo);
     }
 
     private static void rememberEndpointConnected(EndpointState state, long now) {
@@ -449,6 +573,9 @@ public class ProxyCheckScheduler {
     }
 
     private static void markEndpointCooldown(SharedConfig.ProxyInfo proxyInfo, long now) {
+        if (hasFreshConcreteProxyPhase(proxyInfo)) {
+            return;
+        }
         proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.ENDPOINT_COOLDOWN;
         proxyInfo.lastCheckDiagnosticTime = now;
     }
@@ -694,16 +821,14 @@ public class ProxyCheckScheduler {
         void setChecking(boolean checking) {
             proxyInfo.checking = checking;
             if (checking) {
-                proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.CHECKING;
-                proxyInfo.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();
+                markCheckingIfNoFreshConcretePhase(proxyInfo);
             }
             for (int i = 0, count = listeners.size(); i < count; i++) {
                 Listener listener = listeners.get(i);
                 if (!listener.cancelled) {
                     listener.proxyInfo.checking = checking;
                     if (checking) {
-                        listener.proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.CHECKING;
-                        listener.proxyInfo.lastCheckDiagnosticTime = proxyInfo.lastCheckDiagnosticTime;
+                        markCheckingIfNoFreshConcretePhase(listener.proxyInfo);
                     }
                 }
             }

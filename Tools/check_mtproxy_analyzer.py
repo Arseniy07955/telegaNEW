@@ -48,10 +48,144 @@ def check_phase_contract():
         not missing_analyzer,
         f"MTProxy analyzer must know every native MTProxy phase used by GUI/logs: {missing_analyzer}",
     )
+    event_map_start = analyzer.find("event_map = {")
+    event_map_end = analyzer.find("\n        for needle, event in event_map.items():", event_map_start)
+    event_map = analyzer[event_map_start:event_map_end]
+    missing_event_map = sorted(phase for phase in native_published | mtproxy_terminal if phase not in event_map)
+    require(
+        not missing_event_map,
+        f"MTProxy analyzer event_map must classify every native-published or terminal phase, not merely mention it elsewhere: {missing_event_map}",
+    )
+    require(
+        "def event_marker_matches" in analyzer
+        and "if event_marker_matches(text, needle):" in analyzer
+        and "if needle in text:" not in event_map,
+        "MTProxy analyzer must match event markers as standalone tokens, not by raw substring",
+    )
+    native_startup_markers = set(re.findall(r"mtproxy_startup ([a-zA-Z0-9_]+)", socket))
+    directly_handled_markers = {
+        "close_diagnostic",
+        "close_diagnostic_suppressed",
+        "profile",
+    }
+    missing_startup_markers = sorted(
+        marker for marker in native_startup_markers
+        if marker not in event_map and marker not in directly_handled_markers
+    )
+    require(
+        not missing_startup_markers,
+        f"MTProxy analyzer must preserve every native mtproxy_startup marker or mark it as directly handled: {missing_startup_markers}",
+    )
 
 
 def main():
     check_phase_contract()
+
+    def events_for_line(line):
+        attempt = Attempt(key="event-overlap")
+        attempt.add(1, line)
+        return {key: value for key, value in attempt.events.items() if value}
+
+    overlap_cases = [
+        (
+            "connection(0x1) mtproxy_startup admission_grant_queued admission_mode=strict key=x",
+            {"admission_grant_queued": 1},
+        ),
+        (
+            "connection(0x1) mtproxy_startup admission_dequeue_global admission_mode=strict key=x",
+            {"admission_dequeue_global": 1},
+        ),
+        (
+            "connection(0x1) mtproxy_startup admission_release_ignored admission_mode=strict key=x",
+            {"admission_release_ignored": 1},
+        ),
+        (
+            "connection(0x1) mtproxy_startup tcp_connect_gate_release key=x active=0 reason=closeSocket",
+            {"tcp_connect_gate_release": 1},
+        ),
+        (
+            "connection(0x1) mtproxy_startup tcp_connect_gate_wait key=x active=1 delay=100 ready=0",
+            {"tcp_connect_gate_wait": 1},
+        ),
+        (
+            "connection(0x1) mtproxy_startup admission_queue_wait admission_mode=strict key=x",
+            {"admission_queue_wait": 1},
+        ),
+    ]
+    for line, expected_events in overlap_cases:
+        require(
+            events_for_line(line) == expected_events,
+            f"analyzer must not double-count nested mtproxy_startup markers in line: {line}",
+        )
+
+    digit_profile = Attempt(key="digit-profile")
+    digit_profile.add(
+        1,
+        "connection(0x1) mtproxy_startup profile selected=android11_okhttp_advisory id=5 mode=auto hello=1234",
+    )
+    require(
+        digit_profile.profile == "android11_okhttp_advisory"
+        and digit_profile.profile_id == "5"
+        and digit_profile.hello_bytes == "1234",
+        "analyzer profile parser must preserve profile names with digits plus id and hello size",
+    )
+    digit_connect = Attempt(key="digit-connect")
+    digit_connect.add(
+        1,
+        "connection(0x1) mtproxy_startup connect_start proxy_state=10 secret_kind=ee is_faketls=1 "
+        "domain_len=1 profile=android11_okhttp_advisory connection_pattern=strict address=1.2.3.4 port=443",
+    )
+    require(
+        digit_connect.profile == "android11_okhttp_advisory"
+        and digit_connect.address == "1.2.3.4"
+        and digit_connect.port == "443",
+        "analyzer connect_start parser must preserve profile names with digits",
+    )
+    delayed_priority = Attempt(key="delayed-priority")
+    delayed_priority.add(
+        1,
+        "connection(0x1) mtproxy_startup admission_dequeue admission_mode=strict connection_pattern=strict "
+        "key=1.2.3.4:443:cdn.example active=1 queued=0 priority=20",
+    )
+    require(
+        delayed_priority.proxy_key == "1.2.3.4:443:cdn.example"
+        and delayed_priority.endpoint == "1.2.3.4:443"
+        and delayed_priority.priority == "20",
+        "analyzer admission parser must preserve priority even when it is not immediately after key",
+    )
+    endpoint_key = Attempt(key="endpoint-key")
+    endpoint_key.add(
+        1,
+        "connection(0x1) mtproxy_startup endpoint_cooldown key=1.2.3.4:443:cdn.example "
+        "connection_pattern=strict priority=20 delay=100 cooldown_ms=5000",
+    )
+    require(
+        endpoint_key.proxy_key == "1.2.3.4:443:cdn.example"
+        and endpoint_key.endpoint == "1.2.3.4:443"
+        and endpoint_key.priority == "20",
+        "analyzer must preserve endpoint keys outside admission_* markers",
+    )
+    network_key = Attempt(key="network-key")
+    network_key.add(
+        1,
+        "connection(0x1) mtproxy_startup tcp_connect_gate key=1.2.3.4:443 active=1 delay=100 ready=0",
+    )
+    require(
+        network_key.proxy_key == "1.2.3.4:443"
+        and network_key.endpoint == "1.2.3.4:443",
+        "analyzer must preserve network endpoint keys from TCP gate markers",
+    )
+    ipv6_network_key = Attempt(key="ipv6-network-key")
+    ipv6_network_key.add(
+        1,
+        "connection(0x1) mtproxy_startup endpoint_failure key=2001:db8::1:443 "
+        "phase=tcp_not_connected reason=closeSocket connection_pattern=strict priority=20 cooldown_ms=5200 recipe_level=1",
+    )
+    require(
+        ipv6_network_key.proxy_key == "2001:db8::1:443"
+        and ipv6_network_key.endpoint == "2001:db8::1:443",
+        "analyzer must not strip the port from IPv6 network endpoint keys without SNI",
+    )
 
     attempt = Attempt(key="synthetic")
     attempt.add(1, "connection(0x1) mtproxy_startup socket_connect_start ipv6=0 state=0")
@@ -94,6 +228,37 @@ def main():
         "idle post-handshake sockets that never sent app-data must not be reported as post_handshake_no_appdata",
     )
 
+    tls_appdata_timeout = Attempt(key="tls-appdata-timeout")
+    tls_appdata_timeout.add(1, "connection(0x15) mtproxy_startup socket_connect_start ipv6=0 state=10")
+    tls_appdata_timeout.add(2, "connection(0x15) mtproxy_startup socket_connected elapsed=70")
+    tls_appdata_timeout.add(3, "connection(0x15) mtproxy_startup client_hello_sent bytes=1897")
+    tls_appdata_timeout.add(4, "connection(0x15) mtproxy_startup server_hello_hmac_ok bytes=2219 len1=1210 len2=993 flight=993 extra=0")
+    tls_appdata_timeout.add(5, "connection(0x15) mtproxy_startup on_connected tls=1")
+    tls_appdata_timeout.add(6, "connection(0x15) mtproxy_startup mtproxy_tls_appdata_no_response_timeout elapsed=5601")
+    require(
+        tls_appdata_timeout.verdict() == "post_handshake_no_appdata",
+        "FakeTLS app-data no-response timeout must be classified as post_handshake_no_appdata even if earlier first_tls_app_sent logs were truncated",
+    )
+
+    tcp_connected_no_pong = Attempt(key="tcp-connected-no-pong")
+    tcp_connected_no_pong.add(1, "connection(0x16) mtproxy_startup socket_connect_start ipv6=0 state=10")
+    tcp_connected_no_pong.add(2, "connection(0x16) mtproxy_startup socket_connected elapsed=70")
+    tcp_connected_no_pong.add(3, "connection(0x16) mtproxy_startup close_diagnostic phase=tcp_connected_no_pong")
+    require(
+        tcp_connected_no_pong.verdict() == "tcp_connected_no_pong",
+        "direct native tcp_connected_no_pong diagnostics must not be hidden as a generic pre-ClientHello failure",
+    )
+
+    hmac_mismatch_direct = Attempt(key="hmac-mismatch-direct")
+    hmac_mismatch_direct.add(1, "connection(0x17) mtproxy_startup socket_connect_start ipv6=0 state=10")
+    hmac_mismatch_direct.add(2, "connection(0x17) mtproxy_startup socket_connected elapsed=70")
+    hmac_mismatch_direct.add(3, "connection(0x17) mtproxy_startup client_hello_sent bytes=1897")
+    hmac_mismatch_direct.add(4, "connection(0x17) mtproxy_startup close_diagnostic phase=server_hello_hmac_mismatch")
+    require(
+        hmac_mismatch_direct.verdict() == "server_hello_hmac_mismatch",
+        "direct native server_hello_hmac_mismatch diagnostics must be classified even without a separate timeout marker",
+    )
+
     reused_pointer_latency = Attempt(key="reused-pointer-latency")
     reused_pointer_latency.add(
         1,
@@ -106,6 +271,34 @@ def main():
     require(
         reused_pointer_latency.timing_ms("client_hello_sent", "server_hello_hmac_ok") == "",
         "analyzer must ignore negative event latency caused by reused pointers or out-of-order marker grouping",
+    )
+
+    tcp_gate_wait = Attempt(key="tcp-gate-wait")
+    tcp_gate_wait.add(
+        1,
+        "06-20 15:00:02.000 connection(0x14) mtproxy_startup connect_start proxy_state=10 "
+        "secret_kind=ee is_faketls=1 domain_len=17 profile=firefox_android "
+        "connection_pattern=browser address=198.51.100.14 port=443",
+    )
+    tcp_gate_wait.add(2, "connection(0x14) mtproxy_startup tcp_connect_gate key=198.51.100.14:443 active=1 delay=650 ready=0")
+    tcp_gate_wait.add(3, "connection(0x14) mtproxy_startup tcp_connect_gate_wait key=198.51.100.14:443 active=1 delay=2300 ready=1")
+    require(
+        tcp_gate_wait.verdict() == "waiting_tcp_connect_gate",
+        "an analyzer attempt that never started TCP because it waited in the TCP gate must not be reported as tcp_not_connected",
+    )
+
+    admission_wait = Attempt(key="admission-wait")
+    admission_wait.add(
+        1,
+        "06-20 15:00:02.000 connection(0x15) mtproxy_startup connect_start proxy_state=10 "
+        "secret_kind=ee is_faketls=1 domain_len=17 profile=firefox_android "
+        "connection_pattern=browser address=198.51.100.15 port=443",
+    )
+    admission_wait.add(2, "connection(0x15) mtproxy_startup admission_queue admission_mode=browser connection_pattern=browser key=198.51.100.15:443:cdn.example priority=0 active=1 limit=1 global_active=1 global_limit=1 queued=1 cooldown_ms=0 retry=650")
+    admission_wait.add(3, "connection(0x15) mtproxy_startup admission_queue_wait admission_mode=browser connection_pattern=browser key=198.51.100.15:443:cdn.example priority=0 active=1 limit=1 global_active=1 global_limit=1 queued=1 cooldown_ms=0 retry=650")
+    require(
+        admission_wait.verdict() == "waiting_proxy_admission",
+        "an analyzer attempt that only waited in admission queue must not be reported as tcp_not_connected",
     )
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
@@ -124,6 +317,9 @@ def main():
         handle.write("logcat.txt:4: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:5: connection(0x2) mtproxy_startup socket_connected elapsed=90\n")
         handle.write("logcat.txt:6: connection(0x2) mtproxy_startup client_hello_sent bytes=1897\n")
+        handle.write("logcat.txt:6: connection(0x2) mtproxy_startup client_hello_fragment_plan mode=soft total=1897 first=517 fragments=3\n")
+        handle.write("logcat.txt:6: connection(0x2) mtproxy_startup client_hello_fragment mode=soft index=1 offset=517 total=1897 next_delay=88\n")
+        handle.write("logcat.txt:6: connection(0x2) mtproxy_startup server_data_before_client_hello_complete pending_hello=517/1897 read=128\n")
         handle.write(
             "logcat.txt:7: connection(0x2) mtproxy_startup admission_freeze_detected "
             "key=blocked.example:443:cdn.example elapsed=4500\n"
@@ -146,6 +342,16 @@ def main():
             "logcat.txt:9: 06-20 15:00:00.250 connection(0x2) mtproxy_startup admission_tcp_failure_cooldown "
             "admission_mode=strict connection_pattern=strict reason=closeSocket key=blocked.example:443:cdn.example "
             "penalty=1 cooldown_ms=5200\n"
+        )
+        handle.write(
+            "logcat.txt:9: 06-20 15:00:00.260 connection(0x2) mtproxy_startup admission_freeze_cooldown "
+            "admission_mode=strict connection_pattern=strict reason=closeSocket key=blocked.example:443:cdn.example "
+            "penalty=1 cooldown_ms=6200\n"
+        )
+        handle.write(
+            "logcat.txt:9: 06-20 15:00:00.270 connection(0x2) mtproxy_startup admission_failure_cooldown "
+            "admission_mode=strict connection_pattern=strict reason=closeSocket key=blocked.example:443:cdn.example "
+            "penalty=1 cooldown_ms=4200\n"
         )
         handle.write("logcat.txt:10: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:11: connection(0x2) mtproxy_startup socket_connected elapsed=80\n")
@@ -196,9 +402,23 @@ def main():
             "phase=dropped_after_appdata reason=peer_closed first_tls_sent=1 first_tls_recv=1 first_plain_sent=0 first_plain_recv=0\n"
         )
         handle.write(
+            "logcat.txt:15: 06-20 15:00:01.400 connection(0x9) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
+            "is_faketls=1 domain_len=17 profile=android_chrome connection_pattern=strict address=198.51.100.99 port=443\n"
+        )
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup socket_connected elapsed=80\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup client_hello_sent bytes=1897\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup server_hello_hmac_ok bytes=2219 len1=1210 len2=993 flight=993 extra=0\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup on_connected tls=1\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup first_tls_app_recv payload=105\n")
+        handle.write("logcat.txt:15: connection(0x9) mtproxy_startup close_diagnostic phase=dropped_after_appdata\n")
+        handle.write(
             "logcat.txt:15: 06-20 15:00:01.500 connection(0x6) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
             "is_faketls=1 domain_len=17 profile=android_chrome connection_pattern=strict address=198.51.100.66 port=443\n"
         )
+        handle.write("logcat.txt:15: connection(0x6) mtproxy_startup resolved_sslip host=198.51.100.66.sslip.io address=198.51.100.66\n")
+        handle.write("logcat.txt:15: connection(0x6) mtproxy_startup endpoint_failure key=198.51.100.66:443 phase=tcp_not_connected reason=closeSocket connection_pattern=strict priority=0 cooldown_ms=5200 recipe_level=1\n")
+        handle.write("logcat.txt:15: connection(0x6) mtproxy_startup endpoint_success network_key=198.51.100.66:443 key=198.51.100.66:443:cdn.example reason=server_hello_hmac_ok\n")
         handle.write("logcat.txt:15: connection(0x6) mtproxy_startup host_resolve_failed host=blocked-dns.example reason=no_delegate\n")
         handle.write(
             "logcat.txt:16: proxy_check_start state=ping_sent ping_id=1 request_token=1 "
@@ -231,13 +451,14 @@ def main():
         handle.write("logcat.txt:25: proxy_check_scheduler enqueue endpoint=dead.example:443 queued=1\n")
         handle.write("logcat.txt:25: proxy_check_scheduler start endpoint=dead.example:443 queued=0\n")
         handle.write(
-            "logcat.txt:25: proxy_check_scheduler finish result=fail phase=tcp_not_connected "
-            "diagnostic=network_block_suspected time=-1 applied_time=-1 raw_time=-1 "
+            "logcat.txt:25: proxy_check_scheduler finish result=fail "
+            "raw_endpoint=wrong.example:443 raw_phase=stale_raw raw_diagnostic=stale_raw "
+            "phase=tcp_not_connected diagnostic=network_block_suspected time=-1 applied_time=-1 raw_time=-1 "
             "endpoint=dead.example:443 queued=0 cancelled=false listeners=1\n"
         )
         handle.write(
             "logcat.txt:25: proxy_check_scheduler backoff endpoint=dead.example:443 "
-            "wait_ms=120000 failures=2 phase=network_block_suspected source=proxy_check\n"
+            "wait_ms=120000 failures=2 raw_phase=stale_raw phase=network_block_suspected source=proxy_check\n"
         )
         handle.write(
             "logcat.txt:25: proxy_check_scheduler skip_backoff endpoint=dead.example:443 "
@@ -353,8 +574,14 @@ def main():
                 and dead_scheduler_row["finish_fail"] == "1"
                 and dead_scheduler_row["backoff"] == "1"
                 and dead_scheduler_row["skip_backoff"] == "1"
-                and dead_scheduler_row["phase_network_block_suspected"] == "3",
-                "scheduler CSV must expose endpoint queue/start/fail/backoff phases for diagnosing retry storms",
+                and dead_scheduler_row["finish_phase_tcp_not_connected"] == "1"
+                and dead_scheduler_row["diagnostic_network_block_suspected"] == "3",
+                "scheduler CSV must expose finish phases and display diagnostics separately",
+            )
+            require(
+                "phase_network_block_suspected" not in dead_scheduler_row
+                and "phase_tcp_not_connected" not in dead_scheduler_row,
+                "scheduler CSV must not mix finish phases and display diagnostics in phase_* columns",
             )
             require(
                 ok_scheduler_row is not None and ok_scheduler_row["finish_keep_connected"] == "1",
@@ -421,6 +648,23 @@ def main():
         "analyzer must preserve the pre-ClientHello TCP-failure cooldown marker",
     )
     require(
+        "admission_freeze_cooldown" in result.stdout
+        and "admission_failure_cooldown" in result.stdout,
+        "analyzer must preserve non-TCP admission cooldown markers so queued-slot waits can be explained",
+    )
+    require(
+        "client_hello_fragment_plan" in result.stdout
+        and "client_hello_fragment" in result.stdout
+        and "server_data_before_client_hello_complete" in result.stdout,
+        "analyzer must preserve ClientHello fragmentation edge markers for diagnosing fragment-related stalls",
+    )
+    require(
+        "resolved_sslip" in result.stdout
+        and "endpoint_failure" in result.stdout
+        and "endpoint_success" in result.stdout,
+        "analyzer must preserve endpoint resilience markers for explaining adaptive recipes and sslip.io fast-path behavior",
+    )
+    require(
         "admission_hold_after_client_hello_failure" in result.stdout,
         "analyzer must preserve the queued-admission hold marker after post-ClientHello failures",
     )
@@ -446,6 +690,10 @@ def main():
         "198.51.100.88:443 ok: 1" in result.stdout
         and "198.51.100.88:443 dropped_after_appdata" not in result.stdout,
         "suppressed post-appdata close diagnostics must stay out of endpoint drop summaries",
+    )
+    require(
+        "198.51.100.99:443 dropped_after_appdata: 1" in result.stdout,
+        "non-suppressed later post-appdata drops must be visible in endpoint phase summaries",
     )
     require(
         "plain.example:443 android_chrome" not in result.stdout,
@@ -476,8 +724,8 @@ def main():
         "analyzer recommendations must route dd no-response to endpoint backoff/fallback, not FakeTLS JA4",
     )
     require(
-        "faketls_data_path post_handshake_no_appdata=0 dropped_early_after_appdata=1 tls_frames_completed=3" in result.stdout,
-        "analyzer recommendations must use completed FakeTLS records to identify post-handshake data-path failures",
+        "faketls_data_path post_handshake_no_appdata=0 dropped_early_after_appdata=1 dropped_after_appdata=1 tls_frames_completed=3" in result.stdout,
+        "analyzer recommendations must use completed FakeTLS records to identify post-handshake data-path failures including later drops",
     )
     require(
         "plain.example:443 dd account0 dc2 type1: socket_connected=1 connected=1 first_packet_sent=1 first_packet_recv=1 packet_sent_no_response=0 send=1 recv=1 rpc_result=1" in result.stdout,

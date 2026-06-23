@@ -510,8 +510,21 @@ def main() -> int:
         "mtproxy_startup first_tls_app_sent" in cpp
         and "mtproxy_startup first_tls_app_recv" in cpp
         and "mtproxyFirstTlsFrameSentLogged" in combined
+        and "mtproxyFirstTlsFrameSentTime" in combined
         and "mtproxyFirstTlsDataReceivedLogged" in combined,
         "FakeTLS diagnostics must mark the first post-handshake MTProto TLS write and read",
+    )
+    timeout_start = cpp.find("bool ConnectionSocket::checkTimeout")
+    timeout_end = cpp.find("bool ConnectionSocket::hasTlsHashMismatch", timeout_start)
+    timeout_block = cpp[timeout_start:timeout_end]
+    require(
+        "MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS" in cpp
+        and "mtproxy_tls_appdata_no_response_timeout" in timeout_block
+        and "currentSecretIsFakeTls" in timeout_block
+        and "mtproxyFirstTlsFrameSentLogged" in timeout_block
+        and "!mtproxyFirstTlsDataReceivedLogged" in timeout_block
+        and 'proxyCheckDiagnostic == "post_handshake_no_appdata"' in timeout_block,
+        "FakeTLS must not stay half-connected forever after first MTProto TLS data is sent without a server response",
     )
 
     if errors:

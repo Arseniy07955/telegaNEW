@@ -75,6 +75,14 @@ def main():
         "ConnectionSocket must remember active TCP connect gate state per socket",
     )
     require(
+        "proxyEndpointTcpConnectGatePublished" in header,
+        "ConnectionSocket must remember whether TCP gate wait was already published to the UI for this socket",
+    )
+    require(
+        "proxyHandshakeAdmissionQueuePublished" in header,
+        "ConnectionSocket must remember whether admission queue wait was already published to the UI for this socket",
+    )
+    require(
         "currentMtProxyDnsCacheKey" in header,
         "ConnectionSocket must keep a DNS cache key separate from the MTProxy secret/SNI endpoint key",
     )
@@ -153,6 +161,15 @@ def main():
         and '"admission_timer_ignored": "admission_timer_ignored"' in analyzer,
         "shared MTProxy timer must ignore callbacks from cancelled/replaced handshake generations",
     )
+    admission_start = socket.find("bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded")
+    admission_end = socket.find("void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer", admission_start)
+    admission_body = socket[admission_start:admission_end]
+    require(
+        "proxyHandshakeAdmissionQueuePublished" in admission_body
+        and "admission_queue_wait" in admission_body
+        and "if (!proxyHandshakeAdmissionQueuePublished)" in admission_body,
+        "admission queue must publish the UI wait state once and log repeated waits separately",
+    )
     close_start = socket.find("void ConnectionSocket::closeSocket")
     close_end = socket.find("void ConnectionSocket::onDisconnected", close_start)
     close_body = socket[close_start:close_end]
@@ -209,17 +226,26 @@ def main():
         and '"reconnect_backoff_suppressed": "reconnect_backoff_suppressed"' in analyzer,
         "suppressed close diagnostics must not still trigger reconnect_backoff in Connection",
     )
+    early_drop_idx = close_body.find('proxyCheckDiagnostic = "dropped_early_after_appdata";')
+    suppress_idx = close_body.find("bool suppressProxyCloseDiagnostic = false;")
+    suppress_late_drop_idx = close_body.find('proxyCheckDiagnostic == "dropped_after_appdata"', suppress_idx)
+    publish_idx = close_body.find("publishProxyConnectionStage(proxyCheckDiagnostic.c_str())")
     require(
         "suppressProxyCloseDiagnostic" in close_body
         and 'proxyCheckDiagnostic == "post_handshake_no_appdata"' in close_body
         and "!mtproxyFirstTlsFrameSentLogged" in close_body
         and "!mtproxyFirstPlainDataSentLogged" in close_body
-        and 'proxyCheckDiagnostic == "dropped_after_appdata"' in close_body
+        and early_drop_idx >= 0
+        and suppress_idx >= 0
+        and early_drop_idx < suppress_idx
+        and suppress_late_drop_idx >= 0
+        and suppress_late_drop_idx < publish_idx
+        and 'proxyCheckDiagnostic == "dropped_early_after_appdata"' not in close_body[suppress_idx:publish_idx]
         and "mtproxyFirstTlsDataReceivedLogged || mtproxyFirstPlainDataReceivedLogged" in close_body
         and "proxyCloseDiagnosticSuppressed = true;" in close_body
         and "isProxyCloseDiagnosticSuppressed()" in header
         and "close_diagnostic_suppressed" in close_body,
-        "closeSocket must suppress idle post-handshake closes and already-usable post-appdata closes before publishing a proxy failure",
+        "closeSocket must publish early post-appdata drops while suppressing only later already-usable post-appdata closes",
     )
     require(
         "!suppressProxyCloseDiagnostic && reason != 0 && isCurrentMtProxyConnection() && !proxyCheckDiagnostic.empty()" in close_body
@@ -318,6 +344,13 @@ def main():
         and "currentMtProxyEndpointKey" not in tcp_gate_body,
         "TCP connect gate must use the host/port network key, not the secret/SNI FakeTLS endpoint key",
     )
+    require(
+        "MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_REPEAT_MS" in socket
+        and "proxyEndpointTcpConnectGatePublished" in tcp_gate_body
+        and "tcp_connect_gate_wait" in tcp_gate_body
+        and "if (!proxyEndpointTcpConnectGatePublished)" in tcp_gate_body,
+        "TCP connect gate must publish the UI wait state once and log repeated waits separately",
+    )
     tcp_release_start = socket.find("void ConnectionSocket::releaseMtProxyEndpointTcpConnect")
     tcp_release_end = socket.find("bool ConnectionSocket::scheduleMtProxyDnsCoalesceIfNeeded", tcp_release_start)
     tcp_release_body = socket[tcp_release_start:tcp_release_end]
@@ -377,7 +410,6 @@ def main():
     require(
         "client_hello_sent_no_server_hello" in recipe_body
         and "server_hello_hmac_mismatch" in recipe_body
-        and "peer_closed_after_client_hello" in recipe_body
         and "post_handshake_no_appdata" in recipe_body,
         "phase-adaptive recipe must react only to FakeTLS/post-ClientHello semantic failures",
     )
@@ -386,6 +418,7 @@ def main():
         and "host_resolve_failed" not in recipe_body
         and "mtproxy_packet_sent_no_response" not in recipe_body
         and "dropped_early_after_appdata" not in recipe_body
+        and "peer_closed_after_client_hello" not in recipe_body
         and "tcp_connected_no_pong" not in recipe_body,
         "phase-adaptive recipe must not react to DNS/TCP/plain-dd failures where JA4/ClientHello did not help",
     )

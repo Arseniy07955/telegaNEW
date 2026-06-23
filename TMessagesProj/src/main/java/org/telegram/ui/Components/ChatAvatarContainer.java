@@ -50,7 +50,9 @@ import org.telegram.messenger.ImageReceiver;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.ProxyCheckDiagnostics;
 import org.telegram.messenger.R;
+import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.tgnet.ConnectionsManager;
@@ -1502,6 +1504,7 @@ public class ChatAvatarContainer extends FrameLayout implements NotificationCent
         super.onAttachedToWindow();
         if (parentFragment != null) {
             NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.didUpdateConnectionState);
+            NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.proxyConnectionStageChanged);
             NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.emojiLoaded);
             if (parentFragment.getChatMode() == ChatActivity.MODE_SAVED) {
                 NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.savedMessagesDialogsUpdate);
@@ -1522,6 +1525,7 @@ public class ChatAvatarContainer extends FrameLayout implements NotificationCent
         super.onDetachedFromWindow();
         if (parentFragment != null) {
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.didUpdateConnectionState);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.proxyConnectionStageChanged);
             NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.emojiLoaded);
             if (parentFragment.getChatMode() == ChatActivity.MODE_SAVED) {
                 NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.savedMessagesDialogsUpdate);
@@ -1543,6 +1547,9 @@ public class ChatAvatarContainer extends FrameLayout implements NotificationCent
                 currentConnectionState = state;
                 updateCurrentConnectionState();
             }
+        } else if (id == NotificationCenter.proxyConnectionStageChanged) {
+            currentConnectionState = ConnectionsManager.getInstance(currentAccount).getConnectionState();
+            updateCurrentConnectionState();
         } else if (id == NotificationCenter.emojiLoaded) {
             if (titleTextView != null) {
                 titleTextView.invalidate();
@@ -1565,7 +1572,7 @@ public class ChatAvatarContainer extends FrameLayout implements NotificationCent
         } else if (currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
             title = getString(R.string.Updating);
         } else if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
-            title = getString(R.string.ConnectingToProxy);
+            title = ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, SharedConfig.isProxyEnabled(), currentConnectionState);
         }
         if (title == null) {
             if (lastSubtitle != null) {

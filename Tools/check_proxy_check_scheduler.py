@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
+PROXY_SETTINGS = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxySettingsActivity.java"
+ANDROID_UTILITIES = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java"
 ROTATION = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRotationController.java"
 JAVA_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
@@ -72,6 +74,8 @@ checks = [
     (PROXY_LIST, "markConnectedCurrentProxyIfNeeded", "proxy list must mark connected-state observations outside cell rendering"),
     (PROXY_LIST, "ProxyCheckScheduler.markConnectionStarting", "proxy list must clear stale visible failures when a real user-selected proxy reconnect starts"),
     (PROXY_LIST, "ProxyCheckScheduler.cancelOwner(this)", "proxy list must cancel queued checks on destroy"),
+    (PROXY_SETTINGS, "ProxyCheckScheduler.markConnectionStarting(currentProxyInfo)", "proxy settings save must clear stale visible failures before applying enabled proxy settings"),
+    (ANDROID_UTILITIES, "ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy)", "proxy link add/apply must clear stale visible failures before applying enabled proxy settings"),
     (ROTATION, "ProxyCheckScheduler.isFresh", "proxy rotation must not switch to stale availability results"),
     (ROTATION, "ProxyCheckScheduler.markConnected(SharedConfig.currentProxy)", "proxy rotation must share connected-state freshness with the scheduler"),
     (ROTATION, "ProxyCheckScheduler.markConnectionStarting(info)", "proxy rotation must publish a fresh starting phase before applying a fallback proxy"),
@@ -85,8 +89,10 @@ checks = [
     (ROTATION, "proxy_rotation ", "proxy rotation must emit stable diagnostics"),
     (ROTATION, "scheduled_check skipped background_disabled", "proxy rotation must not launch a full proxy-check sweep while connection is already trying"),
     (DIAGNOSTICS, "hasFreshEndpointCooldown", "proxy diagnostics must expose fresh endpoint cooldown as a rotation blocker"),
+    (DIAGNOSTICS, "hasFreshUnresolvedLivePhase", "proxy diagnostics must expose unresolved live phases as rotation blockers"),
     (DIAGNOSTICS, "shouldAccelerateProxyRotation", "proxy diagnostics must expose terminal startup phases that should accelerate fallback rotation"),
     (ROTATION, "ProxyCheckDiagnostics.hasFreshEndpointCooldown(info)", "proxy rotation must not fallback-switch to an endpoint still in native cooldown"),
+    (ROTATION, "ProxyCheckDiagnostics.hasFreshUnresolvedLivePhase(info)", "proxy rotation must not fallback-switch to an endpoint still proving its proxy data path"),
     (ROTATION, "ProxyCheckScheduler.isEndpointBackedOff(info)", "proxy rotation must not fallback-switch to an endpoint still in scheduler backoff"),
     (README, "Java backoff использует ту же фазовую идею ключей", "README must document Java scheduler phase-aware endpoint keys"),
     (README, "host:port:username:password:secret", "README must document exact-key proxy-check coalescing"),
@@ -130,13 +136,13 @@ mark_connected_start = scheduler_text.find("public static void markConnected")
 mark_connected_end = scheduler_text.find("public static void markEndpointFailure", mark_connected_start)
 mark_connected_body = scheduler_text[mark_connected_start:mark_connected_end]
 if (
-    "boolean preserveFreshFailure = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo);" not in mark_connected_body
-    or "if (!preserveFreshFailure)" not in mark_connected_body
-    or mark_connected_body.find("if (!preserveFreshFailure)") > mark_connected_body.find("proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK")
-    or mark_connected_body.find("if (!preserveFreshFailure)") > mark_connected_body.find("rememberConnected(proxyInfo)")
+    "boolean preserveFreshProxyPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyCheckDiagnostics.hasFreshLivePhase(proxyInfo);" not in mark_connected_body
+    or "if (!preserveFreshProxyPhase)" not in mark_connected_body
+    or mark_connected_body.find("if (!preserveFreshProxyPhase)") > mark_connected_body.find("proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK")
+    or mark_connected_body.find("if (!preserveFreshProxyPhase)") > mark_connected_body.find("rememberConnected(proxyInfo)")
 ):
     print("Proxy check scheduler guard failed:")
-    print(f" - {SCHEDULER.relative_to(ROOT)}: generic connected-state observations must not overwrite fresh terminal proxy failures")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: generic connected-state observations must not overwrite fresh concrete proxy phases")
     sys.exit(1)
 mark_starting_start = scheduler_text.find("public static void markConnectionStarting")
 mark_starting_end = scheduler_text.find("public static void markConnectionUsable", mark_starting_start)
@@ -151,6 +157,27 @@ if (
 if "finish result=\" + (effectiveTime == -1" in scheduler_text or "onProxyChecked(listener.proxyInfo, effectiveTime)" in scheduler_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: callback result must not reuse preserved connected-state time")
+    sys.exit(1)
+if "String appliedDiagnostic = shouldPreserveConnectedState(request, time) ? ProxyCheckDiagnostics.OK : displayDiagnostic;" in scheduler_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: preserved connected-state proxy checks must not overwrite fresh concrete proxy phases with ok")
+    sys.exit(1)
+if (
+    "private static String appliedDiagnosticForResult" not in scheduler_text
+    or "private static boolean hasFreshConcreteProxyPhase" not in scheduler_text
+    or "ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyCheckDiagnostics.hasFreshLivePhase(proxyInfo) || ProxyCheckDiagnostics.hasFreshEndpointCooldown(proxyInfo)" not in scheduler_text
+    or "appliedDiagnosticForResult(listener.proxyInfo, request, time, displayDiagnostic)" not in scheduler_text
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: finishRequest must preserve each listener's fresh concrete proxy phase while suppressing false current-proxy check failures")
+    sys.exit(1)
+if (
+    "private static boolean shouldRememberConnectedCheckResult" not in scheduler_text
+    or "time != -1 || shouldRememberConnectedCheckResult(request, time)" not in scheduler_text
+    or "finish_keep_proxy_phase endpoint=" not in scheduler_text
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: preserved connected-state proxy checks must not clear endpoint backoff while a concrete proxy phase is still fresh")
     sys.exit(1)
 if "applyMeasuredResult(request.proxyInfo, appliedTime);" in scheduler_text:
     print("Proxy check scheduler guard failed:")
@@ -193,9 +220,26 @@ if did_update_start == -1 or proxy_done_start == -1 or "updateRows(true)" in pro
     print("Proxy check scheduler guard failed:")
     print(f" - {PROXY_LIST.relative_to(ROOT)}: connection-state updates must not re-sort the proxy list while the user is selecting a proxy")
     sys.exit(1)
+did_update_body = proxy_list_text[did_update_start:did_update_end]
+if "cell.updateStatus();" in did_update_body and "updateCurrentProxyStatusCell();" in did_update_body:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: connection-state updates must repaint the current proxy row once, not through duplicate direct and helper calls")
+    sys.exit(1)
+if "updateProxyActionBarStatus();" in did_update_body and "updateCurrentProxyStatusCell();" in did_update_body:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: connection-state updates must not repaint the action bar twice")
+    sys.exit(1)
 if proxy_done_start == -1 or proxy_done_end == -1 or "updateRows(true)" in proxy_list_text[proxy_done_start:proxy_done_end]:
     print("Proxy check scheduler guard failed:")
     print(f" - {PROXY_LIST.relative_to(ROOT)}: proxy-check result events must update visible rows without full list reordering")
+    sys.exit(1)
+proxy_done_body = proxy_list_text[proxy_done_start:proxy_done_end]
+if (
+    "updateProxyActionBarStatus();" in proxy_done_body
+    and "proxyInfo == selectedProxy" not in proxy_done_body
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: proxy-check result events must not repaint the action bar for unrelated proxy rows")
     sys.exit(1)
 update_status_start = proxy_list_text.find("public void updateStatus()")
 update_status_end = proxy_list_text.find("public void setSelectionEnabled", update_status_start)
@@ -360,7 +404,7 @@ if (
 status_text_method = diagnostics_text[diagnostics_text.find("public static String statusText"):]
 status_text_method = status_text_method[:status_text_method.find("\n    public static", 1)]
 passive_checking_index = status_text_method.find("if (proxyInfo.checking)")
-passive_cooldown_index = status_text_method.find("if (hasFreshEndpointCooldown(proxyInfo))", passive_checking_index)
+passive_cooldown_index = status_text_method.find("hasFreshEndpointCooldown(proxyInfo)", passive_checking_index)
 passive_unchecked_index = status_text_method.find("ProxyStatusUnchecked", passive_checking_index)
 if passive_cooldown_index == -1 or passive_unchecked_index == -1 or passive_cooldown_index > passive_unchecked_index:
     print("Proxy check scheduler guard failed:")
@@ -397,6 +441,38 @@ for old_rotation_proxy_check_hook in (
         print("Proxy check scheduler guard failed:")
         print(f" - {ROTATION.relative_to(ROOT)}: proxy rotation must not keep old proxy-check hook {old_rotation_proxy_check_hook}")
         sys.exit(1)
+
+switch_to_proxy_method = rotation_text[rotation_text.find("private void switchToProxy"):]
+switch_to_proxy_method = switch_to_proxy_method[:switch_to_proxy_method.find("\n    private void", 1)]
+rotation_changed_index = switch_to_proxy_method.find("NotificationCenter.proxyChangedByRotation")
+settings_changed_index = switch_to_proxy_method.find("NotificationCenter.proxySettingsChanged")
+if rotation_changed_index == -1 or settings_changed_index == -1 or rotation_changed_index > settings_changed_index:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {ROTATION.relative_to(ROOT)}: rotation must notify proxyChangedByRotation before proxySettingsChanged so open proxy list screens can avoid full resort")
+    sys.exit(1)
+
+if "skipNextProxySettingsChangedLayout" not in proxy_list_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: proxy list must suppress the full proxySettingsChanged rebuild that belongs to rotation")
+    sys.exit(1)
+rotation_branch_start = proxy_list_text.find("id == NotificationCenter.proxyChangedByRotation")
+settings_branch_start = proxy_list_text.find("id == NotificationCenter.proxySettingsChanged")
+rotation_branch = proxy_list_text[rotation_branch_start:settings_branch_start]
+settings_branch_end = proxy_list_text.find("} else if (id == NotificationCenter.proxyConnectionStageChanged)", settings_branch_start)
+settings_branch = proxy_list_text[settings_branch_start:settings_branch_end]
+if (
+    "skipNextProxySettingsChangedLayout = true;" not in rotation_branch
+    or "updateRows(false)" not in rotation_branch
+    or "updateCurrentProxyStatusCell();" not in rotation_branch
+    or "updateProxyActionBarStatus();" in rotation_branch
+    or "if (skipNextProxySettingsChangedLayout)" not in settings_branch
+    or "skipNextProxySettingsChangedLayout = false;" not in settings_branch
+    or "updateCurrentProxyStatusCell();" not in settings_branch
+    or settings_branch.find("if (skipNextProxySettingsChangedLayout)") > settings_branch.find("updateRows(true)")
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: rotation-linked proxySettingsChanged must repaint status softly instead of resorting the proxy list")
+    sys.exit(1)
 
 
 def require_cancel_order(marker, label):

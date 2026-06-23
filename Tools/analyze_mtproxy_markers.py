@@ -24,10 +24,11 @@ ACCOUNT_LINE_RE = re.compile(
     r"connection\((0x[0-9a-fA-F]+), account([0-9]+), dc([0-9]+), type ([0-9]+)\) (.*)"
 )
 PROXY_CONNECT_RE = re.compile(r"connecting via proxy ([^ ]+) secret\[([0-9]+)\] secret_kind=([^ ]+)")
-PROFILE_RE = re.compile(r"profile selected=([a-z_]+)(?: id=([0-9]+))?(?: hello=([0-9]+))?")
-CONNECT_RE = re.compile(r"connect_start .*profile=([a-z_]+).*address=([^ ]+) port=([0-9]+)")
-ADMISSION_KEY_RE = re.compile(r"admission_[a-z_]+ .*key=([^ ]+)(?: priority=([-0-9]+))?")
-CONNECTION_PATTERN_RE = re.compile(r"connection_pattern=([^ ]+)")
+PROFILE_RE = re.compile(r"profile selected=([a-z0-9_]+)(?: id=([0-9]+))?(?: .*hello=([0-9]+))?")
+CONNECT_RE = re.compile(r"connect_start .*profile=([a-z0-9_]+).*address=([^ ]+) port=([0-9]+)")
+KEY_RE = re.compile(r"(?<![A-Za-z0-9_])key=([^ ]+)")
+PRIORITY_RE = re.compile(r"(?<![A-Za-z0-9_])priority=([-0-9]+)")
+CONNECTION_PATTERN_RE = re.compile(r"(?<![A-Za-z0-9_])connection_pattern=([^ ]+)")
 CLIENT_HELLO_SENT_RE = re.compile(r"client_hello_sent bytes=([0-9]+)")
 DISCONNECT_RE = re.compile(
     r"mtproxy_disconnect reason=([-0-9]+).*?error=([-0-9]+).*?"
@@ -40,34 +41,40 @@ PROXY_CHECK_START_RE = re.compile(r"proxy_check_start .*ping_id=([0-9]+).*addres
 PROXY_CHECK_SOCKET_RE = re.compile(r"proxy_check_socket_connected ping_id=([0-9]+)")
 PROXY_CHECK_RESULT_RE = re.compile(r"proxy_check_finish result=([a-z]+) reason=([^ ]+)")
 PROXY_CHECK_FINISH_RE = re.compile(r"proxy_check_finish result=([a-z]+) reason=([^ ]+).*ping_id=([0-9]+) address=([^ ]+)")
-PROXY_CHECK_DIAGNOSTIC_RE = re.compile(r"proxy_check_finish .*diagnostic=([^ ]+)")
+PROXY_CHECK_DIAGNOSTIC_RE = re.compile(r"proxy_check_finish .*(?<![A-Za-z0-9_])diagnostic=([^ ]+)")
 PROXY_CHECK_START_FAILED_RE = re.compile(r"proxy_check_start_failed reason=([^ ]+)")
 PROXY_CHECK_CLOSE_RE = re.compile(r"proxy_check_connection_closed close_reason=([-0-9]+)")
 PROXY_CHECK_CLOSE_WITH_PING_RE = re.compile(r"proxy_check_connection_closed close_reason=([-0-9]+) ping_id=([0-9]+)")
 PROXY_CHECK_IGNORED_CLOSE_RE = re.compile(r"proxy_check_connection_closed_ignored close_reason=([-0-9]+)")
 PROXY_ROTATION_RE = re.compile(r"proxy_rotation ([a-z_]+)")
 PROXY_CONNECTION_STAGE_RE = re.compile(r"proxy_connection_stage account=([0-9]+) phase=([^ ]+)")
-ENDPOINT_RE = re.compile(r"endpoint=([^ ]+)")
-SCHEDULER_LISTENERS_RE = re.compile(r"listeners=([0-9]+)")
-SCHEDULER_FORCE_RE = re.compile(r"force=(true|false)")
+ENDPOINT_RE = re.compile(r"(?<![A-Za-z0-9_])endpoint=([^ ]+)")
+SCHEDULER_LISTENERS_RE = re.compile(r"(?<![A-Za-z0-9_])listeners=([0-9]+)")
+SCHEDULER_FORCE_RE = re.compile(r"(?<![A-Za-z0-9_])force=(true|false)")
 SCHEDULER_RESULT_RE = re.compile(r"proxy_check_scheduler finish result=([a-z]+)")
-SCHEDULER_APPLIED_RE = re.compile(r"time=([-0-9]+) applied_time=([-0-9]+) raw_time=([-0-9]+)")
-SCHEDULER_PHASE_RE = re.compile(r"(?:phase|diagnostic)=([^ ]+)")
+SCHEDULER_APPLIED_RE = re.compile(
+    r"(?<![A-Za-z0-9_])time=([-0-9]+) applied_time=([-0-9]+) raw_time=([-0-9]+)"
+)
+SCHEDULER_PHASE_RE = re.compile(r"(?<![A-Za-z0-9_])phase=([^ ]+)")
+SCHEDULER_DIAGNOSTIC_RE = re.compile(r"(?<![A-Za-z0-9_])diagnostic=([^ ]+)")
 TIME_RE = re.compile(r"^[0-9]{2}-[0-9]{2} ([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})")
 
 FAKETLS_FAILURE_VERDICTS = {
     "host_resolve_failed",
     "tcp_not_connected",
-    "connected_but_client_hello_not_fully_sent",
+    "tcp_connected_no_pong",
     "client_hello_sent_no_server_hello",
     "server_hello_hmac_mismatch",
-    "hmac_ok_but_on_connected_not_reached",
     "mtproxy_packet_sent_no_response",
     "post_handshake_no_appdata",
     "dropped_early_after_appdata",
-    "peer_closed_after_client_hello",
+    "dropped_after_appdata",
 }
-NON_FAILURE_VERDICTS = {"ok", "handshake_ok_no_appdata_sent"}
+NON_FAILURE_VERDICTS = {"ok", "handshake_ok_no_appdata_sent", "waiting_proxy_admission", "waiting_tcp_connect_gate"}
+
+
+def event_marker_matches(text: str, needle: str) -> bool:
+    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(needle) + r"(?![A-Za-z0-9_])", text) is not None
 
 
 @dataclass
@@ -178,12 +185,13 @@ class Attempt:
             self.port = connect.group(3)
             self.telegram_endpoint = f"{self.address}:{self.port}"
 
-        admission_key = ADMISSION_KEY_RE.search(text)
-        if admission_key:
-            self.proxy_key = admission_key.group(1)
+        key = KEY_RE.search(text)
+        if key:
+            self.proxy_key = key.group(1)
             self.endpoint = endpoint_from_admission_key(self.proxy_key)
-            if admission_key.group(2):
-                self.priority = admission_key.group(2)
+        priority = PRIORITY_RE.search(text)
+        if priority:
+            self.priority = priority.group(1)
 
         connection_pattern = CONNECTION_PATTERN_RE.search(text)
         if connection_pattern:
@@ -223,32 +231,64 @@ class Attempt:
             "connect_start": "connect_start",
             "host_resolve_start": "host_resolve_start",
             "host_resolve_failed": "host_resolve_failed",
+            "tcp_not_connected": "tcp_not_connected",
+            "tcp_connected_no_pong": "tcp_connected_no_pong",
             "socket_connect_start": "socket_connect_start",
             "socket_connected": "socket_connected",
             "client_hello_send_progress": "client_hello_send_progress",
+            "client_hello_fragment_plan": "client_hello_fragment_plan",
+            "client_hello_fragment": "client_hello_fragment",
+            "server_data_before_client_hello_complete": "server_data_before_client_hello_complete",
             "client_hello_sent": "client_hello_sent",
+            "client_hello_sent_no_server_hello": "client_hello_sent_no_server_hello",
             "endpoint_cooldown": "endpoint_cooldown",
             "tcp_connect_gate": "tcp_connect_gate",
+            "tcp_connect_gate_wait": "tcp_connect_gate_wait",
             "dns_coalesce_wait": "dns_coalesce_wait",
             "dns_cache_hit": "dns_cache_hit",
             "dns_cache_store": "dns_cache_store",
+            "resolved_sslip": "resolved_sslip",
             "phase_adaptive_recipe": "phase_adaptive_recipe",
+            "endpoint_failure": "endpoint_failure",
+            "endpoint_success": "endpoint_success",
             "server_hello_hmac_ok": "server_hello_hmac_ok",
+            "server_hello_hmac_mismatch": "server_hello_hmac_mismatch",
             "server_hello_hmac_timeout": "server_hello_hmac_timeout",
             "server_hello_timeout_close": "server_hello_timeout_close",
             "close_ignored_already_closed": "close_ignored_already_closed",
             "connection_close_ignored_already_notified": "connection_close_ignored_already_notified",
             "reconnect_backoff_suppressed": "reconnect_backoff_suppressed",
+            "admission_disabled": "admission_disabled",
+            "admission_grant": "admission_grant",
+            "admission_grant_queued": "admission_grant_queued",
+            "admission_dequeue": "admission_dequeue",
+            "admission_dequeue_global": "admission_dequeue_global",
+            "admission_release": "admission_release",
+            "admission_release_ignored": "admission_release_ignored",
+            "admission_timer_fire": "admission_timer_fire",
             "admission_timer_ignored": "admission_timer_ignored",
+            "admission_host_resolve_timer_fire": "admission_host_resolve_timer_fire",
+            "endpoint_backoff_timer_fire": "endpoint_backoff_timer_fire",
+            "dns_coalesce_timer_fire": "dns_coalesce_timer_fire",
+            "tcp_connect_gate_timer_fire": "tcp_connect_gate_timer_fire",
+            "tcp_connect_gate_grant": "tcp_connect_gate_grant",
+            "tcp_connect_gate_release": "tcp_connect_gate_release",
             "TLS server hello hmac wait": "server_hello_hmac_wait",
             "admission_queue": "admission_queue",
+            "admission_queue_wait": "admission_queue_wait",
             "admission_tcp_failure_cooldown": "admission_tcp_failure_cooldown",
+            "admission_freeze_cooldown": "admission_freeze_cooldown",
+            "admission_failure_cooldown": "admission_failure_cooldown",
             "admission_freeze_detected": "admission_freeze_detected",
+            "admission_freeze_observed": "admission_freeze_observed",
             "admission_hold_after_client_hello_failure": "admission_hold_after_client_hello_failure",
+            "profile_rotate": "profile_rotate",
             "on_connected": "on_connected",
             "first_tls_app_sent": "first_tls_app_sent",
             "tls_frame_complete": "tls_frame_complete",
             "first_tls_app_recv": "first_tls_app_recv",
+            "mtproxy_tls_appdata_no_response_timeout": "post_handshake_no_appdata",
+            "post_handshake_no_appdata": "post_handshake_no_appdata",
             "dropped_early_after_appdata": "dropped_early_after_appdata",
             "dropped_after_appdata": "dropped_after_appdata",
             "first_mtproxy_packet_sent": "first_mtproxy_packet_sent",
@@ -264,7 +304,7 @@ class Attempt:
             "TLS response record type mismatch": "tls_response_record_type_mismatch",
         }
         for needle, event in event_map.items():
-            if needle in text:
+            if event_marker_matches(text, needle):
                 self.events[event] += 1
                 self.event_times.setdefault(event, log_time_seconds(text))
 
@@ -274,20 +314,28 @@ class Attempt:
             return "connected_without_socket_connected_marker"
         if has("host_resolve_failed"):
             return "host_resolve_failed"
+        if has("tcp_connect_gate") and not has("socket_connect_start"):
+            return "waiting_tcp_connect_gate"
+        if has("admission_queue") and not has("socket_connect_start"):
+            return "waiting_proxy_admission"
         if not has("socket_connected"):
             return "tcp_not_connected"
+        if has("tcp_connected_no_pong"):
+            return "tcp_connected_no_pong"
         if not has("client_hello_sent"):
-            return "connected_but_client_hello_not_fully_sent"
+            return "tcp_connected_no_pong"
         if not has("server_hello_hmac_ok"):
-            if has("server_hello_hmac_timeout") or has("server_hello_hmac_wait"):
+            if has("server_hello_hmac_mismatch") or has("server_hello_hmac_timeout") or has("server_hello_hmac_wait"):
                 return "server_hello_hmac_mismatch"
-            if has("server_hello_timeout_close") or has("admission_freeze_detected"):
+            if has("client_hello_sent_no_server_hello") or has("server_hello_timeout_close") or has("admission_freeze_detected"):
                 return "client_hello_sent_no_server_hello"
             if has("recv_eof"):
-                return "peer_closed_after_client_hello"
+                return "client_hello_sent_no_server_hello"
             return "client_hello_sent_no_server_hello"
         if not has("on_connected"):
-            return "hmac_ok_but_on_connected_not_reached"
+            return "post_handshake_no_appdata"
+        if has("post_handshake_no_appdata"):
+            return "post_handshake_no_appdata"
         if has("first_tls_app_sent") and not has("first_tls_app_recv"):
             return "post_handshake_no_appdata"
         if has("dropped_early_after_appdata"):
@@ -350,9 +398,9 @@ def log_time_label(text: str) -> str:
 
 
 def endpoint_from_admission_key(proxy_key: str) -> str:
-    match = re.match(r"^(.+):([0-9]+):.+$", proxy_key)
-    if match:
-        return f"{match.group(1)}:{match.group(2)}"
+    prefix, separator, tail = proxy_key.rpartition(":")
+    if separator and prefix and not tail.isdigit():
+        return prefix
     return proxy_key
 
 
@@ -540,8 +588,15 @@ def scheduler_endpoint_stats(lines: list[str]) -> defaultdict[str, Counter[str]]
         if result:
             stats[f"finish_{result.group(1)}"] += 1
 
-        for phase in SCHEDULER_PHASE_RE.findall(text):
-            stats[f"phase_{phase}"] += 1
+        finish_phase = SCHEDULER_PHASE_RE.search(text) if event == "finish" else None
+        if finish_phase:
+            stats[f"finish_phase_{finish_phase.group(1)}"] += 1
+        for diagnostic in SCHEDULER_DIAGNOSTIC_RE.findall(text):
+            stats[f"diagnostic_{diagnostic}"] += 1
+        if not finish_phase:
+            state_phase = SCHEDULER_PHASE_RE.search(text)
+            if state_phase:
+                stats[f"diagnostic_{state_phase.group(1)}"] += 1
 
     return by_endpoint
 
@@ -886,6 +941,7 @@ def print_layer_recommendations(attempts: list[Attempt], all_lines: list[str]) -
         "  "
         f"faketls_data_path post_handshake_no_appdata={faketls_verdicts['post_handshake_no_appdata']} "
         f"dropped_early_after_appdata={faketls_verdicts['dropped_early_after_appdata']} "
+        f"dropped_after_appdata={faketls_verdicts['dropped_after_appdata']} "
         f"tls_frames_completed={tls_frames_completed} "
         "action=inspect_record_sizing_ipt_lifecycle"
     )
@@ -1071,7 +1127,6 @@ def print_faketls_failure_timeline(attempts: list[Attempt]) -> None:
             "client_hello_sent_no_server_hello",
             "server_hello_hmac_mismatch",
             "post_handshake_no_appdata",
-            "hmac_ok_but_on_connected_not_reached",
         }
     ]
     if not interesting:
@@ -1350,7 +1405,9 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
             event
             for stats in scheduler_stats.values()
             for event in stats
-            if event != "total_events" and not event.startswith("phase_")
+            if event != "total_events"
+            and not event.startswith("finish_phase_")
+            and not event.startswith("diagnostic_")
         }
         | {
             "enqueue",
@@ -1368,12 +1425,20 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
             "live_failure_dedup",
         }
     )
-    scheduler_phase_columns = sorted(
+    scheduler_finish_phase_columns = sorted(
         {
             event
             for stats in scheduler_stats.values()
             for event in stats
-            if event.startswith("phase_")
+            if event.startswith("finish_phase_")
+        }
+    )
+    scheduler_diagnostic_columns = sorted(
+        {
+            event
+            for stats in scheduler_stats.values()
+            for event in stats
+            if event.startswith("diagnostic_")
         }
     )
     with scheduler_path.open("w", encoding="utf-8", newline="") as handle:
@@ -1381,7 +1446,8 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
             "endpoint",
             "total_events",
             *scheduler_event_columns,
-            *scheduler_phase_columns,
+            *scheduler_finish_phase_columns,
+            *scheduler_diagnostic_columns,
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -1395,7 +1461,9 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
             }
             for column in scheduler_event_columns:
                 row[column] = stats[column]
-            for column in scheduler_phase_columns:
+            for column in scheduler_finish_phase_columns:
+                row[column] = stats[column]
+            for column in scheduler_diagnostic_columns:
                 row[column] = stats[column]
             writer.writerow(row)
 
@@ -1460,7 +1528,9 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- tcp_not_connected: TCP/connect/IP/proxy availability layer.")
     print("- host_resolve_failed: proxy hostname did not resolve; compare DNS/VPN and sslip.io fast-path before blaming JA4.")
     print("- endpoint_cooldown: client delayed the next connect for this endpoint after a recent phase-specific failure.")
+    print("- waiting_proxy_admission: this socket is queued behind the MTProxy connection scheduler; TCP has not started yet.")
     print("- tcp_connect_gate: client delayed a duplicate active TCP connect attempt for the same MTProxy endpoint.")
+    print("- waiting_tcp_connect_gate: this socket never started TCP yet; it is waiting behind another active TCP connect.")
     print("- dns_coalesce_wait: client delayed a duplicate cold DNS resolve for the same proxy host:port.")
     print("- dns_cache_hit/dns_cache_store: client used or updated the last-good IP for a domain proxy.")
     print("- phase_adaptive_recipe: client changed the next FakeTLS startup recipe after a phase-specific failure.")

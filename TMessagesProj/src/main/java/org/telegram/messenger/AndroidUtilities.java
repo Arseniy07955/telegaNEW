@@ -4811,6 +4811,7 @@ public class AndroidUtilities {
 
             SharedConfig.currentProxy = SharedConfig.addProxy(info);
 
+            ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);
             ConnectionsManager.setProxySettings(true, address, p, user, password, secret);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
             if (activity instanceof LaunchActivity) {

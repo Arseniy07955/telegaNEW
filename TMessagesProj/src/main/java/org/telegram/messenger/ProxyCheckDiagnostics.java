@@ -119,6 +119,7 @@ public class ProxyCheckDiagnostics {
             case FIRST_TLS_APP_RECV:
             case FIRST_MTPROXY_PACKET_SENT:
             case FIRST_MTPROXY_PACKET_RECV:
+            case WAITING_TCP:
                 return true;
             default:
                 return false;
@@ -142,6 +143,10 @@ public class ProxyCheckDiagnostics {
                 && proxyInfo.lastCheckDiagnosticTime != 0
                 && android.os.SystemClock.elapsedRealtime() - proxyInfo.lastCheckDiagnosticTime < LIVE_PHASE_STALE_MS
                 && isLivePhase(proxyInfo.lastCheckDiagnostic);
+    }
+
+    public static boolean hasFreshUnresolvedLivePhase(SharedConfig.ProxyInfo proxyInfo) {
+        return hasFreshLivePhase(proxyInfo) && !isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic);
     }
 
     public static boolean hasFreshEndpointCooldown(SharedConfig.ProxyInfo proxyInfo) {
@@ -185,7 +190,6 @@ public class ProxyCheckDiagnostics {
 
     public static boolean isProxyUsableSuccessPhase(String diagnostic) {
         switch (normalize(diagnostic)) {
-            case SERVER_HELLO_HMAC_OK:
             case FIRST_TLS_APP_RECV:
             case FIRST_MTPROXY_PACKET_RECV:
                 return true;
@@ -241,14 +245,14 @@ public class ProxyCheckDiagnostics {
             if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
+            if (hasFreshLivePhase(proxyInfo)) {
+                return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+            }
             if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
                 if (proxyInfo.ping != 0) {
                     return LocaleController.getString(R.string.Connected) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
                 }
                 return LocaleController.getString(R.string.Connected);
-            }
-            if (hasFreshLivePhase(proxyInfo)) {
-                return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
             if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
                 return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
@@ -261,17 +265,17 @@ public class ProxyCheckDiagnostics {
         if (proxyInfo.checking) {
             return LocaleController.getString(R.string.ProxyStatusCheckingConnection);
         }
+        if (hasFreshFailure(proxyInfo)) {
+            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
+        if (hasFreshLivePhase(proxyInfo) || hasFreshEndpointCooldown(proxyInfo)) {
+            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
         if (proxyInfo.available && ProxyCheckScheduler.isFresh(proxyInfo)) {
             if (proxyInfo.ping != 0) {
                 return LocaleController.getString(R.string.Available) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
             }
             return LocaleController.getString(R.string.Available);
-        }
-        if (hasFreshFailure(proxyInfo)) {
-            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
-        }
-        if (hasFreshEndpointCooldown(proxyInfo)) {
-            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
         return LocaleController.getString(R.string.ProxyStatusUnchecked);
     }
@@ -286,14 +290,14 @@ public class ProxyCheckDiagnostics {
         if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
+        if (hasFreshLivePhase(proxyInfo)) {
+            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
         if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
             if (proxyInfo.ping != 0) {
                 return LocaleController.getString(R.string.ProxyWindowStatusReady) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
             }
             return LocaleController.getString(R.string.ProxyWindowStatusReady);
-        }
-        if (hasFreshLivePhase(proxyInfo)) {
-            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
         if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
             return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
@@ -389,6 +393,9 @@ public class ProxyCheckDiagnostics {
             if (hasFreshFailure(proxyInfo)) {
                 return Theme.key_text_RedRegular;
             }
+            if (hasFreshLivePhase(proxyInfo)) {
+                return isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic) ? Theme.key_windowBackgroundWhiteBlueText6 : Theme.key_windowBackgroundWhiteGrayText2;
+            }
             if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
                 return Theme.key_windowBackgroundWhiteBlueText6;
             }
@@ -400,10 +407,16 @@ public class ProxyCheckDiagnostics {
         if (proxyInfo.checking) {
             return Theme.key_windowBackgroundWhiteGrayText2;
         }
+        if (hasFreshFailure(proxyInfo)) {
+            return Theme.key_text_RedRegular;
+        }
+        if (hasFreshLivePhase(proxyInfo) || hasFreshEndpointCooldown(proxyInfo)) {
+            return isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic) ? Theme.key_windowBackgroundWhiteGreenText : Theme.key_windowBackgroundWhiteGrayText2;
+        }
         if (proxyInfo.available && ProxyCheckScheduler.isFresh(proxyInfo)) {
             return Theme.key_windowBackgroundWhiteGreenText;
         }
-        return hasFreshFailure(proxyInfo) ? Theme.key_text_RedRegular : Theme.key_windowBackgroundWhiteGrayText2;
+        return Theme.key_windowBackgroundWhiteGrayText2;
     }
 
     public static String diagnosticText(String diagnostic) {

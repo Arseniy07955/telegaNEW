@@ -883,13 +883,15 @@ public class ConnectionsManager extends BaseController {
         });
     }
 
-    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic) {
+    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey) {
         AndroidUtilities.runOnUIThread(() -> {
             String normalizedDiagnostic = ProxyCheckDiagnostics.normalize(diagnostic);
             SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
             boolean concreteDiagnostic = ProxyCheckDiagnostics.isLivePhase(normalizedDiagnostic)
                     || (ProxyCheckDiagnostics.isFailure(normalizedDiagnostic) && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedDiagnostic));
-            if (currentProxy != null && concreteDiagnostic) {
+            boolean selectedAccountStage = currentAccount == UserConfig.selectedAccount;
+            boolean currentProxyMatchesStage = ProxyCheckScheduler.matchesEndpointStageKey(currentProxy, endpointKey);
+            if (selectedAccountStage && currentProxy != null && concreteDiagnostic && currentProxyMatchesStage) {
                 if (ProxyCheckDiagnostics.isProxyUsableSuccessPhase(normalizedDiagnostic)) {
                     ProxyCheckScheduler.markConnectionUsable(currentProxy, normalizedDiagnostic);
                 } else if (!ProxyCheckDiagnostics.shouldKeepFreshFailure(currentProxy, normalizedDiagnostic)) {
@@ -901,12 +903,14 @@ public class ConnectionsManager extends BaseController {
                 if (ProxyCheckDiagnostics.shouldAccelerateProxyRotation(normalizedDiagnostic)) {
                     ProxyCheckScheduler.markEndpointFailure(currentProxy, normalizedDiagnostic);
                 }
+            } else if (selectedAccountStage && currentProxy != null && concreteDiagnostic && BuildVars.LOGS_ENABLED) {
+                FileLog.d("proxy_connection_stage_ignored account=" + currentAccount + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " current=" + ProxyCheckScheduler.endpointStageKeyForLiveStage(currentProxy));
             }
             if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("proxy_connection_stage account=" + currentAccount + " phase=" + normalizedDiagnostic);
+                FileLog.d("proxy_connection_stage account=" + currentAccount + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey);
             }
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic);
-            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic);
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey);
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey);
         });
     }
 
