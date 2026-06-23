@@ -187,6 +187,52 @@ public final class ProxyRuntimeStateStore {
         proxyInfo.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();
     }
 
+    public static void copyTransientState(SharedConfig.ProxyInfo target, SharedConfig.ProxyInfo source) {
+        if (target == null || source == null) {
+            return;
+        }
+        setChecking(target, source.checking);
+        setProxyCheckPingId(target, source.proxyCheckPingId);
+    }
+
+    public static void setChecking(SharedConfig.ProxyInfo proxyInfo, boolean checking) {
+        if (proxyInfo == null) {
+            return;
+        }
+        proxyInfo.checking = checking;
+        if (checking) {
+            markCheckingIfNoFreshConcretePhase(proxyInfo);
+        }
+    }
+
+    public static void setProxyCheckPingId(SharedConfig.ProxyInfo proxyInfo, long pingId) {
+        if (proxyInfo == null) {
+            return;
+        }
+        proxyInfo.proxyCheckPingId = pingId;
+    }
+
+    public static void clearTransientState(SharedConfig.ProxyInfo proxyInfo) {
+        setChecking(proxyInfo, false);
+        setProxyCheckPingId(proxyInfo, 0);
+    }
+
+    public static void applyMeasuredProxyCheckResult(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
+        if (proxyInfo == null) {
+            return;
+        }
+        proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
+        mirrorVisiblePhase(proxyInfo, diagnostic, proxyInfo.availableCheckTime);
+        clearTransientState(proxyInfo);
+        if (time == -1) {
+            proxyInfo.available = false;
+            proxyInfo.ping = 0;
+        } else {
+            proxyInfo.ping = time;
+            proxyInfo.available = true;
+        }
+    }
+
     public static String displayDiagnosticForProxyCheck(SharedConfig.ProxyInfo proxyInfo, long time, String normalizedDiagnostic) {
         if (time != -1 || !ProxyCheckDiagnostics.TCP_NOT_CONNECTED.equals(normalizedDiagnostic)) {
             return normalizedDiagnostic;
@@ -422,14 +468,6 @@ public final class ProxyRuntimeStateStore {
             return exactState;
         }
         return networkState.nextCheckTime > exactState.nextCheckTime ? networkState : exactState;
-    }
-
-    private static void clearTransientState(SharedConfig.ProxyInfo proxyInfo) {
-        if (proxyInfo == null) {
-            return;
-        }
-        proxyInfo.checking = false;
-        proxyInfo.proxyCheckPingId = 0;
     }
 
     private static void logControl(String message) {

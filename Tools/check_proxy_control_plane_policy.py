@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import sys
 
 from mtproxy_phase_contract import ENDPOINT_EXACT, ENDPOINT_NETWORK, endpoint_key_phases, rotation_phases
@@ -97,6 +98,11 @@ def main() -> int:
     require(store, "isSwitchableCandidate", "rotation candidate filtering must be delegated to the store", failures)
     require(store, "appliedDiagnosticForProxyCheck", "proxy-check failures must preserve fresh concrete visible phases", failures)
     require(store, "markConnectionStarting", "explicit connect_start must be centralized in runtime store", failures)
+    require(store, "applyMeasuredProxyCheckResult", "ProxyRuntimeStateStore must own measured proxy-check result mirroring", failures)
+    require(store, "copyTransientState", "ProxyRuntimeStateStore must own transient checking/native ping mirroring", failures)
+    require(store, "setChecking", "ProxyRuntimeStateStore must own ProxyInfo.checking writes", failures)
+    require(store, "setProxyCheckPingId", "ProxyRuntimeStateStore must own ProxyInfo.proxyCheckPingId writes", failures)
+    require(store, "clearTransientState", "ProxyRuntimeStateStore must own transient runtime cleanup", failures)
 
     require(scheduler, "ProxyRuntimeStateStore.isFresh(proxyInfo)", "ProxyCheckScheduler.isFresh must delegate to ProxyRuntimeStateStore", failures)
     require(scheduler, "ProxyRuntimeStateStore.isEndpointBackedOff(proxyInfo)", "ProxyCheckScheduler.isEndpointBackedOff must delegate to ProxyRuntimeStateStore", failures)
@@ -104,6 +110,13 @@ def main() -> int:
     require(scheduler, "ProxyRuntimeStateStore.markEndpointFailure(proxyInfo, diagnostic)", "ProxyCheckScheduler.markEndpointFailure must delegate live failures to ProxyRuntimeStateStore", failures)
     require_not(scheduler, "HashMap<String, EndpointState> endpointStates", "ProxyCheckScheduler must not own endpoint backoff state after control-plane split", failures)
     require_not(scheduler, "private static String endpointStateKeyForDiagnostic", "ProxyCheckScheduler must not own phase key-scope policy", failures)
+    require_not(scheduler, ".checking =", "ProxyCheckScheduler must not write ProxyInfo.checking directly", failures)
+    require_not(scheduler, ".proxyCheckPingId =", "ProxyCheckScheduler must not write ProxyInfo.proxyCheckPingId directly", failures)
+    require_not(scheduler, ".available =", "ProxyCheckScheduler must not write ProxyInfo.available directly", failures)
+    require_not(scheduler, ".availableCheckTime =", "ProxyCheckScheduler must not write ProxyInfo.availableCheckTime directly", failures)
+    require_not(scheduler, ".lastCheckDiagnostic =", "ProxyCheckScheduler must not write ProxyInfo.lastCheckDiagnostic directly", failures)
+    require_not(scheduler, ".lastCheckDiagnosticTime =", "ProxyCheckScheduler must not write ProxyInfo.lastCheckDiagnosticTime directly", failures)
+    require_not(scheduler, ".ping =", "ProxyCheckScheduler must not write ProxyInfo.ping directly", failures)
 
     require(connections, "ProxyConnectionEvent.nativeStage", "ConnectionsManager must build a normalized native-stage event", failures)
     require(connections, "ProxyRuntimeStateStore.onNativeStage", "ConnectionsManager must bridge native stages into ProxyRuntimeStateStore", failures)
@@ -120,6 +133,20 @@ def main() -> int:
     require(diagnostics, "ProxyPhasePolicy.isLivePhase", "ProxyCheckDiagnostics must delegate live classification to ProxyPhasePolicy", failures)
     require(diagnostics, "ProxyPhasePolicy.shouldAccelerateProxyRotation", "ProxyCheckDiagnostics must delegate rotation classification to ProxyPhasePolicy", failures)
     require(diagnostics, "ProxyPhasePolicy.isProxyUsableSuccessPhase", "ProxyCheckDiagnostics must delegate usable-success classification to ProxyPhasePolicy", failures)
+
+    runtime_write_pattern = re.compile(
+        r"\.(?:lastCheckDiagnostic|lastCheckDiagnosticTime|available|availableCheckTime|checking|proxyCheckPingId|ping)\s*="
+    )
+    allowed_runtime_writers = {STORE.resolve(), (MESSENGER / "SharedConfig.java").resolve()}
+    unexpected_writers: list[str] = []
+    for path in JAVA_ROOT.rglob("*.java"):
+        if path.resolve() in allowed_runtime_writers:
+            continue
+        source = read(path)
+        if runtime_write_pattern.search(source):
+            unexpected_writers.append(str(path.relative_to(ROOT)))
+    if unexpected_writers:
+        failures.append("Runtime ProxyInfo fields must be written only by ProxyRuntimeStateStore compatibility mirror: " + ", ".join(unexpected_writers[:20]))
 
     if failures:
         print("Proxy control-plane policy guard failed:")

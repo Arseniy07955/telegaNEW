@@ -101,7 +101,7 @@ public class ProxyCheckScheduler {
                 request.cancelled = true;
                 SharedConfig.ProxyInfo proxyInfo = request.proxyInfo;
                 ConnectionsManager.getInstance(request.currentAccount).cancelProxyCheck(request.nativePingId);
-                clearTransientState(proxyInfo);
+                ProxyRuntimeStateStore.clearTransientState(proxyInfo);
                 activeRequest = null;
                 log("cancel_owner active endpoint=" + endpoint(proxyInfo));
                 AndroidUtilities.runOnUIThread(startNextRunnable, PROXY_CHECK_SPACING_MS);
@@ -194,8 +194,7 @@ public class ProxyCheckScheduler {
         }
         request.force = request.force || force;
         if (request.addListener(proxyInfo, owner, callback)) {
-            proxyInfo.checking = request.proxyInfo.checking;
-            proxyInfo.proxyCheckPingId = request.proxyInfo.proxyCheckPingId;
+            ProxyRuntimeStateStore.copyTransientState(proxyInfo, request.proxyInfo);
             log("attach_pending endpoint=" + endpoint(proxyInfo) + " listeners=" + request.activeListenerCount() + " force=" + request.force);
         }
         return true;
@@ -242,10 +241,10 @@ public class ProxyCheckScheduler {
         SharedConfig.ProxyInfo proxyInfo = request.proxyInfo;
         request.setChecking(true);
         log("start endpoint=" + endpoint(proxyInfo) + " queued=" + queue.size());
-        proxyInfo.proxyCheckPingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
-        request.nativePingId = proxyInfo.proxyCheckPingId;
-        request.setProxyCheckPingId(proxyInfo.proxyCheckPingId);
-        if (proxyInfo.proxyCheckPingId == 0) {
+        long nativePingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
+        request.nativePingId = nativePingId;
+        request.setProxyCheckPingId(nativePingId);
+        if (nativePingId == 0) {
             log("start_failed endpoint=" + endpoint(proxyInfo) + " reason=native_refused");
             finishRequest(request, -1, ProxyCheckDiagnostics.START_FAILED);
         }
@@ -269,7 +268,7 @@ public class ProxyCheckScheduler {
                 continue;
             }
             String appliedDiagnostic = ProxyRuntimeStateStore.appliedDiagnosticForProxyCheck(request.currentAccount, listener.proxyInfo, time, displayDiagnostic);
-            applyMeasuredResult(listener.proxyInfo, appliedTime, appliedDiagnostic);
+            ProxyRuntimeStateStore.applyMeasuredProxyCheckResult(listener.proxyInfo, appliedTime, appliedDiagnostic);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, listener.proxyInfo);
             if (listener.callback != null) {
                 listener.callback.onProxyChecked(listener.proxyInfo, callbackTime, displayDiagnostic);
@@ -310,32 +309,9 @@ public class ProxyCheckScheduler {
 
     private static void clearDetachedCheckState(SharedConfig.ProxyInfo proxyInfo, String reason) {
         if (proxyInfo != null && proxyInfo.checking && !hasPending(proxyInfo)) {
-            clearTransientState(proxyInfo);
+            ProxyRuntimeStateStore.clearTransientState(proxyInfo);
             log("clear_detached endpoint=" + endpoint(proxyInfo) + " reason=" + reason);
         }
-    }
-
-    private static void clearTransientState(SharedConfig.ProxyInfo proxyInfo) {
-        if (proxyInfo == null) {
-            return;
-        }
-        proxyInfo.checking = false;
-        proxyInfo.proxyCheckPingId = 0;
-    }
-
-    private static void applyMeasuredResult(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
-        proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
-        proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.normalize(diagnostic);
-        proxyInfo.lastCheckDiagnosticTime = proxyInfo.availableCheckTime;
-        clearTransientState(proxyInfo);
-        if (time == -1) {
-            proxyInfo.available = false;
-            proxyInfo.ping = 0;
-        } else {
-            proxyInfo.ping = time;
-            proxyInfo.available = true;
-        }
-        proxyInfo.proxyCheckPingId = 0;
     }
 
     private static void log(String message) {
@@ -398,8 +374,7 @@ public class ProxyCheckScheduler {
             for (int i = 0, count = listeners.size(); i < count; i++) {
                 Listener listener = listeners.get(i);
                 if (listener.cancelled && !hasActiveListenerForProxyInfo(listener.proxyInfo)) {
-                    listener.proxyInfo.checking = false;
-                    listener.proxyInfo.proxyCheckPingId = 0;
+                    ProxyRuntimeStateStore.clearTransientState(listener.proxyInfo);
                 }
             }
         }
@@ -439,27 +414,21 @@ public class ProxyCheckScheduler {
         }
 
         void setChecking(boolean checking) {
-            proxyInfo.checking = checking;
-            if (checking) {
-                ProxyRuntimeStateStore.markCheckingIfNoFreshConcretePhase(proxyInfo);
-            }
+            ProxyRuntimeStateStore.setChecking(proxyInfo, checking);
             for (int i = 0, count = listeners.size(); i < count; i++) {
                 Listener listener = listeners.get(i);
                 if (!listener.cancelled) {
-                    listener.proxyInfo.checking = checking;
-                    if (checking) {
-                        ProxyRuntimeStateStore.markCheckingIfNoFreshConcretePhase(listener.proxyInfo);
-                    }
+                    ProxyRuntimeStateStore.setChecking(listener.proxyInfo, checking);
                 }
             }
         }
 
         void setProxyCheckPingId(long pingId) {
-            proxyInfo.proxyCheckPingId = pingId;
+            ProxyRuntimeStateStore.setProxyCheckPingId(proxyInfo, pingId);
             for (int i = 0, count = listeners.size(); i < count; i++) {
                 Listener listener = listeners.get(i);
                 if (!listener.cancelled) {
-                    listener.proxyInfo.proxyCheckPingId = pingId;
+                    ProxyRuntimeStateStore.setProxyCheckPingId(listener.proxyInfo, pingId);
                 }
             }
         }

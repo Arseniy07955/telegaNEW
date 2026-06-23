@@ -192,8 +192,9 @@ def main() -> None:
         "concrete success phases from native must clear stale Java endpoint backoff and fresh terminal failures",
     )
     require(
-        "ProxyRuntimeStateStore.markCheckingIfNoFreshConcretePhase(proxyInfo);" in text("scheduler")
-        and "ProxyRuntimeStateStore.markCheckingIfNoFreshConcretePhase(listener.proxyInfo);" in text("scheduler")
+        "ProxyRuntimeStateStore.setChecking(proxyInfo, checking);" in text("scheduler")
+        and "ProxyRuntimeStateStore.setChecking(listener.proxyInfo, checking);" in text("scheduler")
+        and "markCheckingIfNoFreshConcretePhase(proxyInfo);" in store_text
         and "hasFreshConcreteProxyPhase(SharedConfig.ProxyInfo proxyInfo)" in store_text,
         "background proxy-check must not overwrite a fresh live/failure phase of the selected proxy with generic checking",
     )
