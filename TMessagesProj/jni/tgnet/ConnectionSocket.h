@@ -13,7 +13,8 @@
 #include <netinet/in.h>
 #include <memory>
 #include <string>
-#include "WssTransport.h"
+#include "ConnectionSocketStateMachine.h"
+#include "MtProxyOptions.h"
 
 class NativeByteBuffer;
 class ConnectionsManager;
@@ -35,7 +36,7 @@ public:
     bool isDisconnected();
     bool isCurrentMtProxyConnection();
     void dropConnection();
-    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, int32_t mtProxyStartupCoverMode);
+    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
     void setMtProxyHandshakePriority(int32_t priority);
     const char *getProxyCheckDiagnostic();
@@ -60,141 +61,15 @@ protected:
     std::string overrideProxyAddress = "";
     std::string overrideProxySecret = "";
     uint16_t overrideProxyPort = 1080;
-    int32_t overrideProxyTlsProfile = 0;
-    int32_t overrideProxyClientHelloFragmentation = 0;
-    int32_t overrideProxyConnectionPatternMode = 0;
-    int32_t overrideProxyRecordSizingMode = 0;
-    int32_t overrideProxyTimingMode = 0;
-    int32_t overrideProxyStartupCoverMode = 0;
+    MtProxyOptions overrideMtProxyOptions;
 
 private:
-    enum class TransportState : uint8_t {
-        Idle,
-        Prepared,
-        WaitingGate,
-        TcpConnecting,
-        EpollRegistered,
-        FaketlsHandshake,
-        MtprotoReady,
-        Closing,
-    };
+    using TransportState = ConnectionSocketStateMachine::LifecycleState;
+    using TransportMode = ConnectionSocketStateMachine::TransportMode;
+    using TransportSocketPolicy = ConnectionSocketStateMachine::TransportSocketPolicy;
+    using TransportActionRule = ConnectionSocketStateMachine::ActionRule;
 
-    enum class TransportSocketPolicy : uint8_t {
-        None,
-        NoSocket,
-        LiveEpoll,
-        OpenWithoutEpoll,
-    };
-
-    struct TransportActionRule {
-        const char *action;
-        TransportState state;
-        TransportSocketPolicy socketPolicy;
-        int16_t expectedProxyAuthState;
-        int16_t expectedTlsState;
-        bool requireWssTransport;
-        bool requireWssReady;
-    };
-
-    ByteStream *outgoingByteStream = nullptr;
-    struct epoll_event eventMask;
-    struct sockaddr_in socketAddress;
-    struct sockaddr_in6 socketAddress6;
-    int socketFd = -1;
-    bool epollRegistered = false;
-    TransportState currentTransportState = TransportState::Idle;
-    time_t timeout = 12;
-    bool onConnectedSent = false;
-    bool socketCloseNotified = false;
-    bool proxyCloseDiagnosticSuppressed = false;
-    int64_t lastEventTime = 0;
-    EventObject *eventObject;
-    int32_t currentNetworkType;
-    bool isIpv6;
-    std::string currentAddress;
-    uint16_t currentPort;
-    std::string currentSocksUsername;
-    std::string currentSocksPassword;
-
-    std::string waitingForHostResolve;
-    bool adjustWriteOpAfterResolve;
-
-    std::string currentSecret;
-    std::string currentSecretDomain;
-    const char *currentSecretKind = "none";
-    bool currentSecretIsFakeTls = false;
-    int32_t currentProxyTlsProfile = 0;
-    int32_t currentEffectiveProxyTlsProfile = 0;
-    int32_t currentClientHelloFragmentation = 0;
-    int32_t currentConnectionPatternMode = 0;
-    int32_t currentRecordSizingMode = 0;
-    int32_t currentTimingMode = 0;
-    int32_t currentStartupCoverMode = 0;
-    int64_t startupCoverStartTime = 0;
-    uint32_t startupCoverFrameCount = 0;
-    bool startupCoverStartedLogged = false;
-    bool startupCoverEndedLogged = false;
-    std::string currentProxyTlsProfileKey;
-    std::string currentMtProxyEndpointKey;
-    std::string currentMtProxyNetworkEndpointKey;
-    std::string currentMtProxyDnsCacheKey;
-    std::string proxyCheckDiagnostic = "tcp_not_connected";
-
-    bool tlsHashMismatch = false;
-    bool serverHelloHmacMismatchObserved = false;
-    int64_t serverHelloHmacMismatchTime = 0;
-    bool tlsBufferSized = true;
-    uint8_t tlsBufferRecordType = 0;
-    NativeByteBuffer *tlsBuffer = nullptr;
-    ByteArray *tempBuffer = nullptr;
-    ByteArray *pendingClientHello = nullptr;
-    ByteArray *pendingTlsFrame = nullptr;
-    size_t bytesRead = 0;
-    uint32_t pendingClientHelloSize = 0;
-    uint32_t pendingClientHelloOffset = 0;
-    uint32_t pendingClientHelloFragmentTarget = 0;
-    uint32_t pendingClientHelloFragmentIndex = 0;
-    uint32_t pendingClientHelloFragmentCount = 0;
-    int64_t pendingClientHelloNextWriteTime = 0;
-    uint32_t pendingTlsFrameSize = 0;
-    uint32_t pendingTlsFrameOffset = 0;
-    uint32_t pendingTlsPayloadSize = 0;
-    int64_t nextTlsFrameWriteTime = 0;
-    int8_t tlsState = 0;
-    bool mtproxyFirstTlsFrameSentLogged = false;
-    bool mtproxyFirstTlsDataReceivedLogged = false;
-    bool mtproxyFirstPlainDataSentLogged = false;
-    bool mtproxyFirstPlainDataReceivedLogged = false;
-    int64_t mtproxyFirstTlsFrameSentTime = 0;
-    int64_t mtproxyFirstPlainDataSentTime = 0;
-    int64_t mtproxyFirstDataReceivedTime = 0;
-    uint32_t mtproxyTlsFrameCompletedCount = 0;
-    bool currentTransportWss = false;
-    int32_t currentDatacenterId = 0;
-    bool currentMediaConnection = false;
-    WssRouteConfig currentWssRoute;
-    std::unique_ptr<WssTransport> currentWssTransport;
-
-    uint8_t proxyAuthState = 0;
-    Timer *proxyHandshakeAdmissionTimer = nullptr;
-    bool proxyHandshakeAdmissionQueued = false;
-    bool proxyHandshakeAdmissionQueuePublished = false;
-    bool proxyHandshakeAdmissionActive = false;
-    bool proxyHandshakeAdmissionReady = false;
-    bool proxyEndpointBackoffReady = false;
-    bool proxyEndpointTcpConnectActive = false;
-    bool proxyEndpointTcpConnectReady = false;
-    bool proxyEndpointTcpConnectGatePublished = false;
-    bool proxyEndpointDnsCoalesceReady = false;
-    bool proxyHandshakeAdmissionIpv6 = false;
-    bool mtproxySocketConnectedLogged = false;
-    uint32_t proxyHandshakeAdmissionGeneration = 0;
-    uint32_t proxyHandshakeAdmissionTimerGeneration = 0;
-    int32_t proxyHandshakeAdmissionPriority = 0;
-    int32_t proxyHandshakeAdmissionTimerMode = 0;
-    int64_t proxyHandshakeAdmissionStartTime = 0;
-    int64_t proxyHandshakeClientHelloSentTime = 0;
-    std::string proxyHandshakeAdmissionKey;
+    ConnectionSocketStateMachine stateMachine;
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
@@ -257,8 +132,6 @@ private:
     void requestPendingHostResolve();
     void cancelProxyHandshakeAdmission();
     void releaseProxyHandshakeAdmission(bool succeeded, const char *reason);
-    std::string mtProxyEndpointStateKeyForPhase(const std::string &phase);
-    void resetMtProxyEndpointStateForKey(const std::string &key, int64_t now, bool resetRecipe);
     bool scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6);
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);

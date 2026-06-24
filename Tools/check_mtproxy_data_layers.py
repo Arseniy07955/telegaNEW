@@ -12,6 +12,7 @@ MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 PROXY_CHECK = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
@@ -36,6 +37,7 @@ def main() -> None:
     manager_h = text(MANAGER_H)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     proxy_check = text(PROXY_CHECK)
 
     require(
@@ -77,26 +79,24 @@ def main() -> None:
         "proxy settings UI must expose selectable timing modes",
     )
     require(
-        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIII)V"' in wrapper
-        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
-        "JNI signatures must carry profile, fragmentation, admission, record sizing, timing, and startup-cover integers",
+        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;)V"' in wrapper
+        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;Lorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
+        "JNI signatures must carry profile, fragmentation, admission, record sizing, timing, and startup-cover via MtProxyOptions",
     )
     require(
-        "int32_t proxyRecordSizingMode = 0" in manager_h
-        and "int32_t proxyTimingMode = 0" in manager_h
-        and "recordSizingChanged" in manager_cpp
-        and "timingModeChanged" in manager_cpp,
-        "native ConnectionsManager must store data-path modes and reconnect when they change",
+        "MtProxyOptions proxyMtProxyOptions" in manager_h
+        and "optionsChanged" in manager_cpp
+        and "proxyMtProxyOptions = normalizedOptions" in manager_cpp,
+        "native ConnectionsManager must store data-path modes in MtProxyOptions and reconnect when they change",
     )
     require(
-        "int32_t mtProxyRecordSizingMode" in proxy_check
-        and "int32_t mtProxyTimingMode" in proxy_check,
-        "proxy checks must carry data-path modes for same-path testing",
+        "MtProxyOptions mtProxyOptions" in proxy_check,
+        "proxy checks must carry MtProxyOptions for same-path testing",
     )
     require(
-        "currentRecordSizingMode" in socket_h
-        and "currentTimingMode" in socket_h
-        and "mtproxyTlsFrameCompletedCount" in socket_h
+        "currentRecordSizingMode" in socket_state
+        and "currentTimingMode" in socket_state
+        and "mtproxyTlsFrameCompletedCount" in socket_state
         and "nextMtProxyTlsRecordPayloadSize" in socket_cpp
         and "scheduleMtProxyDataTimingIfNeeded" in socket_cpp,
         "ConnectionSocket must apply record sizing and timing modes in the FakeTLS data path",

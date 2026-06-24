@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <sstream>
 #include "Defines.h"
+#include "MtProxyOptions.h"
 
 #ifdef ANDROID
 #include <jni.h>
@@ -40,12 +41,7 @@ public:
     std::string username;
     std::string password;
     std::string secret;
-    int32_t mtProxyTlsProfile = 0;
-    int32_t mtProxyClientHelloFragmentation = 0;
-    int32_t mtProxyConnectionPatternMode = 0;
-    int32_t mtProxyRecordSizingMode = 0;
-    int32_t mtProxyTimingMode = 0;
-    int32_t mtProxyStartupCoverMode = 0;
+    MtProxyOptions mtProxyOptions;
     int64_t pingId = 0;
     onRequestTimeFunc onRequestTime;
     int32_t instanceNum = 0;

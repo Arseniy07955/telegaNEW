@@ -7,6 +7,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 CHECKS = [
+    "check_connection_socket_state_machine_rewrite.py",
+    "check_mtproxy_options_contract.py",
+    "check_mtproxy_policy_extraction.py",
     "check_mtproxy_faketls_path.py",
     "check_mtproxy_tls_profile_ui.py",
     "check_mtproxy_clienthello_fragmentation.py",

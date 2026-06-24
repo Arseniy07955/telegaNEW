@@ -13,6 +13,7 @@ MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 PROXY_CHECK = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
@@ -37,6 +38,7 @@ def main() -> None:
     manager_h = text(MANAGER_H)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     proxy_check = text(PROXY_CHECK)
 
     require(
@@ -61,30 +63,30 @@ def main() -> None:
     )
     require(
         "mtProxyStartupCoverMode" in connections
-        and re.search(r"native_setProxySettings\(.*mtProxyStartupCoverMode", connections, re.S)
-        and re.search(r"native_checkProxy\(.*mtProxyStartupCoverMode", connections, re.S),
-        "real proxy settings and proxy checks must pass Startup Cover to native",
+        and "MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret)" in connections
+        and "MtProxyOptions.resolve(address, port, secret)" in connections,
+        "real proxy settings and proxy checks must pass Startup Cover through MtProxyOptions",
     )
     require(
-        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIII)V"' in wrapper
-        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
-        "JNI signatures must carry the Startup Cover integer",
+        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;)V"' in wrapper
+        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;Lorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
+        "JNI signatures must carry Startup Cover through MtProxyOptions",
     )
     require(
-        "int32_t proxyStartupCoverMode = 0" in manager_h
-        and "startupCoverChanged" in manager_cpp
-        and "proxyStartupCoverMode = normalizeMtProxyStartupCoverMode" in manager_cpp,
-        "native ConnectionsManager must store Startup Cover and reconnect when it changes",
+        "MtProxyOptions proxyMtProxyOptions" in manager_h
+        and "optionsChanged" in manager_cpp
+        and "normalizeMtProxyOptions(options)" in manager_cpp,
+        "native ConnectionsManager must store Startup Cover in MtProxyOptions and reconnect when it changes",
     )
     require(
-        "int32_t mtProxyStartupCoverMode" in proxy_check,
-        "proxy checks must carry Startup Cover for same-path testing",
+        "MtProxyOptions mtProxyOptions" in proxy_check,
+        "proxy checks must carry MtProxyOptions for same-path testing",
     )
     require(
-        "overrideProxyStartupCoverMode" in socket_h
-        and "currentStartupCoverMode" in socket_h
-        and "startupCoverStartTime" in socket_h
-        and "startupCoverFrameCount" in socket_h,
+        "overrideMtProxyOptions" in socket_h
+        and "currentStartupCoverMode" in socket_state
+        and "startupCoverStartTime" in socket_state
+        and "startupCoverFrameCount" in socket_state,
         "ConnectionSocket must carry Startup Cover state",
     )
     require(

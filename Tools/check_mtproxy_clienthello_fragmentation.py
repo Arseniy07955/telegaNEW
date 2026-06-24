@@ -7,6 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 WRAPPER_CPP = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
@@ -31,6 +32,7 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     manager_cpp = text(MANAGER_CPP)
     manager_h = text(MANAGER_H)
     wrapper_cpp = text(WRAPPER_CPP)
@@ -51,35 +53,35 @@ def main() -> None:
         "Java must resolve a stable ClientHello fragmentation mode from SharedConfig",
     )
     require(
-        re.search(r"native_setProxySettings\(.*mtProxyTlsProfile,\s*mtProxyClientHelloFragmentation", connections_java, re.S),
-        "real proxy settings must pass ClientHello fragmentation mode into native",
+        "MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret)" in connections_java
+        and "clientHelloFragmentation" in (ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/MtProxyOptions.java").read_text(encoding="utf-8", errors="replace"),
+        "real proxy settings must pass ClientHello fragmentation through MtProxyOptions",
     )
     require(
-        re.search(r"native_checkProxy\(.*mtProxyTlsProfile,\s*mtProxyClientHelloFragmentation", connections_java, re.S),
-        "proxy checks must use the same ClientHello fragmentation mode as real connections",
+        "native_checkProxy(currentAccount, address, port, username, password, secret, MtProxyOptions.resolve(address, port, secret), requestTimeDelegate)" in connections_java,
+        "proxy checks must use the same MtProxyOptions as real connections",
     )
     require(
-        "jint mtProxyClientHelloFragmentation" in wrapper_cpp
-        and "Ljava/lang/String;IIIIII)V" in wrapper_cpp
-        and "IIIIIILorg/telegram/tgnet/RequestTimeDelegate;)J" in wrapper_cpp,
-        "JNI signatures must carry the extra ClientHello fragmentation integer",
+        "readMtProxyOptions(JNIEnv *env, jobject options)" in wrapper_cpp
+        and "jclass_MtProxyOptions_clientHelloFragmentation" in wrapper_cpp
+        and "Lorg/telegram/tgnet/MtProxyOptions;" in wrapper_cpp,
+        "JNI signatures must carry ClientHello fragmentation via MtProxyOptions",
     )
     require(
-        "int32_t proxyClientHelloFragmentation" in manager_h
-        and "clientHelloFragmentationChanged" in manager_cpp
-        and "proxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation" in manager_cpp,
-        "ConnectionsManager must store the fragmentation mode and reconnect when it changes",
+        "MtProxyOptions proxyMtProxyOptions" in manager_h
+        and "optionsChanged" in manager_cpp
+        and "normalizeMtProxyOptions(options)" in manager_cpp,
+        "ConnectionsManager must store MTProxy options and reconnect when fragmentation changes",
     )
     require(
-        "mtProxyClientHelloFragmentation" in manager_cpp
-        and "proxyCheckInfo->mtProxyClientHelloFragmentation" in manager_cpp,
-        "proxy-check native state must receive the fragmentation mode",
+        "proxyCheckInfo->mtProxyOptions = normalizeMtProxyOptions(options)" in manager_cpp,
+        "proxy-check native state must receive MtProxyOptions",
     )
     require(
-        "overrideProxyClientHelloFragmentation" in socket_h
-        and "currentClientHelloFragmentation" in socket_h
+        "overrideMtProxyOptions" in socket_h
+        and "currentClientHelloFragmentation" in socket_state
         and "setOverrideProxy" in socket_h,
-        "ConnectionSocket must carry fragmentation mode for normal and override proxy paths",
+        "ConnectionSocket must carry fragmentation mode through MtProxyOptions for normal and override proxy paths",
     )
     require(
         "sendPendingClientHelloFragment" in socket_cpp

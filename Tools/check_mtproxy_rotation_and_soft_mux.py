@@ -12,6 +12,8 @@ FILE_UPLOAD = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileUpl
 SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
+ADAPTIVE_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
 MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 WRAPPER_CPP = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
@@ -37,6 +39,8 @@ def main() -> None:
     shared_config = text(SHARED_CONFIG)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    adaptive_cpp = text(ADAPTIVE_CPP)
+    socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     manager_cpp = text(MANAGER_CPP)
     manager_h = text(MANAGER_H)
     wrapper_cpp = text(WRAPPER_CPP)
@@ -64,28 +68,29 @@ def main() -> None:
         "stable Auto pool must currently use Firefox Android and Yandex only",
     )
     require(
-        "mtProxyTlsAutoRotateProfiles" in socket_cpp
-        and "rotateMtProxyTlsProfileOnFailureIfNeeded" in socket_cpp
-        and "currentEffectiveProxyTlsProfile" in socket_h,
+        "tlsAutoRotateProfiles" in adaptive_cpp
+        and "MtProxyAdaptivePolicy::rotateTlsProfileOnFailureIfNeeded" in adaptive_cpp
+        and "MtProxyAdaptivePolicy::rotateTlsProfileOnFailureIfNeeded" in socket_cpp
+        and "currentEffectiveProxyTlsProfile" in socket_state,
         "native FakeTLS path must rotate effective JA4 profile on suspicious disconnect phases",
     )
     require(
-        "client_hello_sent_no_server_hello" in socket_cpp
-        and "server_hello_hmac_mismatch" in socket_cpp
-        and "post_handshake_no_appdata" in socket_cpp,
+        "client_hello_sent_no_server_hello" in adaptive_cpp
+        and "server_hello_hmac_mismatch" in adaptive_cpp
+        and "post_handshake_no_appdata" in adaptive_cpp,
         "native rotation must be keyed by semantic diagnostic phases, not numeric errors",
     )
-    rotation_start = socket_cpp.find("static bool mtProxyTlsAutoRotateFailureDiagnostic")
-    rotation_end = socket_cpp.find("static void mtProxyRotateTlsProfileOnFailure", rotation_start)
-    rotation_body = socket_cpp[rotation_start:rotation_end]
+    rotation_start = adaptive_cpp.find("bool MtProxyAdaptivePolicy::failureNeedsRecipe")
+    rotation_end = adaptive_cpp.find("int32_t MtProxyAdaptivePolicy::adaptiveTlsProfile", rotation_start)
+    rotation_body = adaptive_cpp[rotation_start:rotation_end]
     require(
         "tcp_connected_no_pong" not in rotation_body
         and "dropped_after_appdata" not in rotation_body,
         "JA4 rotation must not react to plain-ping or already-after-appdata failures; those belong to endpoint/data lifecycle",
     )
     require(
-        "tcp_not_connected" in socket_cpp
-        and "return false; // ClientHello was not sent, so JA4 did not cause this failure." in socket_cpp,
+        "tcp_not_connected" in adaptive_cpp
+        and "return false; // ClientHello was not sent, so JA4 did not cause this failure." in adaptive_cpp,
         "native rotation must not change JA4 for pre-TCP failures",
     )
     require(
@@ -141,19 +146,19 @@ def main() -> None:
     require(
         "resolveMtProxyConnectionPatternMode()" in connections
         and "mtProxyConnectionPatternMode" in connections
-        and "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode)" in connections,
-        "Java must pass the runtime connection-pattern mode into native proxy settings",
+        and "MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret)" in connections,
+        "Java must pass the runtime connection-pattern mode through MtProxyOptions",
     )
     require(
-        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIII)V"' in wrapper_cpp
-        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper_cpp,
-        "JNI signatures must carry the admission-controller integer",
+        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;)V"' in wrapper_cpp
+        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;Lorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper_cpp,
+        "JNI signatures must carry the admission-controller mode through MtProxyOptions",
     )
     require(
-        "int32_t proxyConnectionPatternMode = 0" in manager_h
-        and "connectionPatternChanged" in manager_cpp
-        and "proxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode" in manager_cpp,
-        "native ConnectionsManager must store connection-pattern runtime state and reconnect when it changes",
+        "MtProxyOptions proxyMtProxyOptions" in manager_h
+        and "optionsChanged" in manager_cpp
+        and "proxyMtProxyOptions = normalizedOptions" in manager_cpp,
+        "native ConnectionsManager must store connection-pattern runtime state in MtProxyOptions and reconnect when it changes",
     )
     require(
         "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in socket_cpp

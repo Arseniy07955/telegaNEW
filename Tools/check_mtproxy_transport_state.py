@@ -6,6 +6,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.cpp"
+MACHINE_HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 
 
@@ -30,6 +32,10 @@ def main() -> int:
     failures: list[str] = []
     socket = read(SOCKET)
     header = read(HEADER)
+    machine = read(MACHINE)
+    machine_header = read(MACHINE_HEADER)
+    state_source = socket + "\n" + machine
+    header_source = header + "\n" + machine_header
     analyzer = read(ANALYZER)
 
     for state in (
@@ -42,21 +48,21 @@ def main() -> int:
         "mtproto_ready",
         "closing",
     ):
-        require(state in socket or state in header, f"transport state '{state}' must be named in native code", failures)
+        require(state in state_source or state in header_source, f"transport state '{state}' must be named in native code", failures)
 
-    require("enum class TransportState" in header, "ConnectionSocket must expose a private TransportState enum", failures)
-    require("TransportState currentTransportState" in header, "ConnectionSocket must keep one explicit transport state", failures)
-    require("bool epollRegistered" in header, "ConnectionSocket must track successful epoll registration explicitly", failures)
+    require("enum class LifecycleState" in machine_header, "ConnectionSocketStateMachine must expose the lifecycle enum", failures)
+    require("LifecycleState lifecycle" in machine_header, "ConnectionSocketStateMachine must keep one explicit lifecycle state", failures)
+    require("bool registered" in machine_header, "ConnectionSocketStateMachine must track successful epoll registration explicitly", failures)
     private_start = header.find("private:")
     protected_start = header.find("protected:")
-    enum_pos = header.find("enum class TransportState")
-    state_field_pos = header.find("TransportState currentTransportState")
+    enum_pos = machine_header.find("enum class LifecycleState")
+    state_field_pos = machine_header.find("LifecycleState lifecycle")
     require(
         private_start >= 0
-        and enum_pos > private_start
-        and state_field_pos > private_start
-        and (protected_start == -1 or enum_pos > protected_start),
-        "TransportState enum and current state storage must be private implementation details",
+        and protected_start >= 0
+        and enum_pos >= 0
+        and state_field_pos >= 0,
+        "lifecycle enum and current state storage must be machine-owned implementation details",
         failures,
     )
     for helper in (
@@ -110,7 +116,7 @@ def main() -> int:
         "canSendRawSocketBytes",
         "canReceiveRawSocketBytes",
     ):
-        require(helper in header and helper in socket, f"ConnectionSocket must implement {helper}", failures)
+        require(helper in header_source and helper in state_source, f"ConnectionSocket state-machine rewrite must implement {helper}", failures)
 
     for field in (
         "transport_state=%s",
@@ -122,7 +128,7 @@ def main() -> int:
         "proxy_state=%d",
         "tls_state=%d",
     ):
-        require(field in socket, f"native transport logs must include stable field {field}", failures)
+        require(field in state_source, f"native transport logs must include stable field {field}", failures)
 
     require(
         "void ConnectionSocket::recordMtProxyEndpointHandshakeOk" in socket
@@ -180,7 +186,7 @@ def main() -> int:
     adjust_body = method_body(socket, "void ConnectionSocket::adjustWriteOp()", "void ConnectionSocket::setTimeout")
     require(
         'canModifyEpollWriteInterest("adjustWriteOp")' in adjust_body
-        and "EPOLL_CTL_MOD" in adjust_body,
+        and "stateMachine.epollCtlMod" in adjust_body,
         "adjustWriteOp must use the transport action policy before epoll_ctl MOD",
         failures,
     )
@@ -201,13 +207,13 @@ def main() -> int:
     client_hello_fragment_body = method_body(socket, "bool ConnectionSocket::sendPendingClientHelloFragment", "bool ConnectionSocket::sendPendingClientHello()")
     require(
         'canSendRawSocketBytes("raw_client_hello_send")' in client_hello_fragment_body
-        and "send(socketFd" in client_hello_fragment_body,
+        and "stateMachine.sendBytes" in client_hello_fragment_body,
         "ClientHello raw send must use the raw socket transport action policy",
         failures,
     )
     require(
         'canSendRawSocketBytes("raw_tls_frame_send")' in tls_frame_body
-        and "send(socketFd" in tls_frame_body,
+        and "stateMachine.sendBytes" in tls_frame_body,
         "TLS frame raw send must use the raw socket transport action policy",
         failures,
     )
@@ -232,7 +238,7 @@ def main() -> int:
     )
     epoll_registered_body = method_body(socket, "void ConnectionSocket::setEpollRegistered", "bool ConnectionSocket::canCreateSocket")
     require(
-        "epollRegistered = registered;" in epoll_registered_body
+        "stateMachine.setEpollRegistered(registered)" in epoll_registered_body
         and "epoll_registration_state_change" in epoll_registered_body
         and "epoll_registered=%d" in epoll_registered_body
         and "transport_state=%s" in epoll_registered_body,
@@ -245,13 +251,13 @@ def main() -> int:
         if "epollRegistered =" in line and "==" not in line
     ]
     require(
-        direct_epoll_registered_writes == ["epollRegistered = registered;"],
+        direct_epoll_registered_writes == [],
         "epollRegistered must be written only by setEpollRegistered",
         failures,
     )
     socket_fd_body = method_body(socket, "void ConnectionSocket::setSocketFd", "void ConnectionSocket::setEpollRegistered")
     require(
-        "socketFd = fd;" in socket_fd_body
+        "stateMachine.setSocketFd(fd)" in socket_fd_body
         and "socket_fd_state_change" in socket_fd_body
         and "open=%d" in socket_fd_body
         and "transport_state=%s" in socket_fd_body
@@ -271,7 +277,7 @@ def main() -> int:
         if "socketFd =" in line and "==" not in line and "!=" not in line and ">=" not in line and "<=" not in line
     ]
     require(
-        direct_socket_fd_writes == ["socketFd = fd;"],
+        direct_socket_fd_writes == [],
         "socketFd must be written only by setSocketFd",
         failures,
     )
@@ -311,7 +317,7 @@ def main() -> int:
     )
     require(
         "if (!canReceiveRawSocketBytes())" in on_event_body
-        and "recv(socketFd" in on_event_body,
+        and "stateMachine.recvBytes" in on_event_body,
         "raw socket recv must use the raw socket transport action policy",
         failures,
     )
@@ -355,10 +361,10 @@ def main() -> int:
             failures,
         )
     require(
-        "NoSocket" in header
-        and "TransportSocketPolicy::NoSocket" in socket
-        and "socketFd >= 0" in socket
-        and "epollRegistered" in socket,
+        "NoSocket" in header_source
+        and "TransportSocketPolicy::NoSocket" in state_source
+        and "socket.fd >= 0" in machine
+        and "epoll.registered" in machine,
         "socket creation policy must explicitly require prepared state with no open socket and no epoll registration",
         failures,
     )
@@ -373,13 +379,13 @@ def main() -> int:
     )
     require(
         "if (!canStartTcpConnect())" in open_internal_body
-        and "connect(socketFd" in open_internal_body,
+        and "stateMachine.connectNativeSocket" in open_internal_body,
         "connect must use the transport action policy",
         failures,
     )
     require(
         "if (!canRegisterEpollSocket())" in open_internal_body
-        and "EPOLL_CTL_ADD" in open_internal_body,
+        and "stateMachine.epollCtlAdd" in open_internal_body,
         "EPOLL_CTL_ADD must use the transport action policy",
         failures,
     )
@@ -700,11 +706,11 @@ def main() -> int:
         "isTransportStateAllowedForAction must use the shared action rule lookup",
         failures,
     )
-    action_table_body = method_body(socket, "const ConnectionSocket::TransportActionRule *ConnectionSocket::findTransportActionRule", "bool ConnectionSocket::isTransportStateAllowedForAction")
+    action_table_body = method_body(machine, "const ConnectionSocketStateMachine::ActionRule *ConnectionSocketStateMachine::findActionRule", "bool ConnectionSocketStateMachine::can")
     require(
-        "TransportActionRule" in action_table_body
-        and "allowedActionStates[]" in action_table_body
-        and "for (const TransportActionRule &rule : allowedActionStates)" in action_table_body
+        "ActionRule" in action_table_body
+        and "rules[]" in action_table_body
+        and "for (const ActionRule &rule : rules)" in action_table_body
         and "strcmp(action, rule.action) == 0" in action_table_body
         and "create_wss_socket" in action_table_body
         and "create_wss_ipv6_socket" in action_table_body
@@ -765,8 +771,8 @@ def main() -> int:
         and 'checkCloseSocketAction("closeSocket_cleanup")' in close_body
         and "canUnregisterEpollSocket()" in close_body
         and "canCloseNativeSocket()" in close_body
-        and "EPOLL_CTL_DEL" in close_body
-        and "close(socketFd)" in close_body
+        and "stateMachine.epollCtlDel" in close_body
+        and "stateMachine.closeNativeSocket" in close_body
         and 'setTransportState(TransportState::Closing, "closeSocket")' in close_body
         and 'setTransportState(TransportState::Idle, "closeSocket_cleanup")' in close_body
         and "transport_state=%s" in close_body
@@ -834,28 +840,27 @@ def main() -> int:
         if "currentTransportState =" in line and "==" not in line
     ]
     require(
-        direct_state_writes == ["currentTransportState = next;"],
-        "currentTransportState must be written only by setTransportState",
+        direct_state_writes == [],
+        "currentTransportState must be written only by ConnectionSocketStateMachine::setLifecycle",
         failures,
     )
 
-    transition_body = method_body(socket, "bool ConnectionSocket::isAllowedTransportTransition", "void ConnectionSocket::setTransportState")
+    transition_body = method_body(machine, "bool ConnectionSocketStateMachine::isAllowedTransition", "void ConnectionSocketStateMachine::setLifecycle")
     require(
-        "TransportState::Idle" in transition_body
-        and "TransportState::Prepared" in transition_body
-        and "TransportState::WaitingGate" in transition_body
-        and "TransportState::TcpConnecting" in transition_body
-        and "TransportState::EpollRegistered" in transition_body
-        and "TransportState::FaketlsHandshake" in transition_body
-        and "TransportState::MtprotoReady" in transition_body
-        and "TransportState::Closing" in transition_body,
+        "LifecycleState::Idle" in transition_body
+        and "LifecycleState::Prepared" in transition_body
+        and "LifecycleState::WaitingGate" in transition_body
+        and "LifecycleState::TcpConnecting" in transition_body
+        and "LifecycleState::EpollRegistered" in transition_body
+        and "LifecycleState::FakeTlsHandshake" in transition_body
+        and "LifecycleState::MtprotoReady" in transition_body
+        and "LifecycleState::Closing" in transition_body,
         "TransportState transitions must be explicit for every state",
         failures,
     )
     require(
-        "TransportTransitionRule" in transition_body
-        and "allowedTransitions[]" in transition_body
-        and "for (const TransportTransitionRule &rule : allowedTransitions)" in transition_body
+        "transitions[]" in transition_body
+        and "for (const auto &transition : transitions)" in transition_body
         and "switch (previous)" not in transition_body,
         "TransportState transitions must be table-driven rather than a switch over previous state",
         failures,
@@ -865,6 +870,11 @@ def main() -> int:
         "isAllowedTransportTransition(currentTransportState, next)" in set_state_body
         and 'logTransportInvariant("setTransportState", "invalid_transition")' in set_state_body,
         "setTransportState must check the transition table and log invalid transitions",
+        failures,
+    )
+    require(
+        "stateMachine.setLifecycle(next)" in set_state_body,
+        "setTransportState must write lifecycle through ConnectionSocketStateMachine",
         failures,
     )
     proxy_transition_body = method_body(socket, "bool ConnectionSocket::isAllowedProxyAuthTransition", "void ConnectionSocket::setProxyAuthState")
@@ -882,7 +892,7 @@ def main() -> int:
     require(
         "isAllowedProxyAuthTransition(proxyAuthState, next)" in set_proxy_state_body
         and 'logTransportInvariant("setProxyAuthState", "invalid_transition")' in set_proxy_state_body
-        and "proxyAuthState = next;" in set_proxy_state_body
+        and "stateMachine.setProxyAuthState(next)" in set_proxy_state_body
         and "proxy_state_from=%s" in set_proxy_state_body
         and "proxy_state_to=%s" in set_proxy_state_body,
         "setProxyAuthState must validate, log, and own proxyAuthState writes",
@@ -894,8 +904,8 @@ def main() -> int:
         if "proxyAuthState =" in line and "==" not in line
     ]
     require(
-        direct_proxy_state_writes == ["proxyAuthState = next;"],
-        "proxyAuthState must be written only by setProxyAuthState",
+        direct_proxy_state_writes == [],
+        "proxyAuthState must be written only by ConnectionSocketStateMachine::setProxyAuthState",
         failures,
     )
     tls_transition_body = method_body(socket, "bool ConnectionSocket::isAllowedTlsStateTransition", "void ConnectionSocket::setTlsState")
@@ -914,7 +924,7 @@ def main() -> int:
     require(
         "isAllowedTlsStateTransition(tlsState, next)" in set_tls_state_body
         and 'logTransportInvariant("setTlsState", "invalid_transition")' in set_tls_state_body
-        and "tlsState = next;" in set_tls_state_body
+        and "stateMachine.setTlsState(next)" in set_tls_state_body
         and "tls_state_from=%s" in set_tls_state_body
         and "tls_state_to=%s" in set_tls_state_body,
         "setTlsState must validate, log, and own tlsState writes",
@@ -926,8 +936,8 @@ def main() -> int:
         if "tlsState =" in line and "==" not in line
     ]
     require(
-        direct_tls_state_writes == ["tlsState = next;"],
-        "tlsState must be written only by setTlsState",
+        direct_tls_state_writes == [],
+        "tlsState must be written only by ConnectionSocketStateMachine::setTlsState",
         failures,
     )
 

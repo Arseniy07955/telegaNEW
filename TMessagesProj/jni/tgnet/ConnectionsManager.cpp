@@ -3483,45 +3483,6 @@ inline std::string decodeSecret(std::string secret) {
     return base64UrlDecode(secret);
 }
 
-static int32_t normalizeMtProxyTlsProfile(int32_t mtProxyTlsProfile) {
-    if (mtProxyTlsProfile == 0 || mtProxyTlsProfile == 6 || (mtProxyTlsProfile >= 1 && mtProxyTlsProfile <= 5)) {
-        return mtProxyTlsProfile;
-    }
-    return 2;
-}
-
-static int32_t normalizeMtProxyClientHelloFragmentation(int32_t mtProxyClientHelloFragmentation) {
-    return mtProxyClientHelloFragmentation == 1 ? 1 : 0;
-}
-
-static int32_t normalizeMtProxyConnectionPatternMode(int32_t mtProxyConnectionPatternMode) {
-    if (mtProxyConnectionPatternMode >= 0 && mtProxyConnectionPatternMode <= 4) {
-        return mtProxyConnectionPatternMode;
-    }
-    return 0;
-}
-
-static int32_t normalizeMtProxyRecordSizingMode(int32_t mtProxyRecordSizingMode) {
-    if (mtProxyRecordSizingMode >= 0 && mtProxyRecordSizingMode <= 2) {
-        return mtProxyRecordSizingMode;
-    }
-    return 0;
-}
-
-static int32_t normalizeMtProxyTimingMode(int32_t mtProxyTimingMode) {
-    if (mtProxyTimingMode >= 0 && mtProxyTimingMode <= 2) {
-        return mtProxyTimingMode;
-    }
-    return 0;
-}
-
-static int32_t normalizeMtProxyStartupCoverMode(int32_t mtProxyStartupCoverMode) {
-    if (mtProxyStartupCoverMode >= 0 && mtProxyStartupCoverMode <= 2) {
-        return mtProxyStartupCoverMode;
-    }
-    return 0;
-}
-
 void ConnectionsManager::updateDcSettings(uint32_t dcNum, bool workaround, bool ifLoadingTryAgain) {
     if (workaround) {
         if (updatingDcSettingsWorkaround) {
@@ -3906,34 +3867,19 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
     }
 }
 
-void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, int32_t mtProxyStartupCoverMode) {
-    scheduleTask([&, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode] {
+void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options) {
+    MtProxyOptions normalizedOptions = normalizeMtProxyOptions(options);
+    scheduleTask([&, address, port, username, password, secret, normalizedOptions] {
         std::string newSecret = decodeSecret(secret);
-        int32_t newProxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
-        int32_t newClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-        int32_t newConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
-        int32_t newRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
-        int32_t newTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
-        int32_t newStartupCoverMode = normalizeMtProxyStartupCoverMode(mtProxyStartupCoverMode);
         bool secretChanged = proxySecret != newSecret;
-        bool profileChanged = proxyTlsProfile != newProxyTlsProfile;
-        bool clientHelloFragmentationChanged = proxyClientHelloFragmentation != newClientHelloFragmentation;
-        bool connectionPatternChanged = proxyConnectionPatternMode != newConnectionPatternMode;
-        bool recordSizingChanged = proxyRecordSizingMode != newRecordSizingMode;
-        bool timingModeChanged = proxyTimingMode != newTimingMode;
-        bool startupCoverChanged = proxyStartupCoverMode != newStartupCoverMode;
-        bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged || profileChanged || clientHelloFragmentationChanged || connectionPatternChanged || recordSizingChanged || timingModeChanged || startupCoverChanged;
+        bool optionsChanged = proxyMtProxyOptions != normalizedOptions;
+        bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged || optionsChanged;
         proxyAddress = address;
         proxyPort = port;
         proxyUser = username;
         proxyPassword = password;
         proxySecret = std::move(newSecret);
-        proxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
-        proxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-        proxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
-        proxyRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
-        proxyTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
-        proxyStartupCoverMode = normalizeMtProxyStartupCoverMode(mtProxyStartupCoverMode);
+        proxyMtProxyOptions = normalizedOptions;
         if (!proxyAddress.empty() && connectionState == ConnectionStateConnecting) {
             connectionState = ConnectionStateConnectingViaProxy;
             if (delegate != nullptr) {
@@ -4145,19 +4091,14 @@ void ConnectionsManager::setIpStrategy(uint8_t value) {
     });
 }
 
-int64_t ConnectionsManager::checkProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, int32_t mtProxyStartupCoverMode, onRequestTimeFunc requestTimeFunc, jobject ptr1) {
+int64_t ConnectionsManager::checkProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options, onRequestTimeFunc requestTimeFunc, jobject ptr1) {
     auto proxyCheckInfo = new ProxyCheckInfo();
     proxyCheckInfo->address = address;
     proxyCheckInfo->port = port;
     proxyCheckInfo->username = username;
     proxyCheckInfo->password = password;
     proxyCheckInfo->secret = decodeSecret(secret);
-    proxyCheckInfo->mtProxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
-    proxyCheckInfo->mtProxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-    proxyCheckInfo->mtProxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
-    proxyCheckInfo->mtProxyRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
-    proxyCheckInfo->mtProxyTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
-    proxyCheckInfo->mtProxyStartupCoverMode = normalizeMtProxyStartupCoverMode(mtProxyStartupCoverMode);
+    proxyCheckInfo->mtProxyOptions = normalizeMtProxyOptions(options);
     proxyCheckInfo->onRequestTime = requestTimeFunc;
     proxyCheckInfo->pingId = ++lastPingProxyId;
     proxyCheckInfo->instanceNum = instanceNum;
@@ -4247,7 +4188,7 @@ void ConnectionsManager::checkProxyInternal(ProxyCheckInfo *proxyCheckInfo) {
         if (connection != nullptr) {
             proxyCheckInfo->state = ProxyCheckState::Connecting;
             proxyCheckInfo->startedAtMillis = getCurrentTimeMonotonicMillis();
-            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret, proxyCheckInfo->mtProxyTlsProfile, proxyCheckInfo->mtProxyClientHelloFragmentation, proxyCheckInfo->mtProxyConnectionPatternMode, proxyCheckInfo->mtProxyRecordSizingMode, proxyCheckInfo->mtProxyTimingMode, proxyCheckInfo->mtProxyStartupCoverMode);
+            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret, proxyCheckInfo->mtProxyOptions);
             connection->suspendConnection();
             proxyCheckInfo->connectionNum = freeConnectionNum;
             auto request = new TL_ping();

@@ -194,6 +194,9 @@ add_library(tgnet STATIC
         tgnet/ConnectionSession.cpp
         tgnet/ConnectionsManager.cpp
         tgnet/ConnectionSocket.cpp
+        tgnet/ConnectionSocketStateMachine.cpp
+        tgnet/MtProxyAdaptivePolicy.cpp
+        tgnet/MtProxyEndpointPolicy.cpp
         tgnet/WssTransport.cpp
         tgnet/Datacenter.cpp
         tgnet/EventObject.cpp

@@ -651,13 +651,7 @@ public class ConnectionsManager extends BaseController {
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
         if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
-            int mtProxyTlsProfile = resolveMtProxyTlsProfile(proxyAddress, proxyPort, proxySecret);
-            int mtProxyClientHelloFragmentation = resolveMtProxyClientHelloFragmentationMode();
-            int mtProxyConnectionPatternMode = resolveMtProxyConnectionPatternMode();
-            int mtProxyRecordSizingMode = resolveMtProxyRecordSizingMode();
-            int mtProxyTimingMode = resolveMtProxyTimingMode();
-            int mtProxyStartupCoverMode = resolveMtProxyStartupCoverMode();
-            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode);
+            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret));
         }
         setWssTransportSettings();
         String installer = "";
@@ -791,13 +785,7 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
-        int mtProxyTlsProfile = resolveMtProxyTlsProfile(address, port, secret);
-        int mtProxyClientHelloFragmentation = resolveMtProxyClientHelloFragmentationMode();
-        int mtProxyConnectionPatternMode = resolveMtProxyConnectionPatternMode();
-        int mtProxyRecordSizingMode = resolveMtProxyRecordSizingMode();
-        int mtProxyTimingMode = resolveMtProxyTimingMode();
-        int mtProxyStartupCoverMode = resolveMtProxyStartupCoverMode();
-        return native_checkProxy(currentAccount, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode, requestTimeDelegate);
+        return native_checkProxy(currentAccount, address, port, username, password, secret, MtProxyOptions.resolve(address, port, secret), requestTimeDelegate);
     }
 
     public void cancelProxyCheck(long pingId) {
@@ -1033,17 +1021,12 @@ public class ConnectionsManager extends BaseController {
             secret = "";
         }
 
-        int mtProxyTlsProfile = enabled && !TextUtils.isEmpty(address) ? resolveMtProxyTlsProfile(address, port, secret) : MT_PROXY_TLS_PROFILE_AUTO;
-        int mtProxyClientHelloFragmentation = resolveMtProxyClientHelloFragmentationMode();
-        int mtProxyConnectionPatternMode = resolveMtProxyConnectionPatternMode();
-        int mtProxyRecordSizingMode = resolveMtProxyRecordSizingMode();
-        int mtProxyTimingMode = resolveMtProxyTimingMode();
-        int mtProxyStartupCoverMode = resolveMtProxyStartupCoverMode();
+        MtProxyOptions enabledOptions = enabled && !TextUtils.isEmpty(address) ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (enabled && !TextUtils.isEmpty(address)) {
-                native_setProxySettings(a, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode);
+                native_setProxySettings(a, address, port, username, password, secret, enabledOptions);
             } else {
-                native_setProxySettings(a, "", 1080, "", "", "", mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode);
+                native_setProxySettings(a, "", 1080, "", "", "", MtProxyOptions.disabled());
             }
             AccountInstance accountInstance = AccountInstance.getInstance(a);
             if (accountInstance.getUserConfig().isClientActivated()) {
@@ -1107,13 +1090,13 @@ public class ConnectionsManager extends BaseController {
         }
     }
 
-    private static int resolveMtProxyClientHelloFragmentationMode() {
+    static int resolveMtProxyClientHelloFragmentationMode() {
         return SharedConfig.mtProxyClientHelloFragmentation
                 ? MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT
                 : MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
     }
 
-    private static int resolveMtProxyConnectionPatternMode() {
+    static int resolveMtProxyConnectionPatternMode() {
         int mode = SharedConfig.mtProxyConnectionPatternMode;
         if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_BROWSER) {
             return mode;
@@ -1121,7 +1104,7 @@ public class ConnectionsManager extends BaseController {
         return MT_PROXY_CONNECTION_PATTERN_OFF;
     }
 
-    private static int resolveMtProxyRecordSizingMode() {
+    static int resolveMtProxyRecordSizingMode() {
         int mode = SharedConfig.mtProxyRecordSizingMode;
         if (mode >= MT_PROXY_RECORD_SIZING_OFF && mode <= MT_PROXY_RECORD_SIZING_VARIED) {
             return mode;
@@ -1129,7 +1112,7 @@ public class ConnectionsManager extends BaseController {
         return MT_PROXY_RECORD_SIZING_OFF;
     }
 
-    private static int resolveMtProxyTimingMode() {
+    static int resolveMtProxyTimingMode() {
         int mode = SharedConfig.mtProxyTimingMode;
         if (mode >= MT_PROXY_TIMING_OFF && mode <= MT_PROXY_TIMING_BALANCED) {
             return mode;
@@ -1137,7 +1120,7 @@ public class ConnectionsManager extends BaseController {
         return MT_PROXY_TIMING_OFF;
     }
 
-    private static int resolveMtProxyStartupCoverMode() {
+    static int resolveMtProxyStartupCoverMode() {
         int mode = SharedConfig.mtProxyStartupCoverMode;
         if (mode >= MT_PROXY_STARTUP_COVER_OFF && mode <= MT_PROXY_STARTUP_COVER_STRICT) {
             return mode;
@@ -1169,7 +1152,7 @@ public class ConnectionsManager extends BaseController {
         preferences.edit().putInt(MT_PROXY_TLS_PROFILE_OVERRIDE, profile).apply();
     }
 
-    private static int resolveMtProxyTlsProfile(String address, int port, String secret) {
+    static int resolveMtProxyTlsProfile(String address, int port, String secret) {
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences(MT_PROXY_TLS_PROFILE_PREFS, Context.MODE_PRIVATE);
         int override = getMtProxyTlsProfileOverride();
         if (override != MT_PROXY_TLS_PROFILE_AUTO) {
@@ -1245,7 +1228,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getConnectionState(int currentAccount);
     public static native void native_setUserId(int currentAccount, long id);
     public static native void native_init(int currentAccount, int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, String installer, String packageId, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection, boolean hasNetwork, int networkType, int performanceClass);
-    public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, int mtProxyTlsProfile, int mtProxyClientHelloFragmentation, int mtProxyConnectionPatternMode, int mtProxyRecordSizingMode, int mtProxyTimingMode, int mtProxyStartupCoverMode);
+    public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, MtProxyOptions options);
     public static native void native_setWssTransportSettings(int currentAccount, int mode, int gatewayMode, String host, int port, String path, boolean miniApps, String socksHost, int socksPort, String socksUsername, String socksPassword, boolean socksEnabled, boolean enabled);
     public static native void native_setLangCode(int currentAccount, String langCode);
     public static native void native_setRegId(int currentAccount, String regId);
@@ -1253,7 +1236,7 @@ public class ConnectionsManager extends BaseController {
     public static native void native_setJava(boolean useJavaByteBuffers);
     public static native void native_setPushConnectionEnabled(int currentAccount, boolean value);
     public static native void native_applyDnsConfig(int currentAccount, long address, String phone, int date);
-    public static native long native_checkProxy(int currentAccount, String address, int port, String username, String password, String secret, int mtProxyTlsProfile, int mtProxyClientHelloFragmentation, int mtProxyConnectionPatternMode, int mtProxyRecordSizingMode, int mtProxyTimingMode, int mtProxyStartupCoverMode, RequestTimeDelegate requestTimeDelegate);
+    public static native long native_checkProxy(int currentAccount, String address, int port, String username, String password, String secret, MtProxyOptions options, RequestTimeDelegate requestTimeDelegate);
     public static native void native_cancelProxyCheck(int currentAccount, long pingId);
     public static native void native_onHostNameResolved(String host, long address, String ip);
     public static native void native_discardConnection(int currentAccount, int datacenterId, int connectionType);

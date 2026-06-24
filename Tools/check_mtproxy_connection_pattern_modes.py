@@ -11,6 +11,7 @@ PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivi
 SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 CONNECTION_H = ROOT / "TMessagesProj/jni/tgnet/Connection.h"
 MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
@@ -36,6 +37,7 @@ def main() -> None:
     shared_config = text(SHARED_CONFIG)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     connection_cpp = text(CONNECTION_CPP)
     connection_h = text(CONNECTION_H)
     manager_cpp = text(MANAGER_CPP)
@@ -57,11 +59,11 @@ def main() -> None:
         "SharedConfig must persist integer connection-pattern mode and migrate the old admission boolean",
     )
     require(
-        "private static int resolveMtProxyConnectionPatternMode()" in connections
+        "static int resolveMtProxyConnectionPatternMode()" in connections
         and "SharedConfig.mtProxyConnectionPatternMode" in connections
         and "mtProxyConnectionPatternMode" in connections
-        and "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode, mtProxyStartupCoverMode)" in connections,
-        "Java must pass the selected connection-pattern mode into native proxy settings",
+        and "MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret)" in connections,
+        "Java must pass the selected connection-pattern mode through MtProxyOptions",
     )
     require(
         "mtProxyConnectionPatternRow" in proxy_list
@@ -78,18 +80,17 @@ def main() -> None:
         "old admission checkbox row must be replaced by the connection-pattern chooser",
     )
     require(
-        "int32_t proxyConnectionPatternMode = 0" in manager_h
-        and "normalizeMtProxyConnectionPatternMode" in manager_cpp
-        and "connectionPatternChanged" in manager_cpp
-        and "proxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode" in manager_cpp,
-        "native ConnectionsManager must store connection-pattern mode and reconnect when it changes",
+        "MtProxyOptions proxyMtProxyOptions" in manager_h
+        and "normalizeMtProxyOptions(options)" in manager_cpp
+        and "optionsChanged" in manager_cpp,
+        "native ConnectionsManager must store MTProxy options and reconnect when connection-pattern mode changes",
     )
     require(
-        "int32_t mtProxyConnectionPatternMode" in proxy_check
-        and "overrideProxyConnectionPatternMode" in socket_h
-        and "currentConnectionPatternMode" in socket_h
-        and "setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, int32_t mtProxyStartupCoverMode)" in socket_h,
-        "proxy-check override sockets must carry the same connection-pattern mode as real sockets",
+        "MtProxyOptions mtProxyOptions" in proxy_check
+        and "overrideMtProxyOptions" in socket_h
+        and "currentConnectionPatternMode" in socket_state
+        and "setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options)" in socket_h,
+        "proxy-check override sockets must carry the same MtProxyOptions as real sockets",
     )
     require(
         "mtProxyConnectionPatternModeName" in socket_cpp

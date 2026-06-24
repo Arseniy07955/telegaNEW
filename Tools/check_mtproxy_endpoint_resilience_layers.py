@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = {
     "socket": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp",
+    "endpoint_policy": ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp",
     "socket_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h",
+    "machine_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h",
     "connection": ROOT / "TMessagesProj/jni/tgnet/Connection.cpp",
     "connection_header": ROOT / "TMessagesProj/jni/tgnet/Connection.h",
     "diagnostics": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java",
@@ -33,14 +35,17 @@ def require(condition, message):
 
 def main():
     socket = read("socket")
+    endpoint_policy = read("endpoint_policy")
     header = read("socket_header")
+    machine_header = read("machine_header")
+    socket_state_header = header + "\n" + machine_header
     connection = read("connection")
     connection_header = read("connection_header")
     diagnostics = read("diagnostics")
     analyzer = read("analyzer")
     values = read("values")
     values_ru = read("values_ru")
-    combined = "\n".join([socket, header, connection, connection_header, diagnostics, analyzer, values, values_ru])
+    combined = "\n".join([socket, socket_state_header, connection, connection_header, diagnostics, analyzer, values, values_ru])
 
     require(
         "MT_PROXY_HANDSHAKE_TIMER_ENDPOINT_BACKOFF" in socket,
@@ -48,45 +53,45 @@ def main():
     )
     require(
         "MT_PROXY_HANDSHAKE_TIMER_DNS_COALESCE" in socket
-        and "MT_PROXY_ENDPOINT_DNS_COALESCE_MS" in socket,
+        and "MT_PROXY_ENDPOINT_DNS_COALESCE_MS" in endpoint_policy,
         "ConnectionSocket must have a short DNS coalescing timer before delegate host resolve",
     )
     require(
         "MT_PROXY_HANDSHAKE_TIMER_TCP_CONNECT_GATE" in socket
-        and "MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_MS" in socket,
+        and "MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_MS" in endpoint_policy,
         "ConnectionSocket must have a short active-TCP-connect gate for repeated endpoint starts",
     )
     require(
-        "MtProxyEndpointResilienceState" in socket and "proxyEndpointResilience" in socket,
-        "ConnectionSocket must keep per-endpoint resilience state outside FakeTLS admission",
+        "MtProxyEndpointResilienceState" in endpoint_policy and "proxyEndpointResilience" in endpoint_policy,
+        "MtProxyEndpointPolicy must keep per-endpoint resilience state outside FakeTLS admission",
     )
     require(
-        "currentMtProxyEndpointKey" in header and "proxyEndpointBackoffReady" in header,
+        "currentMtProxyEndpointKey" in combined and "proxyEndpointBackoffReady" in combined,
         "ConnectionSocket must remember endpoint circuit-breaker state per socket",
     )
     require(
-        "proxyEndpointTcpConnectActive" in header
-        and "proxyEndpointTcpConnectReady" in header,
+        "proxyEndpointTcpConnectActive" in combined
+        and "proxyEndpointTcpConnectReady" in combined,
         "ConnectionSocket must remember active TCP connect gate state per socket",
     )
     require(
-        "proxyEndpointTcpConnectGatePublished" in header,
+        "proxyEndpointTcpConnectGatePublished" in combined,
         "ConnectionSocket must remember whether TCP gate wait was already published to the UI for this socket",
     )
     require(
-        "proxyHandshakeAdmissionQueuePublished" in header,
+        "proxyHandshakeAdmissionQueuePublished" in combined,
         "ConnectionSocket must remember whether admission queue wait was already published to the UI for this socket",
     )
     require(
-        "currentMtProxyDnsCacheKey" in header,
+        "currentMtProxyDnsCacheKey" in combined,
         "ConnectionSocket must keep a DNS cache key separate from the MTProxy secret/SNI endpoint key",
     )
     require(
-        "currentMtProxyNetworkEndpointKey" in header,
+        "currentMtProxyNetworkEndpointKey" in combined,
         "ConnectionSocket must keep a host/port network endpoint key for pre-TLS DNS/TCP failures",
     )
     require(
-        "proxyEndpointDnsCoalesceReady" in header,
+        "proxyEndpointDnsCoalesceReady" in combined,
         "ConnectionSocket must remember when a DNS coalescing delay has already fired for this socket",
     )
     require(
@@ -112,9 +117,9 @@ def main():
         "!mtProxyConnectionPatternUsesCooldown(connectionPatternMode)" not in schedule_body,
         "endpoint circuit breaker must run in Default/Soft too; connection pattern may scale delay, not disable it",
     )
-    cooldown_start = socket.find("static int64_t mtProxyEndpointCooldownMs")
-    cooldown_end = socket.find("static uint32_t mtProxyDataAwareIptDelayMs", cooldown_start)
-    cooldown_body = socket[cooldown_start:cooldown_end]
+    cooldown_start = endpoint_policy.find("static int64_t cooldownMs")
+    cooldown_end = endpoint_policy.find("bool MtProxyEndpointPolicy::extractSslipIpv4Address", cooldown_start)
+    cooldown_body = endpoint_policy[cooldown_start:cooldown_end]
     require(
         "return 0;" not in cooldown_body,
         "endpoint failure recording must produce a small cooldown even in Default/Soft modes",
@@ -136,7 +141,7 @@ def main():
         "pre-TCP host/DNS failures must use short priority-aware network cooldowns, not old long endpoint-wide waits",
     )
     require(
-        "mtProxyEndpointCooldownMs(state, phase, connectionPatternMode, proxyHandshakeAdmissionPriority)" in socket
+        "MtProxyEndpointPolicy::recordFailure" in socket
         and "priority=%d cooldown_ms" in socket,
         "endpoint failure recording must pass connection priority into cooldown calculation and log it",
     )
@@ -148,7 +153,7 @@ def main():
     timer_end = socket.find("void ConnectionSocket::grantProxyHandshakeAdmission", timer_start)
     timer_body = socket[timer_start:timer_end]
     require(
-        "proxyHandshakeAdmissionTimerGeneration" in header
+        "proxyHandshakeAdmissionTimerGeneration" in combined
         and "proxyHandshakeAdmissionTimerGeneration = proxyHandshakeAdmissionGeneration;" in timer_body
         and "uint32_t timerGeneration = proxyHandshakeAdmissionTimerGeneration;" in timer_body
         and "timerGeneration != proxyHandshakeAdmissionGeneration || mode == 0" in timer_body
@@ -172,7 +177,7 @@ def main():
     open_connection_end = socket.find("void ConnectionSocket::openConnectionInternal", open_connection_start)
     open_connection_body = socket[open_connection_start:open_connection_end]
     require(
-        "socketCloseNotified" in header
+        "socketCloseNotified" in combined
         and 'setSocketCloseNotified(false, "openConnection")' in open_connection_body
         and "if (socketCloseNotified)" in close_body
         and "close_ignored_already_closed" in close_body
@@ -239,7 +244,7 @@ def main():
         and 'proxyCheckDiagnostic == "dropped_early_after_appdata"' not in close_body[suppress_idx:publish_idx]
         and "mtproxyFirstTlsDataReceivedLogged || mtproxyFirstPlainDataReceivedLogged" in close_body
         and "proxyCloseDiagnosticSuppressed = true;" in close_body
-        and "isProxyCloseDiagnosticSuppressed()" in header
+        and "isProxyCloseDiagnosticSuppressed()" in socket_state_header
         and "close_diagnostic_suppressed" in close_body,
         "closeSocket must publish early post-appdata drops while suppressing only later already-usable post-appdata closes",
     )
@@ -277,12 +282,12 @@ def main():
         "DNS failures must have a last-good-IP fallback and store path",
     )
     require(
-        "resolveInFlightUntil" in socket,
+        "resolveInFlightUntil" in endpoint_policy,
         "DNS cache state must record a short in-flight resolve window to suppress duplicate cold resolves",
     )
-    sslip_start = socket.find("static bool mtProxyExtractSslipIpv4Address")
-    sslip_end = socket.find("static const char *mtProxySecretKindName", sslip_start)
-    sslip_body = socket[sslip_start:sslip_end]
+    sslip_start = endpoint_policy.find("bool MtProxyEndpointPolicy::extractSslipIpv4Address")
+    sslip_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::networkEndpointKeyFor", sslip_start)
+    sslip_body = endpoint_policy[sslip_start:sslip_end]
     require(
         sslip_start != -1
         and "std::transform" in sslip_body
@@ -290,7 +295,7 @@ def main():
         and ".sslip.io" in sslip_body,
         "sslip.io fast-path must be case-insensitive so valid domain spelling does not fall through to DNS",
     )
-    sslip_call = socket.find("mtProxyExtractSslipIpv4Address(*proxyAddress")
+    sslip_call = socket.find("MtProxyEndpointPolicy::extractSslipIpv4Address(*proxyAddress")
     dns_cache_call = socket.find("mtProxyEndpointUseCachedHostAddress(*proxyAddress")
     host_resolve_call = socket.find("requestPendingHostResolve();", dns_cache_call)
     require(
@@ -306,27 +311,27 @@ def main():
         "DNS coalescing must run after last-good-IP cache lookup but before delegate DNS resolve",
     )
     require(
-        "MtProxyDnsCacheState" in socket and "proxyEndpointDnsCache" in socket,
+        "MtProxyDnsCacheState" in endpoint_policy and "proxyEndpointDnsCache" in endpoint_policy,
         "DNS last-good-IP cache must be stored separately from per-secret/SNI endpoint resilience state",
     )
     require(
-        "mtProxyDnsCacheKeyFor" in socket,
+        "MtProxyEndpointPolicy::dnsCacheKeyFor" in socket and "dnsCacheKeyFor" in endpoint_policy,
         "DNS cache key must be host/port-scoped instead of secret/SNI-scoped",
     )
     require(
-        "mtProxyNetworkEndpointKeyFor" in socket,
+        "MtProxyEndpointPolicy::networkEndpointKeyFor" in socket and "networkEndpointKeyFor" in endpoint_policy,
         "pre-TLS endpoint resilience must have a host/port-scoped network key separate from secret/SNI recipe state",
     )
-    dns_key_start = socket.find("static std::string mtProxyDnsCacheKeyFor")
-    dns_key_end = socket.find("static const char *mtProxyDisconnectReasonName", dns_key_start)
-    dns_key_body = socket[dns_key_start:dns_key_end]
+    dns_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::dnsCacheKeyFor")
+    dns_key_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::stateKeyForPhase", dns_key_start)
+    dns_key_body = endpoint_policy[dns_key_start:dns_key_end]
     require(
-        "std::transform" in dns_key_body and "::tolower" in dns_key_body,
+        ("std::transform" in dns_key_body and "::tolower" in dns_key_body) or "networkEndpointKeyFor(host, port)" in dns_key_body,
         "DNS cache key must lowercase host names so equivalent domains share one last-good-IP entry",
     )
-    network_key_start = socket.find("static std::string mtProxyNetworkEndpointKeyFor")
-    network_key_end = socket.find("static std::string mtProxyEndpointKeyFor", network_key_start)
-    network_key_body = socket[network_key_start:network_key_end]
+    network_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::networkEndpointKeyFor")
+    network_key_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::endpointKeyFor", network_key_start)
+    network_key_body = endpoint_policy[network_key_start:network_key_end]
     require(
         network_key_start != -1
         and "std::transform" in network_key_body
@@ -344,7 +349,7 @@ def main():
         "TCP connect gate must use the host/port network key, not the secret/SNI FakeTLS endpoint key",
     )
     require(
-        "MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_REPEAT_MS" in socket
+        "MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_REPEAT_MS" in endpoint_policy
         and "proxyEndpointTcpConnectGatePublished" in tcp_gate_body
         and "tcp_connect_gate_wait" in tcp_gate_body
         and "if (!proxyEndpointTcpConnectGatePublished)" in tcp_gate_body,
@@ -363,7 +368,8 @@ def main():
     dns_cache_body = socket[dns_cache_start:dns_cache_end]
     require(
         "currentMtProxyDnsCacheKey" in dns_cache_body
-        and "proxyEndpointDnsCache" in dns_cache_body
+        and "MtProxyEndpointPolicy::useCachedHostAddress" in dns_cache_body
+        and "MtProxyEndpointPolicy::storeResolvedAddress" in dns_cache_body
         and "currentMtProxyEndpointKey" not in dns_cache_body
         and "proxyEndpointResilience" not in dns_cache_body,
         "DNS cache use/store path must not depend on the per-secret/SNI resilience endpoint key",
@@ -403,9 +409,9 @@ def main():
         "applyMtProxyPhaseAdaptiveRecipe" in socket,
         "FakeTLS failures must affect the next connection recipe, not only logs",
     )
-    recipe_start = socket.find("static bool mtProxyEndpointFailureNeedsRecipe")
-    recipe_end = socket.find("static int64_t mtProxyEndpointCooldownMs", recipe_start)
-    recipe_body = socket[recipe_start:recipe_end]
+    recipe_start = endpoint_policy.find("bool MtProxyEndpointPolicy::failureNeedsRecipe")
+    recipe_end = endpoint_policy.find("int64_t MtProxyEndpointPolicy::cooldownMs", recipe_start)
+    recipe_body = endpoint_policy[recipe_start:recipe_end]
     require(
         "client_hello_sent_no_server_hello" in recipe_body
         and "server_hello_hmac_mismatch" in recipe_body
@@ -424,11 +430,11 @@ def main():
     failure_start = socket.find("void ConnectionSocket::recordMtProxyEndpointFailure")
     failure_end = socket.find("void ConnectionSocket::recordMtProxyEndpointHandshakeOk", failure_start)
     failure_body = socket[failure_start:failure_end]
-    state_key_start = socket.find("std::string ConnectionSocket::mtProxyEndpointStateKeyForPhase")
-    state_key_end = socket.find("void ConnectionSocket::resetMtProxyEndpointStateForKey", state_key_start)
-    state_key_body = socket[state_key_start:state_key_end]
+    state_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::stateKeyForPhase")
+    state_key_end = endpoint_policy.find("bool MtProxyEndpointPolicy::failureNeedsCooldown", state_key_start)
+    state_key_body = endpoint_policy[state_key_start:state_key_end]
     require(
-        "mtProxyEndpointStateKeyForPhase(phase)" in failure_body,
+        "MtProxyEndpointPolicy::recordFailure" in failure_body,
         "endpoint failure recording must route through the phase-aware endpoint-state key helper",
     )
     require(
@@ -437,28 +443,30 @@ def main():
         and '"tcp_connected_no_pong"' in state_key_body
         and '"mtproxy_packet_sent_no_response"' in state_key_body
         and '"dropped_early_after_appdata"' in state_key_body
-        and "currentMtProxyNetworkEndpointKey" in state_key_body,
+        and "networkEndpointKey" in state_key_body,
         "DNS/TCP/plain-dd failures must record cooldown on the host/port network key, while FakeTLS recipe stays secret/SNI-scoped",
     )
     require(
-        "proxyEndpointResilience[stateKey]" in failure_body
-        and "proxyEndpointResilience[currentMtProxyEndpointKey]" in failure_body,
+        "proxyEndpointResilience[result.stateKey]" in endpoint_policy
+        and "proxyEndpointResilience[context.endpointKey]" in endpoint_policy,
         "failure cooldown and FakeTLS recipe must use separate state entries when the phase requires it",
     )
     require(
-        "currentSecretIsFakeTls && mtProxyEndpointFailureNeedsRecipe(phase)" in failure_body,
+        "context.fakeTls = currentSecretIsFakeTls" in failure_body
+        and "context.fakeTls && failureNeedsRecipe(phase)" in endpoint_policy,
         "recipe level must only advance for FakeTLS connections, never for dd/legacy MTProxy",
     )
     success_start = socket.find("void ConnectionSocket::recordMtProxyEndpointDataPathSuccess")
     success_end = socket.find("bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress", success_start)
     success_body = socket[success_start:success_end]
     require(
-        "resetMtProxyEndpointStateForKey(currentMtProxyNetworkEndpointKey" in success_body
-        and "resetMtProxyEndpointStateForKey(currentMtProxyEndpointKey" in success_body,
+        "MtProxyEndpointPolicy::recordDataPathSuccess" in success_body
+        and "resetStateForKey(context.networkEndpointKey" in endpoint_policy
+        and "resetStateForKey(context.endpointKey" in endpoint_policy,
         "endpoint data-path success must clear both host/port network cooldown and secret/SNI recipe cooldown",
     )
     invalid_reason_guard = success_body.find('strcmp(reason, "first_tls_app_recv") != 0')
-    first_reset = success_body.find("resetMtProxyEndpointStateForKey")
+    first_reset = success_body.find("MtProxyEndpointPolicy::recordDataPathSuccess")
     require(
         'reason == nullptr' in success_body
         and 'strcmp(reason, "first_tls_app_recv") != 0' in success_body
@@ -471,15 +479,16 @@ def main():
         "endpoint data-path success helper must reject non-appdata reasons before clearing endpoint cooldown/backoff",
     )
     require(
-        "MT_PROXY_ENDPOINT_RECIPE_MAX_LEVEL = 3" in socket,
+        "MT_PROXY_ENDPOINT_RECIPE_MAX_LEVEL = 3" in endpoint_policy,
         "phase-adaptive recipe must have three levels: fragmentation, Android profile, quiet startup",
     )
     recipe_apply_start = socket.find("void ConnectionSocket::applyMtProxyPhaseAdaptiveRecipe")
     recipe_apply_end = socket.find("void ConnectionSocket::markProxyHandshakeClientHelloSent", recipe_apply_start)
     recipe_apply_body = socket[recipe_apply_start:recipe_apply_end]
-    fragment_step = recipe_apply_body.find("currentClientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT")
-    profile_step = recipe_apply_body.find("currentEffectiveProxyTlsProfile = mtProxyEndpointAdaptiveTlsProfile")
-    quiet_step = recipe_apply_body.find("currentConnectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET")
+    adaptive_policy = (ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp").read_text(encoding="utf-8", errors="replace")
+    fragment_step = adaptive_policy.find("result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT")
+    profile_step = adaptive_policy.find("result.effectiveTlsProfile = adaptiveTlsProfile")
+    quiet_step = adaptive_policy.find("result.connectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET")
     require(
         fragment_step != -1
         and profile_step != -1
@@ -488,22 +497,22 @@ def main():
         "phase-adaptive recipe must progress in order: fragmentation, Android profile, then quieter startup",
     )
     require(
-        "currentConnectionPatternMode == MT_PROXY_CONNECTION_PATTERN_BROWSER" in recipe_apply_body
-        and "currentConnectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET" in recipe_apply_body,
+        "result.connectionPatternMode == MT_PROXY_CONNECTION_PATTERN_BROWSER" in adaptive_policy
+        and "result.connectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET" in adaptive_policy,
         "phase-adaptive quiet-start step must make Browser mode quieter after repeated post-ClientHello failures",
     )
     require(
-        "mtProxyEndpointAdaptiveTlsProfile" in socket
-        and "currentEffectiveProxyTlsProfile = mtProxyEndpointAdaptiveTlsProfile" in socket,
+        "adaptiveTlsProfile" in adaptive_policy
+        and "result.effectiveTlsProfile = adaptiveTlsProfile" in adaptive_policy,
         "phase-adaptive recipe must switch Auto/AutoRotate to another stable Android TLS profile",
     )
     require(
-        "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in socket
-        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in socket,
+        "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in adaptive_policy
+        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy,
         "phase-adaptive profile step must stay inside Android-family TLS profiles",
     )
     require(
-        "recipeLevel >= 3" in socket and "MT_PROXY_CONNECTION_PATTERN_QUIET" in socket,
+        "input.recipeLevel >= 3" in adaptive_policy and "MT_PROXY_CONNECTION_PATTERN_QUIET" in adaptive_policy,
         "quiet startup must be the third phase-adaptive step, after profile adaptation",
     )
     require(

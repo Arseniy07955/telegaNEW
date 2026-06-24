@@ -7,6 +7,7 @@
 #include "tgnet/ConnectionSocket.h"
 #include "tgnet/FileLog.h"
 #include "tgnet/Handshake.h"
+#include "tgnet/MtProxyOptions.h"
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/bn.h>
@@ -17,6 +18,14 @@ JavaVM *java;
 
 jclass jclass_RequestTimeDelegate;
 jmethodID jclass_RequestTimeDelegate_run;
+
+jclass jclass_MtProxyOptions;
+jfieldID jclass_MtProxyOptions_tlsProfile;
+jfieldID jclass_MtProxyOptions_clientHelloFragmentation;
+jfieldID jclass_MtProxyOptions_connectionPatternMode;
+jfieldID jclass_MtProxyOptions_recordSizingMode;
+jfieldID jclass_MtProxyOptions_timingMode;
+jfieldID jclass_MtProxyOptions_startupCoverMode;
 
 jclass jclass_ConnectionsManager;
 jmethodID jclass_ConnectionsManager_onRequestClear;
@@ -42,6 +51,20 @@ jmethodID jclass_ConnectionsManager_onIntegrityCheckClassic;
 jmethodID jclass_ConnectionsManager_onCaptchaCheck;
 
 bool check_utf8(const char *data, size_t len);
+
+static MtProxyOptions readMtProxyOptions(JNIEnv *env, jobject options) {
+    if (options == nullptr) {
+        return MtProxyOptions();
+    }
+    MtProxyOptions nativeOptions;
+    nativeOptions.tlsProfile = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_tlsProfile);
+    nativeOptions.clientHelloFragmentation = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_clientHelloFragmentation);
+    nativeOptions.connectionPatternMode = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_connectionPatternMode);
+    nativeOptions.recordSizingMode = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_recordSizingMode);
+    nativeOptions.timingMode = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_timingMode);
+    nativeOptions.startupCoverMode = (int32_t) env->GetIntField(options, jclass_MtProxyOptions_startupCoverMode);
+    return normalizeMtProxyOptions(nativeOptions);
+}
 
 jlong getFreeBuffer(JNIEnv *env, jclass c, jint length) {
     return (jlong) (intptr_t) BuffersStorage::getInstance().getFreeBuffer((uint32_t) length);
@@ -224,13 +247,14 @@ void applyDatacenterAddress(JNIEnv *env, jclass c, jint instanceNum, jint datace
     }
 }
 
-void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyConnectionPatternMode, jint mtProxyRecordSizingMode, jint mtProxyTimingMode, jint mtProxyStartupCoverMode) {
+void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jobject options) {
     const char *addressStr = env->GetStringUTFChars(address, 0);
     const char *usernameStr = env->GetStringUTFChars(username, 0);
     const char *passwordStr = env->GetStringUTFChars(password, 0);
     const char *secretStr = env->GetStringUTFChars(secret, 0);
+    MtProxyOptions nativeOptions = readMtProxyOptions(env, options);
 
-    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyConnectionPatternMode, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode, (int32_t) mtProxyStartupCoverMode);
+    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, nativeOptions);
 
     if (addressStr != 0) {
         env->ReleaseStringUTFChars(address, addressStr);
@@ -325,18 +349,19 @@ void applyDnsConfig(JNIEnv *env, jclass c, jint instanceNum, jlong address, jstr
     }
 }
 
-jlong checkProxy(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyConnectionPatternMode, jint mtProxyRecordSizingMode, jint mtProxyTimingMode, jint mtProxyStartupCoverMode, jobject requestTimeFunc) {
+jlong checkProxy(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jobject options, jobject requestTimeFunc) {
     const char *addressStr = env->GetStringUTFChars(address, 0);
     const char *usernameStr = env->GetStringUTFChars(username, 0);
     const char *passwordStr = env->GetStringUTFChars(password, 0);
     const char *secretStr = env->GetStringUTFChars(secret, 0);
+    MtProxyOptions nativeOptions = readMtProxyOptions(env, options);
 
     if (requestTimeFunc != nullptr) {
         DEBUG_REF("sendRequest requestTimeFunc");
         requestTimeFunc = env->NewGlobalRef(requestTimeFunc);
     }
 
-    jlong result = ConnectionsManager::getInstance(instanceNum).checkProxy(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyConnectionPatternMode, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode, (int32_t) mtProxyStartupCoverMode, [instanceNum, requestTimeFunc](int64_t time, const std::string &diagnostic) {
+    jlong result = ConnectionsManager::getInstance(instanceNum).checkProxy(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, nativeOptions, [instanceNum, requestTimeFunc](int64_t time, const std::string &diagnostic) {
         if (requestTimeFunc != nullptr) {
             jstring diagnosticString = jniEnv[instanceNum]->NewStringUTF(diagnostic.c_str());
             jniEnv[instanceNum]->CallVoidMethod(requestTimeFunc, jclass_RequestTimeDelegate_run, time, diagnosticString);
@@ -581,7 +606,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_cancelRequestsForGuid", "(II)V", (void *) cancelRequestsForGuid},
         {"native_bindRequestToGuid", "(III)V", (void *) bindRequestToGuid},
         {"native_applyDatacenterAddress", "(IILjava/lang/String;I)V", (void *) applyDatacenterAddress},
-        {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIII)V", (void *) setProxySettings},
+        {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;)V", (void *) setProxySettings},
         {"native_setWssTransportSettings", "(IIILjava/lang/String;ILjava/lang/String;ZLjava/lang/String;ILjava/lang/String;Ljava/lang/String;ZZ)V", (void *) setWssTransportSettings},
         {"native_getConnectionState", "(I)I", (void *) getConnectionState},
         {"native_setUserId", "(IJ)V", (void *) setUserId},
@@ -599,7 +624,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_setPushConnectionEnabled", "(IZ)V", (void *) setPushConnectionEnabled},
         {"native_setJava", "(Z)V", (void *) setJava},
         {"native_applyDnsConfig", "(IJLjava/lang/String;I)V", (void *) applyDnsConfig},
-        {"native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIILorg/telegram/tgnet/RequestTimeDelegate;)J", (void *) checkProxy},
+        {"native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;Lorg/telegram/tgnet/RequestTimeDelegate;)J", (void *) checkProxy},
         {"native_cancelProxyCheck", "(IJ)V", (void *) cancelProxyCheck},
         {"native_onHostNameResolved", "(Ljava/lang/String;JLjava/lang/String;)V", (void *) onHostNameResolved},
         {"native_discardConnection", "(III)V", (void *) discardConnection},
@@ -651,6 +676,36 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     }
     jclass_RequestTimeDelegate_run = env->GetMethodID(jclass_RequestTimeDelegate, "run", "(JLjava/lang/String;)V");
     if (jclass_RequestTimeDelegate_run == 0) {
+        return JNI_FALSE;
+    }
+
+    DEBUG_REF("MtProxyOptions class");
+    jclass_MtProxyOptions = (jclass) env->NewGlobalRef(env->FindClass("org/telegram/tgnet/MtProxyOptions"));
+    if (jclass_MtProxyOptions == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_tlsProfile = env->GetFieldID(jclass_MtProxyOptions, "tlsProfile", "I");
+    if (jclass_MtProxyOptions_tlsProfile == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_clientHelloFragmentation = env->GetFieldID(jclass_MtProxyOptions, "clientHelloFragmentation", "I");
+    if (jclass_MtProxyOptions_clientHelloFragmentation == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_connectionPatternMode = env->GetFieldID(jclass_MtProxyOptions, "connectionPatternMode", "I");
+    if (jclass_MtProxyOptions_connectionPatternMode == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_recordSizingMode = env->GetFieldID(jclass_MtProxyOptions, "recordSizingMode", "I");
+    if (jclass_MtProxyOptions_recordSizingMode == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_timingMode = env->GetFieldID(jclass_MtProxyOptions, "timingMode", "I");
+    if (jclass_MtProxyOptions_timingMode == 0) {
+        return JNI_FALSE;
+    }
+    jclass_MtProxyOptions_startupCoverMode = env->GetFieldID(jclass_MtProxyOptions, "startupCoverMode", "I");
+    if (jclass_MtProxyOptions_startupCoverMode == 0) {
         return JNI_FALSE;
     }
 

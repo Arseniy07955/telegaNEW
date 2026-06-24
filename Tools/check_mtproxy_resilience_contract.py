@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
+ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
+ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
 CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
@@ -39,7 +42,10 @@ def slice_between(text: str, start: str, end: str) -> str:
 
 def main() -> None:
     socket = read(SOCKET)
+    endpoint_policy = read(ENDPOINT_POLICY)
+    adaptive_policy = read(ADAPTIVE_POLICY)
     socket_h = read(SOCKET_H)
+    socket_state = socket_h + "\n" + read(MACHINE_H) + "\n" + socket
     connections_java = read(CONNECTIONS_JAVA)
     proxy_list = read(PROXY_LIST)
     diagnostics = read(DIAGNOSTICS)
@@ -60,19 +66,19 @@ def main() -> None:
         "void ConnectionSocket::requestPendingHostResolve",
     )
     endpoint_key = slice_between(
-        socket,
-        "std::string ConnectionSocket::mtProxyEndpointStateKeyForPhase",
-        "void ConnectionSocket::resetMtProxyEndpointStateForKey",
+        endpoint_policy,
+        "std::string MtProxyEndpointPolicy::stateKeyForPhase",
+        "bool MtProxyEndpointPolicy::failureNeedsCooldown",
     )
     recipe = slice_between(
-        socket,
-        "static bool mtProxyEndpointFailureNeedsRecipe",
-        "static int64_t mtProxyEndpointCooldownMs",
+        adaptive_policy,
+        "bool MtProxyAdaptivePolicy::failureNeedsRecipe",
+        "int32_t MtProxyAdaptivePolicy::adaptiveTlsProfile",
     )
     cooldown = slice_between(
-        socket,
-        "static int64_t mtProxyEndpointCooldownMs",
-        "static uint32_t mtProxyDataAwareIptDelayMs",
+        endpoint_policy,
+        "static int64_t cooldownMs",
+        "bool MtProxyEndpointPolicy::extractSslipIpv4Address",
     )
     failure = slice_between(
         socket,
@@ -111,7 +117,7 @@ def main() -> None:
     )
 
     # Layer 1: DNS and endpoint stability. These phases happen before JA4 exists.
-    sslip_pos = open_connection.find("mtProxyExtractSslipIpv4Address(*proxyAddress")
+    sslip_pos = open_connection.find("MtProxyEndpointPolicy::extractSslipIpv4Address(*proxyAddress")
     cache_pos = open_connection.find("mtProxyEndpointUseCachedHostAddress(*proxyAddress")
     coalesce_pos = open_connection.find("scheduleMtProxyDnsCoalesceIfNeeded(ipv6)")
     resolve_pos = open_connection.find("requestPendingHostResolve();")
@@ -121,20 +127,21 @@ def main() -> None:
         "host_resolve_failed path must be sslip.io -> last-good IP cache -> DNS coalesce -> delegate DNS",
     )
     require(
-        "currentMtProxyNetworkEndpointKey" in socket_h
-        and "currentMtProxyDnsCacheKey" in socket_h
-        and "proxyEndpointDnsCoalesceReady" in socket_h,
+        "currentMtProxyNetworkEndpointKey" in socket_state
+        and "currentMtProxyDnsCacheKey" in socket_state
+        and "proxyEndpointDnsCoalesceReady" in socket_state,
         "DNS/TCP endpoint state must be stored separately from the FakeTLS recipe key",
     )
     require(
         'phase == "host_resolve_failed"' in endpoint_key
         and 'phase == "tcp_not_connected"' in endpoint_key
-        and "currentMtProxyNetworkEndpointKey" in endpoint_key,
+        and "networkEndpointKey" in endpoint_key,
         "host_resolve_failed and tcp_not_connected must use the host:port network key",
     )
     require(
         '"host_resolve_failed"' not in recipe
-        and '"tcp_not_connected"' not in recipe,
+        and 'diagnostic == "tcp_not_connected"' in recipe
+        and "return false; // ClientHello was not sent, so JA4 did not cause this failure." in recipe,
         "pre-TLS DNS/TCP failures must not change JA4/profile/ClientHello recipe",
     )
 
@@ -151,8 +158,8 @@ def main() -> None:
         "tcp failures and dd/plain no-response must feed endpoint cooldown",
     )
     require(
-        "mtProxyEndpointStateKeyForPhase(phase)" in failure
-        and "proxyEndpointResilience[stateKey]" in failure,
+        "MtProxyEndpointPolicy::recordFailure" in failure
+        and "stateKeyForPhase" in endpoint_policy,
         "endpoint failures must route through the phase-aware state-key helper",
     )
     require(
@@ -169,13 +176,15 @@ def main() -> None:
     ):
         require(phase in recipe, f"FakeTLS recipe must react to {phase}")
     require(
-        "currentSecretIsFakeTls && mtProxyEndpointFailureNeedsRecipe(phase)" in failure,
+        "context.fakeTls = currentSecretIsFakeTls" in failure
+        and "context.fakeTls && failureNeedsRecipe(phase)" in endpoint_policy,
         "recipe level must advance only for FakeTLS connections",
     )
     require(
-        "currentClientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT" in socket
-        and "currentEffectiveProxyTlsProfile = mtProxyEndpointAdaptiveTlsProfile" in socket
-        and "currentConnectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET" in socket,
+        "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT" in adaptive_policy
+        and "result.effectiveTlsProfile = adaptiveTlsProfile" in adaptive_policy
+        and "result.connectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET" in adaptive_policy
+        and "currentClientHelloFragmentation = recipe.clientHelloFragmentation" in socket,
         "phase-adaptive recipe must progress by fragmentation, Android profile, then quiet startup",
     )
 
