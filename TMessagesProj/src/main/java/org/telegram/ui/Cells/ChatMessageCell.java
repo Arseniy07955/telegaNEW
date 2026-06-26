@@ -18382,6 +18382,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (currentMessageObject.messageOwner.video_processing_pending) {
             timeString = formatString(R.string.ScheduledTimeApprox, timeString);
         }
+        if (org.telegram.messenger.ZaStoPrivacy.KEEP_DELETED && currentMessageObject.deletedBySender) {
+            timeString = "🗑 " + timeString;
+        } else if (org.telegram.messenger.ZaStoPrivacy.KEEP_EPHEMERAL && currentMessageObject.isZastoKeptEphemeral()) {
+            timeString = "🔥 " + timeString;
+        }
         if (signString != null) {
             if (messageObject.messageOwner.via_business_bot_id != 0) {
                 currentTimeString = timeString + ", ";

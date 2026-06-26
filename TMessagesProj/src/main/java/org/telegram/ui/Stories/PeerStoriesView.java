@@ -7143,6 +7143,9 @@ public class PeerStoriesView extends SizeNotifierFrameLayout implements Notifica
         }
 
         public boolean allowScreenshots() {
+            if (org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED) {
+                return true;
+            }
             if (uploadingStory != null) {
                 return uploadingStory.entry.allowScreenshots;
             }

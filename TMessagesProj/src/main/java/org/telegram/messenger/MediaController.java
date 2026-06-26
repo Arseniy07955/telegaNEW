@@ -1785,6 +1785,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
     }
 
     private void checkScreenshots(ArrayList<Long> dates) {
+        if (ZaStoPrivacy.MUTE_SCREENSHOT_PING) {
+            return;
+        }
         if (dates == null || dates.isEmpty() || lastChatEnterTime == 0 || (lastUser == null && !(lastSecretChat instanceof TLRPC.TL_encryptedChat))) {
             return;
         }

@@ -6664,6 +6664,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean isChatNoForwards(TLRPC.Chat chat) {
+        if (ZaStoPrivacy.ALLOW_SAVE_PROTECTED) {
+            return false;
+        }
         if (chat == null) {
             return false;
         }
@@ -6681,6 +6684,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean isPeerNoForwards(long dialogId) {
+        if (ZaStoPrivacy.ALLOW_SAVE_PROTECTED) {
+            return false;
+        }
         return dialogId > 0 ? isUserNoForwards(dialogId) : isChatNoForwards(-dialogId);
     }
 
@@ -6689,6 +6695,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean isUserNoForwards(TLRPC.UserFull userFull) {
+        if (ZaStoPrivacy.ALLOW_SAVE_PROTECTED) {
+            return false;
+        }
         if (userFull == null) {
             return false;
         }
@@ -8238,13 +8247,13 @@ public class MessagesController extends BaseController implements NotificationCe
             LongSparseArray<ArrayList<Integer>> task = currentDeletingTaskMids != null ? currentDeletingTaskMids.clone() : null;
             LongSparseArray<ArrayList<Integer>> taskMedia = currentDeletingTaskMediaMids != null ? currentDeletingTaskMediaMids.clone() : null;
             AndroidUtilities.runOnUIThread(() -> {
-                if (task != null) {
+                if (!ZaStoPrivacy.KEEP_EPHEMERAL && task != null) {
                     for (int a = 0, N = task.size(); a < N; a++) {
                         ArrayList<Integer> mids = task.valueAt(a);
                         deleteMessages(mids, null, null, task.keyAt(a), 0, true, 0, !mids.isEmpty() && mids.get(0) > 0);
                     }
                 }
-                if (taskMedia != null) {
+                if (!ZaStoPrivacy.KEEP_EPHEMERAL && taskMedia != null) {
                     final boolean checkViewer = SecretMediaViewer.hasInstance() && SecretMediaViewer.getInstance().isVisible();
                     final MessageObject viewerObject = checkViewer ? SecretMediaViewer.getInstance().getCurrentMessageObject() : null;
                     for (int a = 0, N = taskMedia.size(); a < N; a++) {
@@ -11856,6 +11865,20 @@ public class MessagesController extends BaseController implements NotificationCe
             putUsers(messagesRes.users, isCache);
             putChats(messagesRes.chats, isCache);
 
+            if (ZaStoPrivacy.KEEP_DELETED && objects != null && !objects.isEmpty()) {
+                // ZaSto anti-delete: restore the "deleted by sender" mark for kept messages on load.
+                java.util.Set<Integer> zastoDeletedGlobal = ZaStoDeletedStore.get(currentAccount, 0);
+                java.util.Set<Integer> zastoDeletedDialog = ZaStoDeletedStore.get(currentAccount, dialogId);
+                if (!zastoDeletedGlobal.isEmpty() || !zastoDeletedDialog.isEmpty()) {
+                    for (int zi = 0, zn = objects.size(); zi < zn; zi++) {
+                        MessageObject zobj = objects.get(zi);
+                        if (zobj != null && (zastoDeletedGlobal.contains(zobj.getId()) || zastoDeletedDialog.contains(zobj.getId()))) {
+                            zobj.deletedBySender = true;
+                        }
+                    }
+                }
+            }
+
             if (messagesRes.animatedEmoji != null && needProcess) {
                 AnimatedEmojiDrawable.getDocumentFetcher(currentAccount).processDocuments(messagesRes.animatedEmoji);
             }
@@ -14074,6 +14097,10 @@ public class MessagesController extends BaseController implements NotificationCe
         long dialogId = messageObject.getDialogId();
         getMessagesStorage().markMessagesContentAsRead(dialogId, arrayList, 0, 0);
         getNotificationCenter().postNotificationName(NotificationCenter.messagesReadContent, dialogId, arrayList);
+        if (ZaStoPrivacy.KEEP_EPHEMERAL && (messageObject.needDrawBluredPreview() || messageObject.isVoiceOnce() || messageObject.isRoundOnce())) {
+            // Keep ephemeral content locally read but never signal the server (no destruction / no view receipt).
+            return;
+        }
         if (messageObject.getId() < 0) {
             markMessageAsRead(messageObject.getDialogId(), messageObject.messageOwner.random_id, Integer.MIN_VALUE);
         } else {
@@ -14149,6 +14176,14 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markMessageAsRead2(long dialogId, int mid, TLRPC.InputChannel inputChannel, int ttl, long taskId, boolean createDeleteTask) {
+        if (ZaStoPrivacy.KEEP_EPHEMERAL) {
+            // Never read-and-destroy ephemeral media: skip server readMessageContents and any
+            // local delete task. Clean up legacy pending tasks created before this build.
+            if (taskId != 0) {
+                getMessagesStorage().removePendingTask(taskId);
+            }
+            return;
+        }
         if (mid == 0 || ttl < 0) {
             return;
         }
@@ -20361,6 +20396,11 @@ public class MessagesController extends BaseController implements NotificationCe
                     if (arrayList == null) {
                         continue;
                     }
+                    if (ZaStoPrivacy.KEEP_DELETED) {
+                        // ZaSto anti-delete: keep the message, mark it instead of removing it from the UI.
+                        getNotificationCenter().postNotificationName(NotificationCenter.zastoMessagesMarkedDeleted, arrayList, -dialogId);
+                        continue;
+                    }
                     getNotificationCenter().postNotificationName(NotificationCenter.messagesDeleted, arrayList, -dialogId, false);
                     if (dialogId == 0) {
                         for (int b = 0, size2 = arrayList.size(); b < size2; b++) {
@@ -20390,7 +20430,9 @@ public class MessagesController extends BaseController implements NotificationCe
                         }
                     }
                 }
-                getNotificationsController().removeDeletedMessagesFromNotifications(deletedMessagesFinal, false);
+                if (!ZaStoPrivacy.KEEP_DELETED) {
+                    getNotificationsController().removeDeletedMessagesFromNotifications(deletedMessagesFinal, false);
+                }
             }
             if (deletedQuickRepliesMessagesFinal != null) {
                 for (int a = 0, size = deletedQuickRepliesMessagesFinal.size(); a < size; a++) {
@@ -20478,6 +20520,11 @@ public class MessagesController extends BaseController implements NotificationCe
             for (int a = 0, size = deletedMessages.size(); a < size; a++) {
                 long key = deletedMessages.keyAt(a);
                 ArrayList<Integer> arrayList = deletedMessages.valueAt(a);
+                if (ZaStoPrivacy.KEEP_DELETED) {
+                    // ZaSto anti-delete: persist the mark, but do NOT physically delete rows or files.
+                    ZaStoDeletedStore.mark(currentAccount, key, arrayList);
+                    continue;
+                }
                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
                     ArrayList<Long> dialogIds = getMessagesStorage().markMessagesAsDeleted(key, arrayList, false, true, 0, 0);
                     getMessagesStorage().updateDialogsWithDeletedMessages(key, -key, arrayList, dialogIds);

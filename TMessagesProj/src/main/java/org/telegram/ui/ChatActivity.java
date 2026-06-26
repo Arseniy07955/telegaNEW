@@ -2900,6 +2900,7 @@ public class ChatActivity extends BaseFragment implements
             .add(NotificationCenter.didLoadSendAsPeers)
             .add(NotificationCenter.closeChatActivity)
             .add(NotificationCenter.messagesDeleted)
+            .add(NotificationCenter.zastoMessagesMarkedDeleted)
             .add(NotificationCenter.historyCleared)
             .add(NotificationCenter.messageReceivedByServer)
             .add(NotificationCenter.messageReceivedByAck)
@@ -3470,7 +3471,7 @@ public class ChatActivity extends BaseFragment implements
             }
             final boolean noforwards = (
                 chatActivity != null && chatActivity.isPeerNoForwards() ||
-                selectedView != null && selectedView.getMessageObject() != null && selectedView.getMessageObject().messageOwner != null && selectedView.getMessageObject().messageOwner.noforwards
+                !org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && selectedView != null && selectedView.getMessageObject() != null && selectedView.getMessageObject().messageOwner != null && selectedView.getMessageObject().messageOwner.noforwards
             );
             return !isFactCheck && (
                 chatActivity != null && chatActivity.getCurrentEncryptedChat() == null &&
@@ -12030,6 +12031,9 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private boolean hasSelectedNoforwardsMessage() {
+        if (org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED) {
+            return false;
+        }
         try {
             for (int i = 0; i < selectedMessagesIds.length; ++i) {
                 for (int j = 0; j < selectedMessagesIds[i].size(); ++j) {
@@ -15388,6 +15392,10 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private Runnable sendSecretMessageRead(MessageObject messageObject, boolean readNow) {
+        if (org.telegram.messenger.ZaStoPrivacy.KEEP_EPHEMERAL) {
+            // Do not set destroyTime, do not start the TTL countdown, do not signal read.
+            return null;
+        }
         if (messageObject == null || messageObject.isOut() || !messageObject.isSecretMedia() || messageObject.messageOwner.destroyTime != 0 || messageObject.messageOwner.ttl <= 0) {
             return null;
         }
@@ -15417,6 +15425,10 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private Runnable sendSecretMediaDelete(MessageObject messageObject) {
+        if (org.telegram.messenger.ZaStoPrivacy.KEEP_EPHEMERAL) {
+            // Never schedule the show-once self-delete task.
+            return null;
+        }
         if (messageObject == null || messageObject.isOut() || !messageObject.isSecretMedia() || messageObject.messageOwner.ttl != 0x7FFFFFFF) {
             return null;
         }
@@ -18923,7 +18935,7 @@ public class ChatActivity extends BaseFragment implements
             if (selectedMessagesIds[index].indexOfKey(messageObject.getId()) >= 0) {
                 selectedMessagesIds[index].remove(messageObject.getId());
                 if (!isReport()) {
-                    if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
+                    if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
                         selectedMessagesCanCopyIds[index].remove(messageObject.getId());
                     }
                     if (!messageObject.isAnimatedEmoji() && (messageObject.isSticker() || messageObject.isAnimatedSticker()) && MessageObject.isStickerHasSet(messageObject.getDocument())) {
@@ -18960,7 +18972,7 @@ public class ChatActivity extends BaseFragment implements
                 }
                 selectedMessagesIds[index].put(messageObject.getId(), messageObject);
                 if (!isReport()) {
-                    if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
+                    if ((messageObject.type == MessageObject.TYPE_TEXT || messageObject.isAnimatedEmoji() || messageObject.caption != null) && !(!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && messageObject.messageOwner != null && messageObject.messageOwner.noforwards)) {
                         selectedMessagesCanCopyIds[index].put(messageObject.getId(), messageObject);
                     }
                     if (!messageObject.isAnimatedEmoji() && (messageObject.isSticker() || messageObject.isAnimatedSticker()) && MessageObject.isStickerHasSet(messageObject.getDocument())) {
@@ -22058,6 +22070,24 @@ public class ChatActivity extends BaseFragment implements
             removeUnreadPlane(true);
             if (updated && chatAdapter != null) {
                 chatAdapter.notifyDataSetChanged(false);
+            }
+        } else if (id == NotificationCenter.zastoMessagesMarkedDeleted) {
+            // ZaSto anti-delete: the remote side deleted these, but we keep them — just mark + redraw.
+            ArrayList<Integer> markedIds = (ArrayList<Integer>) args[0];
+            boolean changed = false;
+            for (int i = 0; i < markedIds.size(); i++) {
+                int mid = markedIds.get(i);
+                MessageObject obj = messagesDict[0].get(mid);
+                if (obj == null) {
+                    obj = messagesDict[1].get(mid);
+                }
+                if (obj != null) {
+                    obj.deletedBySender = true;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                updateVisibleRows();
             }
         } else if (id == NotificationCenter.messagesDeleted) {
             boolean scheduled = (Boolean) args[2];
@@ -30579,7 +30609,7 @@ public class ChatActivity extends BaseFragment implements
             allowPin = false;
         }
         allowPin = allowPin && message.getId() > 0 && (message.messageOwner.action == null || message.messageOwner.action instanceof TLRPC.TL_messageActionEmpty) && !message.isExpiredStory() && message.type != MessageObject.TYPE_STORY_MENTION;
-        boolean noforwards = isPeerNoForwards() || message.messageOwner.noforwards || getDialogId() == UserObject.VERIFY;
+        boolean noforwards = isPeerNoForwards() || (!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && message.messageOwner.noforwards) || getDialogId() == UserObject.VERIFY;
         boolean noforwardsOrPaidMedia = noforwards || message.type == MessageObject.TYPE_PAID_MEDIA;
         boolean allowUnpin = message.getDialogId() != mergeDialogId && allowPin && (pinnedMessageObjects.containsKey(message.getId()) || groupedMessages != null && !groupedMessages.messages.isEmpty() && pinnedMessageObjects.containsKey(groupedMessages.messages.get(0).getId())) && !message.isExpiredStory();
         boolean allowEdit = message.canEditMessage(currentChat) && !chatActivityEnterView.hasAudioToSend() && message.getDialogId() != mergeDialogId && message.type != MessageObject.TYPE_STORY && message.type != MessageObject.TYPE_POLL;
@@ -35807,7 +35837,7 @@ public class ChatActivity extends BaseFragment implements
                     builder.setTitleMultipleLines(true);
                 }
                 final int finalTimestamp = timestamp;
-                boolean noforwards = isPeerNoForwards() || (messageObject != null && messageObject.messageOwner != null && messageObject.messageOwner.noforwards);
+                boolean noforwards = isPeerNoForwards() || (!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && messageObject != null && messageObject.messageOwner != null && messageObject.messageOwner.noforwards);
                 builder.setItems(noforwards ? new CharSequence[] {LocaleController.getString(R.string.Open)} : new CharSequence[]{LocaleController.getString(R.string.Open), LocaleController.getString(R.string.Copy)}, (dialog, which) -> {
                     if (which == 0) {
                         if (str.startsWith("video?")) {
@@ -36180,7 +36210,7 @@ public class ChatActivity extends BaseFragment implements
         if (url == null || getParentActivity() == null) {
             return;
         }
-        boolean noforwards = isPeerNoForwards() || (messageObject != null && messageObject.messageOwner != null && messageObject.messageOwner.noforwards);
+        boolean noforwards = isPeerNoForwards() || (!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && messageObject != null && messageObject.messageOwner != null && messageObject.messageOwner.noforwards);
         if (url instanceof URLSpanMono) {
             if (!noforwards || getDialogId() == UserObject.VERIFY) {
                 ((URLSpanMono) url).copyToClipboard();
@@ -45172,7 +45202,7 @@ public class ChatActivity extends BaseFragment implements
             allowPin = false;
         }
         allowPin = allowPin && message.getId() > 0 && (message.messageOwner.action == null || message.messageOwner.action instanceof TLRPC.TL_messageActionEmpty) && !message.isExpiredStory() && message.type != MessageObject.TYPE_STORY_MENTION;
-        boolean noforwards = isPeerNoForwards() || message.messageOwner.noforwards || getDialogId() == UserObject.VERIFY;
+        boolean noforwards = isPeerNoForwards() || (!org.telegram.messenger.ZaStoPrivacy.ALLOW_SAVE_PROTECTED && message.messageOwner.noforwards) || getDialogId() == UserObject.VERIFY;
         boolean noforwardsOrPaidMedia = noforwards || message.type == MessageObject.TYPE_PAID_MEDIA;
         boolean allowUnpin = message.getDialogId() != mergeDialogId && allowPin && (pinnedMessageObjects.containsKey(message.getId()) || groupedMessages != null && !groupedMessages.messages.isEmpty() && pinnedMessageObjects.containsKey(groupedMessages.messages.get(0).getId())) && !message.isExpiredStory();
         boolean allowEdit = message.canEditMessage(currentChat) && !chatActivityEnterView.hasAudioToSend() && message.getDialogId() != mergeDialogId && message.type != MessageObject.TYPE_STORY && message.type != MessageObject.TYPE_POLL;

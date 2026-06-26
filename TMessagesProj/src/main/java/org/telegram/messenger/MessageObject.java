@@ -218,6 +218,7 @@ public class MessageObject {
     public int dateKeyInt;
     public String monthKey;
     public boolean deleted;
+    public boolean deletedBySender; // ZaSto anti-delete: kept after the remote side deleted it
     public boolean deletedByThanos;
     public float audioProgress;
     public float forceSeekTo = -1;
@@ -9903,6 +9904,10 @@ public class MessageObject {
             int ttl = Math.max(messageOwner.ttl, getMedia(messageOwner).ttl_seconds);
             return ttl > 0 && ((getMedia(messageOwner) instanceof TLRPC.TL_messageMediaPhoto || isVideo() || isGif()) && ttl <= 60 || isRoundVideo());
         } else if (messageOwner instanceof TLRPC.TL_message) {
+            if (ZaStoPrivacy.KEEP_EPHEMERAL) {
+                // Cloud view-once / TTL media: render normally (no blur spoiler).
+                return false;
+            }
             return (getMedia(messageOwner) != null && getMedia(messageOwner).ttl_seconds != 0) && (getMedia(messageOwner) instanceof TLRPC.TL_messageMediaPhoto || getMedia(messageOwner) instanceof TLRPC.TL_messageMediaDocument);
         }
         return false;
@@ -9916,9 +9921,25 @@ public class MessageObject {
         if (messageOwner instanceof TLRPC.TL_message_secret) {
             return (((getMedia(messageOwner) instanceof TLRPC.TL_messageMediaPhoto) || isGif()) && messageOwner.ttl > 0 && messageOwner.ttl <= 60 || isVoice() || isRoundVideo() || isVideo());
         } else if (messageOwner instanceof TLRPC.TL_message) {
+            if (ZaStoPrivacy.KEEP_EPHEMERAL) {
+                // Cloud view-once / TTL media: treat as ordinary media so it can be re-opened, saved and forwarded.
+                return false;
+            }
             return (getMedia(messageOwner) != null && getMedia(messageOwner).ttl_seconds != 0) && (getMedia(messageOwner) instanceof TLRPC.TL_messageMediaPhoto || getMedia(messageOwner) instanceof TLRPC.TL_messageMediaDocument);
         }
         return false;
+    }
+
+    // ZaSto: an incoming self-destruct / view-once / secret-TTL media we deliberately keep.
+    public boolean isZastoKeptEphemeral() {
+        if (messageOwner == null || isOutOwner()) {
+            return false;
+        }
+        if (messageOwner instanceof TLRPC.TL_message_secret) {
+            return messageOwner.ttl > 0;
+        }
+        TLRPC.MessageMedia media = getMedia(messageOwner);
+        return media != null && media.ttl_seconds != 0;
     }
 
     public static void setUnreadFlags(TLRPC.Message message, int flag) {
@@ -11503,7 +11524,7 @@ public class MessageObject {
     public boolean canForwardMessage() {
         if (isQuickReply()) return false;
         if (type == TYPE_GIFT_STARS || type == TYPE_GIFT_THEME_UPDATE || type == TYPE_SUGGEST_BIRTHDAY || type == TYPE_GIFT_OFFER || type == TYPE_SHARING_OFFER) return false;
-        return !(messageOwner instanceof TLRPC.TL_message_secret) && !needDrawBluredPreview() && !isLiveLocation() && type != MessageObject.TYPE_PHONE_CALL && !isSponsored() && !messageOwner.noforwards;
+        return !(messageOwner instanceof TLRPC.TL_message_secret) && !needDrawBluredPreview() && !isLiveLocation() && type != MessageObject.TYPE_PHONE_CALL && !isSponsored() && (ZaStoPrivacy.ALLOW_SAVE_PROTECTED || !messageOwner.noforwards);
     }
 
     public boolean canEditMedia() {
