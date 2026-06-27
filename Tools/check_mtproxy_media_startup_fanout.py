@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MESSENGER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger"
 TOOLS = ROOT / "Tools"
+RUNTIME_VERIFIER = TOOLS / "verify_mtproxy_runtime_logs.py"
 
 
 def read(path):
-    return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
 def require(condition, message, failures):
@@ -16,14 +20,124 @@ def require(condition, message, failures):
         failures.append(message)
 
 
+def method_body(text: str, signature: str) -> str:
+    start = text.find(signature)
+    if start == -1:
+        return ""
+    brace = text.find("{", start)
+    if brace == -1:
+        return ""
+    depth = 0
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return text[start:]
+
+
+def runtime_log_base(pre_usable_lines: list[str], post_usable_lines: list[str] | None = None) -> str:
+    lines = [
+        "logcat.txt:1: 06-25 20:31:30.000 connection(0x1) mtproxy_disconnect transport_state=closed epoll_registered=0 admission_active=0 tcp_gate_active=0",
+        "logcat.txt:2: 06-25 20:31:30.010 connection(0x1) mtproxy_startup server_hello_hmac_ok bytes=196",
+        "logcat.txt:3: 06-25 20:31:30.020 connection(0x1) mtproxy_startup endpoint_handshake_ok reason=server_hello_hmac_ok",
+    ]
+    lines.extend(pre_usable_lines)
+    lines.extend(
+        [
+            "logcat.txt:40: 06-25 20:31:30.090 connection(0x1) mtproxy_startup first_tls_app_recv payload=1015",
+            "logcat.txt:41: 06-25 20:31:30.100 connection(0x1) mtproxy_startup endpoint_data_path_success network_key=sberbank.dns.army:45631 key=sberbank.dns.army:45631:ee:sberbank.dns.army reason=first_tls_app_recv",
+            "logcat.txt:42: 06-25 20:31:30.110 proxy_control decision=visible_usable_success source=native_stage account=0 phase=first_tls_app_recv endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
+        ]
+    )
+    if post_usable_lines:
+        lines.extend(post_usable_lines)
+    return "\n".join(lines) + "\n"
+
+
+def run_runtime_log_checks(failures: list[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        bad_upload = tmp_path / "bad_upload.txt"
+        bad_tcp_gate = tmp_path / "bad_tcp_gate.txt"
+        bad_story = tmp_path / "bad_story.txt"
+        good = tmp_path / "good.txt"
+        bad_upload.write_text(
+            runtime_log_base(
+                [
+                    f"logcat.txt:{10 + index}: 06-25 20:31:30.0{index}0 D/tmessages upload_getFile media_startup index={index}"
+                    for index in range(4)
+                ]
+            ),
+            encoding="utf-8",
+        )
+        bad_tcp_gate.write_text(
+            runtime_log_base(
+                [
+                    f"logcat.txt:{10 + index}: 06-25 20:31:30.0{index}0 connection(0x{index + 2:x}) mtproxy_startup tcp_connect_gate active={index}"
+                    for index in range(6)
+                ]
+            ),
+            encoding="utf-8",
+        )
+        bad_story.write_text(
+            runtime_log_base(
+                [
+                    "logcat.txt:10: 06-25 20:31:30.040 D/tmessages stories preload create load operation upload_getFile story_id=10",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        good.write_text(
+            runtime_log_base(
+                [
+                    "logcat.txt:10: 06-25 20:31:30.040 D/tmessages proxy_warmup state=cold decision=allow class=media_visible account=0 active=0 max=1",
+                    "logcat.txt:11: 06-25 20:31:30.050 D/tmessages upload_getFile media_startup index=0",
+                    "logcat.txt:12: 06-25 20:31:30.060 D/tmessages proxy_warmup state=cold decision=delay class=stories_prefetch delay=1500",
+                ],
+                [
+                    "logcat.txt:43: 06-25 20:31:30.400 D/tmessages proxy_warmup state=usable decision=ramp class=media_prefetch active=2 max=4",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        cases = (
+            (bad_upload, "startup fanout before first usable success"),
+            (bad_tcp_gate, "tcp_connect_gate before first usable success"),
+            (bad_story, "stories preload must not create network file requests before usable success"),
+        )
+        for path, expected in cases:
+            result = subprocess.run([sys.executable, str(RUNTIME_VERIFIER), str(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            require(
+                result.returncode != 0 and expected in result.stderr,
+                f"runtime verifier must reject {expected}",
+                failures,
+            )
+
+        good_result = subprocess.run([sys.executable, str(RUNTIME_VERIFIER), str(good)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        require(
+            good_result.returncode == 0,
+            good_result.stderr.strip() or "runtime verifier must accept throttled warmup fanout",
+            failures,
+        )
+
+
 def main():
     failures = []
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
     health = read(MESSENGER / "ProxyHealthStore.java")
+    warmup = read(MESSENGER / "ProxyWarmupGate.java")
     loader = read(MESSENGER / "FileLoader.java")
     queue = read(MESSENGER / "FileLoaderPriorityQueue.java")
     operation = read(MESSENGER / "FileLoadOperation.java")
     all_checks = read(TOOLS / "check_mtproxy_all.py")
+    verifier = read(RUNTIME_VERIFIER)
+    mark_usable = method_body(runtime, "public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now)")
+    mark_failure = method_body(runtime, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
 
     require(
         "lastUsableSuccessTime" in health
@@ -32,25 +146,76 @@ def main():
         failures,
     )
     require(
-        "MEDIA_STARTUP_PRE_USABLE_REQUEST_LIMIT" in runtime
-        and "MEDIA_STARTUP_RAMP_STEP_MS" in runtime
-        and "fileLoaderStartupOperationLimit" in runtime
-        and "fileLoaderStartupRequestLimit" in runtime,
-        "ProxyRuntimeStateStore must expose startup media fanout limits with a gradual post-usable ramp",
+        "public final class ProxyWarmupGate" in warmup
+        and "public enum ProxyWarmupState" in warmup
+        and "COLD" in warmup
+        and "WARMING" in warmup
+        and "USABLE" in warmup
+        and "DEGRADED" in warmup,
+        "startup media fanout must use a shared ProxyWarmupGate with explicit COLD/WARMING/USABLE/DEGRADED state",
+        failures,
+    )
+    for request_class in (
+        "INIT_CRITICAL",
+        "USER_VISIBLE",
+        "MEDIA_VISIBLE",
+        "MEDIA_PREFETCH",
+        "STORIES_PREFETCH",
+        "STICKER_PREFETCH",
+        "CONTACTS_SYNC",
+        "BACKGROUND_REFRESH",
+    ):
+        require(request_class in warmup, f"ProxyWarmupGate must classify {request_class} requests", failures)
+    require(
+        "canStartNetworkHeavyOperation" in warmup
+        and "delayForNetworkHeavyOperation" in warmup
+        and "onProxyUsable" in warmup
+        and "onProxyFailure" in warmup
+        and "maxActiveMediaRequestsPerEndpoint" in warmup
+        and "maxUploadGetFileOffsetsPerFile" in warmup,
+        "ProxyWarmupGate must expose allow/delay/success/failure and media fanout limit APIs",
         failures,
     )
     require(
-        "isMtProxyStartupFanoutLimited" in runtime
-        and "isMtProxyEnabledForStartupFanout" in runtime,
-        "startup fanout limiting must be scoped to enabled MTProxy endpoints",
+        "PRE_USABLE_MEDIA_LIMIT = 1" in warmup
+        and "PRE_USABLE_PREFETCH_LIMIT = 0" in warmup
+        and "USABLE_RAMP_STEP_MS = 400" in warmup
+        and "USABLE_RAMP_INITIAL_LIMIT = 2" in warmup
+        and "USABLE_RAMP_SECOND_LIMIT = 4" in warmup
+        and "USABLE_RAMP_STABLE_MS = 5000" in warmup,
+        "ProxyWarmupGate must encode the requested pre-usable and post-usable ramp limits",
+        failures,
+    )
+    require(
+        '"proxy_warmup state=' in warmup
+        and "decision=delay" in warmup
+        and "decision=allow" in warmup
+        and "decision=release_delayed" in warmup
+        and "decision=ramp" in warmup,
+        "ProxyWarmupGate must log explicit proxy_warmup allow/delay/release/ramp decisions",
+        failures,
+    )
+    require(
+        "ProxyWarmupGate.onProxyUsable" in mark_usable
+        and "ProxyEndpointKey.liveStage(proxyInfo)" in mark_usable,
+        "usable MTProxy proof must switch ProxyWarmupGate to USABLE for the live endpoint",
+        failures,
+    )
+    require(
+        "ProxyWarmupGate.onProxyFailure" in mark_failure
+        and "ProxyPhasePolicy.isPunitiveFailure" in mark_failure,
+        "punitive endpoint failures must notify ProxyWarmupGate without using local/live phases",
         failures,
     )
     require(
         "new FileLoaderPriorityQueue(instance, this," in loader
         and "canStartProxyStartupMediaOperation" in loader
         and "scheduleProxyStartupFanoutRecheck" in loader
-        and "countProxyStartupActiveLoadOperations" in loader,
-        "FileLoader must enforce an account-wide startup media operation gate across all DC queues",
+        and "countProxyStartupActiveLoadOperations" in loader
+        and "ProxyWarmupGate.canStartNetworkHeavyOperation" in loader
+        and "ProxyWarmupGate.maxActiveMediaRequestsPerEndpoint" in loader
+        and "ProxyWarmupGate.delayForNetworkHeavyOperation" in loader,
+        "FileLoader must enforce an account-wide startup media operation gate across all DC queues through ProxyWarmupGate",
         failures,
     )
     require(
@@ -61,9 +226,22 @@ def main():
         failures,
     )
     require(
-        "ProxyRuntimeStateStore.fileLoaderStartupRequestLimit" in operation
-        and "proxy_control decision=file_request_fanout_limited" in operation,
-        "FileLoadOperation must cap the initial upload_getFile request window before/ramping after usable success",
+        "proxyWarmupRequestClass" in operation
+        and "ProxyWarmupGate.NetworkRequestClass.STORIES_PREFETCH" in operation
+        and "ProxyWarmupGate.NetworkRequestClass.MEDIA_PREFETCH" in operation
+        and "ProxyWarmupGate.NetworkRequestClass.STICKER_PREFETCH" in operation
+        and "ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE" in operation
+        and "ProxyWarmupGate.maxUploadGetFileOffsetsPerFile" in operation
+        and "proxy_warmup state=" in operation,
+        "FileLoadOperation must classify media/story/sticker/preload requests and cap upload_getFile offsets through ProxyWarmupGate",
+        failures,
+    )
+    require(
+        "verify_startup_warmup_fanout" in verifier
+        and "count(upload_getFile) > 3" in verifier
+        and "count(tcp_connect_gate) > 5" in verifier
+        and "stories preload must not create network file requests before usable success" in verifier,
+        "runtime verifier must enforce startup fanout acceptance criteria before first usable success",
         failures,
     )
     require(
@@ -71,11 +249,12 @@ def main():
         "full MTProxy guard suite must include the media startup fanout guard",
         failures,
     )
+    run_runtime_log_checks(failures)
 
     if failures:
-        print("MTProxy media startup fanout guard failed:")
+        print("MTProxy media startup fanout guard failed:", file=sys.stderr)
         for failure in failures:
-            print(f" - {failure}")
+            print(f" - {failure}", file=sys.stderr)
         raise SystemExit(1)
     print("MTProxy media startup fanout guard passed.")
 

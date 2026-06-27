@@ -31,20 +31,35 @@ def main() -> int:
         failures,
     )
     require(
-        "buffer_pool_pressure capacity=%u cached=%u limit=%u" in buffers_cpp,
-        "buffer pool pressure must log neutral capacity/cached/limit counters",
+        "buffer_pool_pressure size=%u active=%u cap=%u alloc_fallback=%u" in buffers_cpp,
+        "buffer pool pressure must log neutral size/active/cap/alloc_fallback counters",
         failures,
     )
     require(
         "BUFFER_POOL_PRESSURE_LOG_INTERVAL_MS" in buffers_cpp
-        and re.search(r"BUFFER_POOL_PRESSURE_LOG_INTERVAL_MS\s*=\s*1000", buffers_cpp),
-        "buffer pool pressure log must be throttled to a once-per-second interval",
+        and re.search(r"BUFFER_POOL_PRESSURE_LOG_INTERVAL_MS\s*=\s*5000", buffers_cpp),
+        "buffer pool pressure log must be throttled to a once-per-five-seconds interval",
         failures,
     )
     require(
         "lastPressureLogByCapacity" in buffers_h
         and "lastPressureLogByCapacity[capacity]" in buffers_cpp,
         "buffer pool pressure throttling must be tracked per capacity",
+        failures,
+    )
+    require(
+        "BufferPoolDebugStats" in buffers_h
+        and "bufferPoolStatsByCapacity" in buffers_h
+        and "allocFallbackCount" in buffers_cpp
+        and "reusedCount" in buffers_cpp
+        and "peakCachedCount" in buffers_cpp,
+        "buffer pool pressure must maintain per-size debug counters for fallback, reuse, and peak cache",
+        failures,
+    )
+    require(
+        "BUFFER_POOL_SUMMARY_INTERVAL_MS = 60 * 1000" in buffers_cpp
+        and "buffer_pool_summary size=%u peak=%u alloc_fallback=%u reused=%u" in buffers_cpp,
+        "buffer pool must emit a throttled summary per size class",
         failures,
     )
     require(

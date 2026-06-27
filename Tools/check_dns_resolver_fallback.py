@@ -141,14 +141,22 @@ def main() -> int:
         "resolver must bound system DNS, DoH attempts, and total DNS budget",
         failures,
     )
+    require(
+        "private static boolean dnsBudgetExpired" in connections
+        and "dnsBudgetExpired(context)" in connections
+        and "remainingDnsBudgetMs(context, 1)" not in connections,
+        "resolver chain must use an explicit budget-expired check instead of a minimum-clamped remaining timeout",
+        failures,
+    )
     require("tryAndroidDnsResolverA(context.host)" in connections and "tryInetAddressA(context.host)" in connections, "system resolver must try Android DNS before InetAddress", failures)
     require("DnsResolver.getInstance().query(null, hostName, DnsResolver.TYPE_A" in connections, "Android DnsResolver must use TYPE_A for host resolver", failures)
     require("CancellationSignal cancellationSignal = new CancellationSignal();" in connections and "cancellationSignal.cancel();" in connections, "Android DNS queries must be cancellable", failures)
     require("InetAddress.getAllByName(hostName)" in connections, "system resolver must keep InetAddress fallback", failures)
     require(
-        'logDnsResult("system", "success"' in connections
-        and 'logDnsResult("google_json_doh", "success"' in connections
-        and 'logDnsResult("cloudflare_json_doh", "success"' in connections
+        'return "system";' in connections
+        and 'return "google_json_doh";' in connections
+        and 'return "cloudflare_json_doh";' in connections
+        and 'logDnsResult(resolver.name(), "success"' in connections
         and 'FileLog.d("dns_resolver fallback provider="' in connections
         and 'FileLog.d("dns_resolver provider="' in connections,
         "DNS resolver must log neutral dns_resolver success/fallback lines",
@@ -168,7 +176,9 @@ def main() -> int:
     )
     require('"check_dns_resolver_fallback.py"' in mtproxy_all, "full MTProxy guard suite must include DNS resolver fallback guard", failures)
 
-    for class_name in ("GoogleDnsLoadTask", "MozillaDnsLoadTask"):
+    require("MozillaDnsLoadTask" not in connections and "mozilla txt" not in connections and "start mozilla" not in connections, "Cloudflare TXT fallback must not keep Mozilla task names or logs", failures)
+
+    for class_name in ("GoogleDnsLoadTask", "CloudflareDnsLoadTask"):
         task = method_body(connections, f"private static class {class_name}")
         require("loadDohJson(" in task and "openConnection()" not in task, f"{class_name} must use the shared JSON DoH loader", failures)
         require("catch (FileNotFoundException | UnknownHostException" in task and "logDohExpectedFailure(" in task, f"{class_name} must treat expected DoH failures as debug fallback noise", failures)

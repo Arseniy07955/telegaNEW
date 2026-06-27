@@ -56,6 +56,8 @@ PUNITIVE_ROTATION_PHASES = {
 }
 ROTATION_HYSTERESIS_WINDOW_MS = 30 * 1000
 ROTATION_FAILURES_TO_TRIGGER = 2
+WARMUP_UPLOAD_GET_FILE_LIMIT = 3
+WARMUP_TCP_CONNECT_GATE_LIMIT = 5
 
 
 def resolve_markers_path(path: Path) -> Path:
@@ -188,6 +190,71 @@ def verify_rotation_hysteresis(lines: list[str]) -> list[str]:
     return failures
 
 
+def verify_dns_resolver_logs(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    for line in lines:
+        if "dns_resolver fallback provider=" in line:
+            continue
+        if "FileNotFoundException" in line and "/resolve" in line and ("E/tmessages" in line or "FileLog.e" in line):
+            failures.append(f"dns resolver must not log expected DoH fallback as E/tmessages /resolve: {line}")
+        if "www.google.com/resolve" in line:
+            failures.append(f"dns resolver must not use legacy www.google.com/resolve endpoint: {line}")
+        if "Host: dns.google.com" in line or 'Host", "dns.google.com' in line:
+            failures.append(f"dns resolver must not spoof Host header for DoH: {line}")
+    return failures
+
+
+def verify_startup_warmup_fanout(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    first_usable_index: int | None = None
+    for index, line in enumerate(lines):
+        if "first_tls_app_recv" in line or "first_mtproxy_packet_recv" in line:
+            first_usable_index = index
+            break
+    if first_usable_index is None:
+        return failures
+
+    before_usable = lines[:first_usable_index]
+    upload_get_file_lines = [line for line in before_usable if "upload_getFile" in line]
+    if len(upload_get_file_lines) > WARMUP_UPLOAD_GET_FILE_LIMIT:
+        failures.append(
+            "startup fanout before first usable success: "
+            f"count(upload_getFile) > 3 actual={len(upload_get_file_lines)} first={upload_get_file_lines[0]}"
+        )
+
+    tcp_gate_lines = [line for line in before_usable if "tcp_connect_gate" in line]
+    if len(tcp_gate_lines) > WARMUP_TCP_CONNECT_GATE_LIMIT:
+        failures.append(
+            "tcp_connect_gate before first usable success: "
+            f"count(tcp_connect_gate) > 5 actual={len(tcp_gate_lines)} first={tcp_gate_lines[0]}"
+        )
+
+    story_network_lines: list[str] = []
+    for line in before_usable:
+        lower_line = line.lower()
+        if "stor" not in lower_line:
+            continue
+        if "upload_getfile" in lower_line or "create load operation" in lower_line:
+            story_network_lines.append(line)
+            continue
+        if "proxy_warmup" in lower_line and "class=stories_prefetch" in lower_line and "decision=allow" in lower_line:
+            story_network_lines.append(line)
+    if story_network_lines:
+        failures.append(
+            "stories preload must not create network file requests before usable success: "
+            f"{story_network_lines[0]}"
+        )
+
+    for index, line in enumerate(lines):
+        if "proxy_warmup state=usable decision=ramp" not in line:
+            continue
+        if index < first_usable_index:
+            failures.append(f"proxy_warmup ramp must wait for first usable success: {line}")
+        break
+
+    return failures
+
+
 def verify_lines(lines: list[str]) -> list[str]:
     failures: list[str] = []
     transport_state_lines = [line for line in lines if "transport_state=" in line]
@@ -235,6 +302,8 @@ def verify_lines(lines: list[str]) -> list[str]:
 
     failures.extend(verify_visible_success_hold(lines))
     failures.extend(verify_rotation_hysteresis(lines))
+    failures.extend(verify_dns_resolver_logs(lines))
+    failures.extend(verify_startup_warmup_fanout(lines))
 
     return failures
 

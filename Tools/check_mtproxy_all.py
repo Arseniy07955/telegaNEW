@@ -33,6 +33,7 @@ CHECKS = [
     "check_mtproto_partial_packet_log.py",
     "check_debug_parser_unmapped_logs.py",
     "check_buffer_pool_pressure.py",
+    "check_log_event_atomicity.py",
     "check_proxy_rotation_engine.py",
     "check_proxy_rotation_behavior.py",
     "check_proxy_check_diagnostics.py",

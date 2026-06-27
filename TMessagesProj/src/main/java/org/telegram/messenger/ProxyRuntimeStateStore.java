@@ -6,13 +6,6 @@ import org.telegram.tgnet.ConnectionsManager;
 
 public final class ProxyRuntimeStateStore {
 
-    private static final int MEDIA_STARTUP_PRE_USABLE_OPERATION_LIMIT = 1;
-    private static final int MEDIA_STARTUP_PRE_USABLE_REQUEST_LIMIT = 1;
-    private static final int MEDIA_STARTUP_RAMP_STEP_MS = 400;
-    private static final int MEDIA_STARTUP_RAMP_INITIAL_LIMIT = 2;
-    private static final int MEDIA_STARTUP_RAMP_INCREMENT = 2;
-    private static final int MEDIA_STARTUP_RAMP_MAX_MS = 1600;
-
     private ProxyRuntimeStateStore() {
     }
 
@@ -31,6 +24,7 @@ public final class ProxyRuntimeStateStore {
             }
             return Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey);
         }
+        ProxyWarmupGate.onProxyLivePhase(event.endpointKey, event.phase, event.timestamp);
         if (ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)) {
             markConnectionUsable(currentProxy, event.phase, event.timestamp);
             logControl("decision=visible_usable_success source=" + event.source + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey);
@@ -76,6 +70,9 @@ public final class ProxyRuntimeStateStore {
             return new Decision("visible_only", event.phase, event.endpointKey, false, visibleChanged, false);
         }
 
+        if (ProxyPhasePolicy.isPunitiveFailure(event.phase)) {
+            ProxyWarmupGate.onProxyFailure(event.endpointKey, event.phase, event.timestamp);
+        }
         ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp);
         if (ProxyPhasePolicy.canRotate(event.phase) && failure.rotationAllowed) {
             logControl("decision=rotation_trigger source=" + event.source + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey);
@@ -135,52 +132,22 @@ public final class ProxyRuntimeStateStore {
     }
 
     public static boolean isMtProxyStartupFanoutLimited(int account) {
-        if (!isMtProxyEnabledForStartupFanout()) {
-            return false;
-        }
-        long age = ProxyHealthStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, SystemClock.elapsedRealtime());
-        return age < 0 || age < MEDIA_STARTUP_RAMP_MAX_MS;
+        return ProxyWarmupGate.isMtProxyStartupFanoutLimited(account);
     }
 
     public static int fileLoaderStartupOperationLimit(int account, int normalLimit) {
-        return fileLoaderStartupFanoutLimit(account, normalLimit, MEDIA_STARTUP_PRE_USABLE_OPERATION_LIMIT);
+        return ProxyWarmupGate.maxActiveMediaRequestsPerEndpoint(account, normalLimit, ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE);
     }
 
     public static int fileLoaderStartupRequestLimit(int account, int normalLimit, boolean delayedPreload) {
-        if (delayedPreload && isMtProxyEnabledForStartupFanout()
-                && ProxyHealthStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, SystemClock.elapsedRealtime()) < 0) {
-            return 0;
-        }
-        return fileLoaderStartupFanoutLimit(account, normalLimit, MEDIA_STARTUP_PRE_USABLE_REQUEST_LIMIT);
+        ProxyWarmupGate.NetworkRequestClass requestClass = delayedPreload
+                ? ProxyWarmupGate.NetworkRequestClass.MEDIA_PREFETCH
+                : ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE;
+        return ProxyWarmupGate.maxUploadGetFileOffsetsPerFile(account, normalLimit, requestClass);
     }
 
     public static int fileLoaderStartupFanoutRecheckDelayMs(int account) {
-        return isMtProxyStartupFanoutLimited(account) ? MEDIA_STARTUP_RAMP_STEP_MS : 0;
-    }
-
-    private static int fileLoaderStartupFanoutLimit(int account, int normalLimit, int preUsableLimit) {
-        if (normalLimit <= 0 || !isMtProxyEnabledForStartupFanout()) {
-            return normalLimit;
-        }
-        long age = ProxyHealthStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, SystemClock.elapsedRealtime());
-        if (age < 0) {
-            return Math.min(normalLimit, preUsableLimit);
-        }
-        if (age >= MEDIA_STARTUP_RAMP_MAX_MS) {
-            return normalLimit;
-        }
-        int rampSteps = (int) (age / MEDIA_STARTUP_RAMP_STEP_MS);
-        int rampLimit = MEDIA_STARTUP_RAMP_INITIAL_LIMIT + rampSteps * MEDIA_STARTUP_RAMP_INCREMENT;
-        return Math.min(normalLimit, rampLimit);
-    }
-
-    private static boolean isMtProxyEnabledForStartupFanout() {
-        SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
-        return SharedConfig.isProxyEnabled()
-                && currentProxy != null
-                && currentProxy.secret != null
-                && currentProxy.secret.length() > 0
-                && !currentProxy.isWssTransport();
+        return (int) ProxyWarmupGate.delayForNetworkHeavyOperation(account, 0, ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE);
     }
 
     public static String lastEndpointDiagnostic(SharedConfig.ProxyInfo proxyInfo) {
@@ -234,6 +201,7 @@ public final class ProxyRuntimeStateStore {
         ProxyStatusMirror.markConnectionUsable(proxyInfo, normalized, now);
         ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now);
         ProxyStatusMirror.clearTransientState(proxyInfo);
+        ProxyWarmupGate.onProxyUsable(ProxyEndpointKey.liveStage(proxyInfo), now);
     }
 
     public static ProxyHealthStore.EndpointFailureResult markEndpointFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
@@ -249,6 +217,9 @@ public final class ProxyRuntimeStateStore {
         if (isCurrentProxyUsable(proxyInfo, now)) {
             logControl("decision=held_by_current_proxy_usable source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + ProxyStatusMirror.diagnostic(proxyInfo));
             return ProxyHealthStore.EndpointFailureResult.noop(normalized);
+        }
+        if (ProxyPhasePolicy.isPunitiveFailure(normalized)) {
+            ProxyWarmupGate.onProxyFailure(ProxyEndpointKey.liveStage(proxyInfo), normalized, now);
         }
         ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(proxyInfo, normalized, now);
         if (ProxyPhasePolicy.canRotate(normalized) && failure.rotationAllowed) {

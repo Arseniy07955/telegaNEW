@@ -257,11 +257,14 @@ public class FileLoader extends BaseController {
         if (operation == null || operation.preFinished) {
             return true;
         }
-        boolean delayedPreload = operation.isStory || operation.isPreloadVideoOperation();
-        if (ProxyRuntimeStateStore.fileLoaderStartupRequestLimit(currentAccount, 1, delayedPreload) <= 0) {
+        ProxyWarmupGate.NetworkRequestClass requestClass = operation.proxyWarmupRequestClass();
+        if (!ProxyWarmupGate.canStartNetworkHeavyOperation(currentAccount, 0, requestClass)) {
             return false;
         }
-        int limit = ProxyRuntimeStateStore.fileLoaderStartupOperationLimit(currentAccount, Integer.MAX_VALUE);
+        if (ProxyWarmupGate.maxUploadGetFileOffsetsPerFile(currentAccount, 1, requestClass) <= 0) {
+            return false;
+        }
+        int limit = ProxyWarmupGate.maxActiveMediaRequestsPerEndpoint(currentAccount, Integer.MAX_VALUE, requestClass);
         if (limit == Integer.MAX_VALUE || operation.wasStarted()) {
             return true;
         }
@@ -269,7 +272,12 @@ public class FileLoader extends BaseController {
     }
 
     void scheduleProxyStartupFanoutRecheck(FileLoaderPriorityQueue queue) {
-        int delay = ProxyRuntimeStateStore.fileLoaderStartupFanoutRecheckDelayMs(currentAccount);
+        scheduleProxyStartupFanoutRecheck(queue, null);
+    }
+
+    void scheduleProxyStartupFanoutRecheck(FileLoaderPriorityQueue queue, FileLoadOperation operation) {
+        ProxyWarmupGate.NetworkRequestClass requestClass = operation == null ? ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE : operation.proxyWarmupRequestClass();
+        int delay = (int) ProxyWarmupGate.delayForNetworkHeavyOperation(currentAccount, 0, requestClass);
         if (delay <= 0) {
             return;
         }

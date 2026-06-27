@@ -29,17 +29,32 @@ def main() -> int:
         failures,
     )
     require(
-        "mtproto_partial_packet need=%u got=%u" in connection,
-        "partial MTProto packet assembly must log neutral need/got counters",
+        "NetworkDebugCounters::partialPackets" in connection
+        and "NetworkDebugCounters::partialPacketBytes" in connection
+        and "NetworkDebugCounters::recordPartialPacket" in connection,
+        "partial MTProto packet assembly must update NetworkDebugCounters before logging",
         failures,
     )
-    partial_idx = connection.find("mtproto_partial_packet need=%u got=%u")
+    require(
+        "NetworkDebugCounters::verboseNetworkDebugEnabled()" in connection,
+        "partial MTProto packet logs must be gated behind verbose network debug",
+        failures,
+    )
+    require(
+        "mtproto_partial_packet assembled=%u expected=%u connection=%p" in connection,
+        "partial MTProto packet assembly must log neutral assembled/expected counters",
+        failures,
+    )
+    partial_idx = connection.find("mtproto_partial_packet assembled=%u expected=%u connection=%p")
+    counter_idx = connection.find("NetworkDebugCounters::recordPartialPacket", partial_idx - 500)
     store_idx = connection.find("restOfTheData = BuffersStorage::getInstance().getFreeBuffer(len)", partial_idx)
     require(
-        partial_idx >= 0
+        counter_idx >= 0
+        and partial_idx >= 0
         and store_idx >= 0
+        and counter_idx < partial_idx
         and partial_idx < store_idx,
-        "partial MTProto packet log must describe the normal buffer assembly path before storing restOfTheData",
+        "partial MTProto packet path must count then optionally log before storing restOfTheData",
         failures,
     )
     require(

@@ -94,6 +94,7 @@ public class FileLoaderPriorityQueue {
         int lastPriority = 0;
         boolean pauseAllNextOperations = false;
         boolean blockedByProxyStartupFanout = false;
+        FileLoadOperation firstProxyStartupBlockedOperation = null;
         int max = type == TYPE_LARGE ? MessagesController.getInstance(currentAccount).largeQueueMaxActiveOperations : MessagesController.getInstance(currentAccount).smallQueueMaxActiveOperations;
         tmpListOperations.clear();
         for (int i = 0; i < allOperations.size(); i++) {
@@ -129,6 +130,9 @@ public class FileLoaderPriorityQueue {
 //                    FileLog.d("{"+name+"}.checkLoadingOperationInternal: #" + i + " " +operation.getFileName()+" priority="+operation.getPriority()+" isStory="+operation.isStory+" preFinished="+ operation.preFinished+" pauseAllNextOperations=" + pauseAllNextOperations + " max=" + max + " => pause");
                 if (!pauseAllNextOperations && i < max) {
                     blockedByProxyStartupFanout = true;
+                    if (firstProxyStartupBlockedOperation == null) {
+                        firstProxyStartupBlockedOperation = operation;
+                    }
                 }
                 if (operation.wasStarted()) {
                     operation.pause();
@@ -140,7 +144,7 @@ public class FileLoaderPriorityQueue {
             tmpListOperations.get(i).start();
         }
         if (blockedByProxyStartupFanout && startupGate != null) {
-            startupGate.scheduleProxyStartupFanoutRecheck(this);
+            startupGate.scheduleProxyStartupFanoutRecheck(this, firstProxyStartupBlockedOperation);
         }
     }
 

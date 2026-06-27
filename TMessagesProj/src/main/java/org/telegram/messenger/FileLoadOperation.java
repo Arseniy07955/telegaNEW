@@ -269,6 +269,7 @@ public class FileLoadOperation {
     private volatile boolean writingToFilePartsStream, closeFilePartsStreamOnWriteEnd;
 
     private boolean ungzip;
+    private boolean stickerWarmupOperation;
 
     private int currentType;
     public FilePathDatabase.PathData pathSaveData;
@@ -323,6 +324,7 @@ public class FileLoadOperation {
             inputPeerPhotoFileLocation.peer = imageLocation.photoPeer;
             location = inputPeerPhotoFileLocation;
         } else if (imageLocation.stickerSet != null) {
+            stickerWarmupOperation = true;
             TLRPC.TL_inputStickerSetThumb inputStickerSetThumb = new TLRPC.TL_inputStickerSetThumb();
             inputStickerSetThumb.id = imageLocation.location.volume_id;
             inputStickerSetThumb.volume_id = imageLocation.location.volume_id;
@@ -366,6 +368,7 @@ public class FileLoadOperation {
             allowDisordererFileSave = true;
         }
         ungzip = imageLocation.imageType == FileLoader.IMAGE_TYPE_LOTTIE || imageLocation.imageType == FileLoader.IMAGE_TYPE_SVG;
+        stickerWarmupOperation = stickerWarmupOperation || ungzip;
         initialDatacenterId = datacenterId = imageLocation.dc_id;
         currentType = ConnectionsManager.FileTypePhoto;
         totalBytesCount = size;
@@ -439,6 +442,7 @@ public class FileLoadOperation {
                 }
             }
             ungzip = "application/x-tgsticker".equals(documentLocation.mime_type) || "application/x-tgwallpattern".equals(documentLocation.mime_type);
+            stickerWarmupOperation = ungzip;
             totalBytesCount = documentLocation.size;
             if (key != null) {
                 int toAdd = 0;
@@ -1331,6 +1335,19 @@ public class FileLoadOperation {
 
     public boolean isPreloadVideoOperation() {
         return isPreloadVideoOperation;
+    }
+
+    public ProxyWarmupGate.NetworkRequestClass proxyWarmupRequestClass() {
+        if (isStory) {
+            return ProxyWarmupGate.NetworkRequestClass.STORIES_PREFETCH;
+        }
+        if (isPreloadVideoOperation) {
+            return ProxyWarmupGate.NetworkRequestClass.MEDIA_PREFETCH;
+        }
+        if (stickerWarmupOperation) {
+            return ProxyWarmupGate.NetworkRequestClass.STICKER_PREFETCH;
+        }
+        return ProxyWarmupGate.NetworkRequestClass.MEDIA_VISIBLE;
     }
 
     public boolean isPreloadFinished() {
@@ -2260,11 +2277,12 @@ public class FileLoadOperation {
                 count = Math.max(0, currentMaxDownloadRequests - requestInfos.size());
             }
         }
-        int proxyStartupRequestLimit = ProxyRuntimeStateStore.fileLoaderStartupRequestLimit(currentAccount, currentMaxDownloadRequests, isStory || isPreloadVideoOperation);
+        ProxyWarmupGate.NetworkRequestClass proxyWarmupClass = proxyWarmupRequestClass();
+        int proxyStartupRequestLimit = ProxyWarmupGate.maxUploadGetFileOffsetsPerFile(currentAccount, currentMaxDownloadRequests, proxyWarmupClass);
         int proxyStartupAvailableRequests = Math.max(0, proxyStartupRequestLimit - requestInfos.size());
         if (count > proxyStartupAvailableRequests) {
             if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("proxy_control decision=file_request_fanout_limited account=" + currentAccount + " file=" + fileName + " requested=" + count + " allowed=" + proxyStartupAvailableRequests + " active=" + requestInfos.size() + " story=" + isStory + " preload=" + isPreloadVideoOperation);
+                FileLog.d("proxy_warmup state=" + ProxyWarmupGate.stateName() + " decision=delay class=" + proxyWarmupClass.name().toLowerCase() + " account=" + currentAccount + " file=" + fileName + " requested=" + count + " allowed=" + proxyStartupAvailableRequests + " active=" + requestInfos.size() + " story=" + isStory + " preload=" + isPreloadVideoOperation);
             }
             count = proxyStartupAvailableRequests;
         }

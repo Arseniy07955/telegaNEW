@@ -34,19 +34,41 @@ def main() -> int:
         failures,
     )
     require(
-        "debug_parser_unmapped constructor=0x%x" in connections,
-        "unmapped TL constructors must be logged with neutral debug_parser_unmapped wording",
+        "debug_parser_unmapped constructor=0x%x" not in connections
+        and "java_debug_parser_unmapped constructor=0x%x" not in java_connections,
+        "old debug_parser_unmapped wording must be replaced by tl_debug_unmapped_* counters",
         failures,
     )
     require(
-        "debug_parser_unmapped_packet req_msg_id=0x%" in connections,
-        "packets delegated to the Java parser must be logged as debug-parser unmapped packets",
+        "tl_debug_unmapped_constructor constructor=0x%x context=%s action=ignored" in connections,
+        "unmapped TL constructors must be logged with neutral tl_debug_unmapped_constructor wording",
+        failures,
+    )
+    require(
+        "tl_debug_unmapped_packet req_msg_id=0x%" in connections,
+        "packets delegated to the Java parser must be logged as neutral tl_debug_unmapped_packet events",
+        failures,
+    )
+    require(
+        "TL_UNMAPPED_CONSTRUCTOR_LOG_INTERVAL_MS = 30 * 1000" in connections
+        and "TL_UNMAPPED_SUMMARY_INTERVAL_MS = 60 * 1000" in connections
+        and "unmappedConstructorStats" in connections
+        and "tl_debug_unmapped_summary constructor=0x%x count=%u" in connections,
+        "native unmapped constructors must be rate-limited per constructor and summarized every 60s",
         failures,
     )
     require(
         "java received unknown constructor" not in java_connections
-        and "java_debug_parser_unmapped constructor=0x%x" in java_connections,
-        "Java parser fallback must use neutral java_debug_parser_unmapped wording for unmapped constructors",
+        and "tl_debug_unmapped_constructor constructor=0x%x context=java_parser action=ignored" in java_connections,
+        "Java parser fallback must use neutral tl_debug_unmapped_constructor wording for unmapped constructors",
+        failures,
+    )
+    require(
+        "TL_UNMAPPED_CONSTRUCTOR_LOG_INTERVAL_MS = 30_000" in java_connections
+        and "TL_UNMAPPED_SUMMARY_INTERVAL_MS = 60_000" in java_connections
+        and "unmappedConstructorStats" in java_connections
+        and "tl_debug_unmapped_summary constructor=0x%x count=%d" in java_connections,
+        "Java unmapped constructor logs must be rate-limited and summarized",
         failures,
     )
     require(
