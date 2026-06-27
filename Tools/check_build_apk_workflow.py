@@ -125,12 +125,23 @@ def check_workflow(workflow_text: str) -> list[str]:
     errors: list[str] = []
 
     required_literals = [
+        "contents: write",
         "fail-fast: false",
         '":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone"',
         "TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone",
         "dist/${{ matrix.artifact }}.apk",
         "python3 Tools/check_mtproxy_all.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
+        "release:",
+        "needs: build",
+        "actions/download-artifact@v4",
+        "pattern: ZaStoGram-standalone-*",
+        "merge-multiple: true",
+        "github.run_number",
+        "github.run_attempt",
+        "gh release create \"$TAG\" dist-release/*.apk",
+        "--prerelease",
+        "--target \"$GITHUB_SHA\"",
     ]
     for literal in required_literals:
         if literal not in workflow_text:
@@ -138,6 +149,12 @@ def check_workflow(workflow_text: str) -> list[str]:
 
     if "assembleAfatStandalone" in workflow_text:
         errors.append("Workflow must not build the universal assembleAfatStandalone task")
+
+    if re.search(r"(?m)tag(_name)?\s*:\s*(latest|nightly|prerelease|standalone|apk)\s*$", workflow_text):
+        errors.append("Workflow must not publish to a shared rolling release tag")
+
+    if "gh release upload" in workflow_text and "--clobber" in workflow_text:
+        errors.append("Workflow must not clobber release assets; each run needs a fresh prerelease tag")
 
     for expected in ABI_FLAVORS.values():
         matrix_literals = [
