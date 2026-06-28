@@ -84,7 +84,7 @@ public final class PluginUtils {
 
     /**
      * Send a local file as a document to a dialog. Mirrors exteraGram's send_document().
-     * reply*/quote objects are passed straight through (may be null).
+     * Reply/quote objects are passed straight through (may be null).
      */
     public static void sendDocument(long dialogId, String path, String caption,
                                     Object replyToMsg, Object replyToTopMsg, Object replyQuote) {

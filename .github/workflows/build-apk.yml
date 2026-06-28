@@ -133,6 +133,9 @@ jobs:
       - name: Check MTProxy architecture guards
         run: python3 Tools/check_mtproxy_all.py
 
+      - name: Check PluginUtils JavaDoc guard
+        run: python3 Tools/check_plugin_utils_javadoc.py
+
       - name: Check ZaSto edit-history guards
         run: python3 Tools/check_zasto_edit_history_contract.py
 
