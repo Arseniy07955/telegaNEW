@@ -43,7 +43,6 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.net.URLEncoder;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -1677,24 +1676,8 @@ public class SharedConfig {
     }
 
     public static void saveProxyList() {
+        // ZaStoGram: ручной порядок — сохраняем как есть, без авто-сортировки по пингу
         List<ProxyInfo> infoToSerialize = new ArrayList<>(proxyList);
-        Collections.sort(infoToSerialize, (o1, o2) -> {
-            long bias1 = SharedConfig.currentProxy == o1 ? -200000 : 0;
-            if (SharedConfig.currentWssSocksProxy == o1) {
-                bias1 -= 100000;
-            }
-            if (!o1.available) {
-                bias1 += 100000;
-            }
-            long bias2 = SharedConfig.currentProxy == o2 ? -200000 : 0;
-            if (SharedConfig.currentWssSocksProxy == o2) {
-                bias2 -= 100000;
-            }
-            if (!o2.available) {
-                bias2 += 100000;
-            }
-            return Long.compare(o1.ping + bias1, o2.ping + bias2);
-        });
         SerializedData serializedData = new SerializedData();
         serializedData.writeInt32(-1);
         serializedData.writeByte(PROXY_CURRENT_SCHEMA_VERSION);

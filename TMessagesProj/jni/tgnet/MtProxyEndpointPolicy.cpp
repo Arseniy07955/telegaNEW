@@ -22,6 +22,8 @@ static constexpr int64_t MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_REPEAT_MS = 2200;
 static constexpr int64_t MT_PROXY_ENDPOINT_INTERACTIVE_NETWORK_COOLDOWN_MAX_MS = 3500;
 static constexpr int64_t MT_PROXY_ENDPOINT_MEDIA_NETWORK_COOLDOWN_MAX_MS = 5000;
 static constexpr int64_t MT_PROXY_ENDPOINT_HEAVY_NETWORK_COOLDOWN_MAX_MS = 9000;
+static constexpr int64_t MT_PROXY_ENDPOINT_INVALID_SECRET_COOLDOWN_MIN_MS = 15 * 60 * 1000;
+static constexpr int64_t MT_PROXY_ENDPOINT_INVALID_SECRET_COOLDOWN_JITTER_MS = 15 * 60 * 1000;
 static constexpr int64_t MT_PROXY_ENDPOINT_UNSUPPORTED_COOLDOWN_MIN_MS = 15 * 60 * 1000;
 static constexpr int64_t MT_PROXY_ENDPOINT_UNSUPPORTED_COOLDOWN_JITTER_MS = 15 * 60 * 1000;
 static constexpr int64_t MT_PROXY_ENDPOINT_USABLE_SUCCESS_HOLD_MS = 45 * 1000;
@@ -44,6 +46,7 @@ struct MtProxyEndpointResilienceState {
     bool greaseProbePending = false;
     bool greaseSupported = false;
     bool greaseRejected = false;
+    bool secretDomainSanitizedLogged = false;
     std::string lastRecipeDiagnostic;
     int32_t activeTcpConnects = 0;
 };
@@ -57,6 +60,17 @@ struct MtProxyDnsCacheState {
 static pthread_mutex_t mtProxyEndpointPolicyMutex = PTHREAD_MUTEX_INITIALIZER;
 static std::map<std::string, MtProxyEndpointResilienceState> proxyEndpointResilience;
 static std::map<std::string, MtProxyDnsCacheState> proxyEndpointDnsCache;
+
+static bool isBlockedZeroAddress(const std::string &ip) {
+    struct in_addr parsedAddress;
+    if (inet_pton(AF_INET, ip.c_str(), &parsedAddress.s_addr) == 1) {
+        return parsedAddress.s_addr == 0;
+    }
+    struct in6_addr parsedIpv6Address;
+    static const struct in6_addr anyIpv6Address = IN6ADDR_ANY_INIT;
+    return inet_pton(AF_INET6, ip.c_str(), &parsedIpv6Address) == 1
+            && memcmp(&parsedIpv6Address, &anyIpv6Address, sizeof(parsedIpv6Address)) == 0;
+}
 
 static uint32_t endpointSecureRandomUint32() {
     uint32_t v;
@@ -80,6 +94,9 @@ static int64_t cooldownMs(MtProxyEndpointResilienceState &state, const std::stri
     mode = normalizeMtProxyConnectionPatternOption(mode);
     if (diagnostic == "unsupported_for_current_client") {
         return MT_PROXY_ENDPOINT_UNSUPPORTED_COOLDOWN_MIN_MS + endpointSecureRandomBounded((uint32_t) MT_PROXY_ENDPOINT_UNSUPPORTED_COOLDOWN_JITTER_MS);
+    }
+    if (diagnostic == "secret_parse_invalid_domain_control_char" || diagnostic == "secret_parse_invalid_domain") {
+        return MT_PROXY_ENDPOINT_INVALID_SECRET_COOLDOWN_MIN_MS + endpointSecureRandomBounded((uint32_t) MT_PROXY_ENDPOINT_INVALID_SECRET_COOLDOWN_JITTER_MS);
     }
     int32_t penalty = 1;
     bool networkFailure = diagnostic == "host_resolve_failed" || diagnostic == "host_resolve_timeout" || diagnostic == "tcp_not_connected";
@@ -264,6 +281,8 @@ bool MtProxyEndpointPolicy::failureNeedsCooldown(const std::string &diagnostic) 
            || diagnostic == "host_resolve_timeout"
            || diagnostic == "tcp_not_connected"
            || diagnostic == "tcp_connected_no_pong"
+           || diagnostic == "secret_parse_invalid_domain_control_char"
+           || diagnostic == "secret_parse_invalid_domain"
            || diagnostic == "unsupported_for_current_client"
            || diagnostic == "mtproxy_packet_sent_no_response"
            || diagnostic == "post_handshake_no_appdata"
@@ -382,6 +401,9 @@ bool MtProxyEndpointPolicy::useCachedHostAddress(const std::string &dnsCacheKey,
 
 void MtProxyEndpointPolicy::storeResolvedAddress(const std::string &dnsCacheKey, const std::string &ip, int64_t now) {
     if (dnsCacheKey.empty() || ip.empty()) {
+        return;
+    }
+    if (isBlockedZeroAddress(ip)) {
         return;
     }
     pthread_mutex_lock(&mtProxyEndpointPolicyMutex);
@@ -552,6 +574,21 @@ MtProxyEndpointPolicy::DataPathSuccessResult MtProxyEndpointPolicy::recordDataPa
     pthread_mutex_unlock(&mtProxyEndpointPolicyMutex);
     result.accepted = true;
     return result;
+}
+
+bool MtProxyEndpointPolicy::recordSecretDomainSanitized(const std::string &endpointKey) {
+    if (endpointKey.empty()) {
+        return true;
+    }
+    bool shouldLog = false;
+    pthread_mutex_lock(&mtProxyEndpointPolicyMutex);
+    MtProxyEndpointResilienceState &state = proxyEndpointResilience[endpointKey];
+    if (!state.secretDomainSanitizedLogged) {
+        state.secretDomainSanitizedLogged = true;
+        shouldLog = true;
+    }
+    pthread_mutex_unlock(&mtProxyEndpointPolicyMutex);
+    return shouldLog;
 }
 
 MtProxyEndpointPolicy::GreaseProbeResult MtProxyEndpointPolicy::readGreaseProbeState(const std::string &recipeCacheKey) {

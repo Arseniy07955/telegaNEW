@@ -65,6 +65,8 @@ static bool mtProxyDiagnosticNeedsReconnectBackoff(const char *diagnostic) {
            strcmp(diagnostic, "host_resolve_timeout") == 0 ||
            strcmp(diagnostic, "tcp_not_connected") == 0 ||
            strcmp(diagnostic, "tcp_connected_no_pong") == 0 ||
+           strcmp(diagnostic, "secret_parse_invalid_domain_control_char") == 0 ||
+           strcmp(diagnostic, "secret_parse_invalid_domain") == 0 ||
            strcmp(diagnostic, "unsupported_for_current_client") == 0 ||
            strcmp(diagnostic, "mtproxy_packet_sent_no_response") == 0 ||
            strcmp(diagnostic, "post_handshake_no_appdata") == 0 ||

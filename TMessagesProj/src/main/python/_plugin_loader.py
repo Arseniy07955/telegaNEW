@@ -150,8 +150,144 @@ def has_request_hooks():
             return True
         if type(inst).post_request_hook is not BasePlugin.post_request_hook:
             return True
-        # pre_request_hook is not dispatched yet, so overriding it must NOT arm the interceptor.
+        if type(inst).pre_request_hook is not BasePlugin.pre_request_hook:
+            return True
     return False
+
+
+def has_send_message_hooks():
+    from base_plugin import BasePlugin
+    for inst in _INSTANCES.values():
+        if getattr(inst, "_send_message_hook", False):
+            return True
+        if type(inst).on_send_message_hook is not BasePlugin.on_send_message_hook:
+            return True
+    return False
+
+
+def dispatch_pre_request(req_name, account, request):
+    """Run pre_request_hook for interested plugins. Returns the (possibly modified) request, or CANCEL_SENTINEL."""
+    from base_plugin import BasePlugin, HookStrategy
+    current = request
+    for inst in list(_INSTANCES.values()):
+        try:
+            matches = inst._matches_request(req_name)
+        except Exception:
+            matches = None
+        if matches is False:
+            continue
+        if matches is None and type(inst).pre_request_hook is BasePlugin.pre_request_hook:
+            continue
+        try:
+            result = inst.pre_request_hook(req_name, account, current)
+        except Exception:
+            traceback.print_exc()
+            continue
+        if result is None:
+            continue
+        strategy = getattr(result, "strategy", HookStrategy.DEFAULT)
+        if strategy == HookStrategy.CANCEL:
+            return CANCEL_SENTINEL
+        if strategy in (HookStrategy.MODIFY, HookStrategy.MODIFY_FINAL):
+            new_request = getattr(result, "request", None)
+            if new_request is not None:
+                current = new_request
+            if strategy == HookStrategy.MODIFY_FINAL:
+                break
+    return current
+
+
+def dispatch_on_send_message(account, params):
+    """Run on_send_message_hook. Plugins mutate params in place (MODIFY); returns True to CANCEL the send."""
+    from base_plugin import BasePlugin, HookStrategy
+    for inst in list(_INSTANCES.values()):
+        if not getattr(inst, "_send_message_hook", False) \
+                and type(inst).on_send_message_hook is BasePlugin.on_send_message_hook:
+            continue
+        try:
+            result = inst.on_send_message_hook(account, params)
+        except Exception:
+            traceback.print_exc()
+            continue
+        if result is None:
+            continue
+        strategy = getattr(result, "strategy", HookStrategy.DEFAULT)
+        if strategy == HookStrategy.CANCEL:
+            return True
+        if strategy == HookStrategy.MODIFY_FINAL:
+            break
+        # MODIFY: params is mutated in place (same Java object) — nothing to do here.
+    return False
+
+
+def has_update_hooks():
+    from base_plugin import BasePlugin
+    for inst in _INSTANCES.values():
+        if type(inst).on_update_hook is not BasePlugin.on_update_hook:
+            return True
+        if type(inst).on_updates_hook is not BasePlugin.on_updates_hook:
+            return True
+    return False
+
+
+def dispatch_updates(container_name, account, updates):
+    """on_updates_hook (container; CANCEL skips the whole batch) + per-update on_update_hook (observe/modify)."""
+    from base_plugin import BasePlugin, HookStrategy
+
+    # Container-level hook.
+    for inst in list(_INSTANCES.values()):
+        if type(inst).on_updates_hook is BasePlugin.on_updates_hook:
+            continue
+        try:
+            result = inst.on_updates_hook(container_name, account, updates)
+        except Exception:
+            traceback.print_exc()
+            continue
+        if result is None:
+            continue
+        strategy = getattr(result, "strategy", HookStrategy.DEFAULT)
+        if strategy == HookStrategy.CANCEL:
+            return True
+        if strategy == HookStrategy.MODIFY_FINAL:
+            break
+
+    # Per-update hook (observation / in-place modify). updates.updates (list) or updates.update (single).
+    try:
+        items = []
+        update_list = getattr(updates, "updates", None)
+        if update_list is not None:
+            for i in range(update_list.size()):
+                items.append(update_list.get(i))
+        else:
+            single = getattr(updates, "update", None)
+            if single is not None:
+                items = [single]
+        for upd in items:
+            try:
+                uname = upd.getClass().getSimpleName()
+            except Exception:
+                continue
+            for inst in list(_INSTANCES.values()):
+                if type(inst).on_update_hook is BasePlugin.on_update_hook:
+                    continue
+                try:
+                    inst.on_update_hook(uname, account, upd)
+                except Exception:
+                    traceback.print_exc()
+    except Exception:
+        pass
+    return False
+
+
+def dispatch_app_event(event_type):
+    from base_plugin import BasePlugin
+    for inst in list(_INSTANCES.values()):
+        if type(inst).on_app_event is BasePlugin.on_app_event:
+            continue
+        try:
+            inst.on_app_event(event_type)
+        except Exception:
+            traceback.print_exc()
 
 
 def dispatch_post_request(req_name, account, response, error):
@@ -186,3 +322,66 @@ def dispatch_post_request(req_name, account, response, error):
             if new_response is not None:
                 current = new_response
     return current
+
+
+# ------------------------------------------------------------------ menu items
+
+def get_menu_items(menu_type):
+    """Java-friendly list of menu items registered for a MenuItemType (for host rendering)."""
+    from java.util import ArrayList, HashMap
+    out = ArrayList()
+    for plugin_id, inst in list(_INSTANCES.items()):
+        for idx, item in enumerate(getattr(inst, "_menu_items", None) or []):
+            if getattr(item, "menu_type", None) != menu_type:
+                continue
+            row = HashMap()
+            row.put("plugin_id", str(plugin_id))
+            iid = getattr(item, "item_id", None)
+            row.put("item_id", str(iid) if iid is not None else str(idx))
+            row.put("text", str(getattr(item, "text", "")))
+            ic = getattr(item, "icon", None)
+            if ic is not None:
+                row.put("icon", str(ic))
+            sub = getattr(item, "subtext", None)
+            if sub is not None:
+                row.put("subtext", str(sub))
+            try:
+                row.put("priority", int(getattr(item, "priority", 0) or 0))
+            except Exception:
+                row.put("priority", 0)
+            out.add(row)
+    return out
+
+
+def has_menu_items(menu_type):
+    for inst in _INSTANCES.values():
+        for item in getattr(inst, "_menu_items", None) or []:
+            if getattr(item, "menu_type", None) == menu_type:
+                return True
+    return False
+
+
+def invoke_menu_item(plugin_id, item_id, context=None):
+    """Call a registered menu item's on_click(context_dict)."""
+    inst = _INSTANCES.get(plugin_id)
+    if inst is None:
+        return
+    ctx = {}
+    if context is not None:
+        try:
+            for k in context.keySet():  # Java Map -> native dict
+                ctx[str(k)] = context.get(k)
+        except Exception:
+            if isinstance(context, dict):
+                ctx = context
+    for idx, item in enumerate(getattr(inst, "_menu_items", None) or []):
+        iid = getattr(item, "item_id", None)
+        iid = str(iid) if iid is not None else str(idx)
+        if iid == str(item_id):
+            cb = getattr(item, "on_click", None)
+            if cb is not None:
+                try:
+                    cb(ctx)
+                except Exception:
+                    traceback.print_exc()
+            return

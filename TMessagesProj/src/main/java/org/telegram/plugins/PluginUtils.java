@@ -82,6 +82,19 @@ public final class PluginUtils {
         AndroidUtilities.runOnUIThread(r);
     }
 
+    /** Resolve an app drawable id by name (e.g. "msg_info"); 0 if missing. */
+    public static int resolveDrawable(String name) {
+        if (name == null || name.length() == 0) {
+            return 0;
+        }
+        try {
+            Context c = ApplicationLoader.applicationContext;
+            return c.getResources().getIdentifier(name, "drawable", c.getPackageName());
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     /**
      * Send a local file as a document to a dialog. Mirrors exteraGram's send_document().
      * Reply/quote objects are passed straight through (may be null).

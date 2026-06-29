@@ -193,6 +193,7 @@
     <string name="ProxyStatusDnsCacheHit">Using saved proxy IP...</string>
     <string name="ProxyStatusDnsCacheStore">Saved proxy IP...</string>
     <string name="ProxyStatusPhaseAdaptiveRecipe">Adjusting proxy startup recipe...</string>
+    <string name="ProxyStatusSecretDomainSanitized">Using sanitized proxy SNI...</string>
     <string name="ProxyStatusHostResolve">Resolving proxy host...</string>
     <string name="ProxyStatusConnectStart">Preparing proxy connection...</string>
     <string name="ProxyStatusTcpConnecting">Opening TCP connection...</string>
@@ -214,6 +215,8 @@
     <string name="ProxyStatusAdmissionTimeout">Proxy connection slot timed out before TCP started</string>
     <string name="ProxyStatusEndpointCooldownTimeout">Proxy cooldown timed out before TCP started</string>
     <string name="ProxyStatusDnsCoalesceTimeout">Proxy DNS wait timed out before DNS lookup started</string>
+    <string name="ProxyStatusDnsNegativeCacheHit">Proxy DNS failure is cached briefly</string>
+    <string name="ProxyStatusDnsBlockedZeroAddress">Proxy DNS returned blocked address 0.0.0.0</string>
     <string name="ProxyStatusHostResolveFailed">Could not resolve proxy host</string>
     <string name="ProxyStatusHostResolveTimeout">Proxy DNS lookup timed out</string>
     <string name="ProxyStatusTcpConnectGateTimeout">Timed out before proxy TCP start</string>

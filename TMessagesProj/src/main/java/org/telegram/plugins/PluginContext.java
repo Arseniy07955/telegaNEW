@@ -159,6 +159,26 @@ public class PluginContext {
         }
     }
 
+    /** All persisted settings for this plugin (backs BasePlugin.export_settings). */
+    public java.util.Map<String, ?> getAllSettings() {
+        try {
+            return prefs().getAll();
+        } catch (Throwable t) {
+            return new java.util.HashMap<>();
+        }
+    }
+
+    /** Ask any open plugin settings screen to rebuild (backs set_setting(reload_settings=True)). */
+    public void reloadSettings() {
+        org.telegram.messenger.AndroidUtilities.runOnUIThread(() -> {
+            try {
+                org.telegram.messenger.NotificationCenter.getGlobalInstance()
+                        .postNotificationName(org.telegram.messenger.NotificationCenter.pluginsDidLoad);
+            } catch (Throwable ignore) {
+            }
+        });
+    }
+
     // ---------------------------------------------------------------- logging
 
     public void log(String msg) {

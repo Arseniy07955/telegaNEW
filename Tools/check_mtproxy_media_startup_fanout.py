@@ -232,6 +232,15 @@ def main():
         "ProxyWarmupGate must coalesce delayed prefetch operations into account/class/endpoint buckets and log bucket_delay",
         failures,
     )
+    require(
+        "WARMUP_DECISION_LOG_DEDUP_MS" in warmup
+        and "lastDecisionLogKey" in warmup
+        and "shouldLogDecisionLocked" in warmup
+        and "DECISION_RAMP.equals(decision)" in warmup
+        and "DECISION_DELAY.equals(decision)" in warmup,
+        "ProxyWarmupGate must deduplicate repetitive ramp/delay logs by account/class/endpoint bucket",
+        failures,
+    )
     for body, owner in (
         (loader_delay, "FileLoader"),
         (media_delay, "MediaDataController"),

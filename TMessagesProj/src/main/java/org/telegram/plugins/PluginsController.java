@@ -88,6 +88,7 @@ public class PluginsController {
         }
         appContext = context.getApplicationContext();
         queue = new DispatchQueue("zasto_plugins");
+        registerAppLifecycle();
         // Build the metadata list synchronously (cheap, pure Java) so the UI is ready early.
         try {
             scanInstalled();
@@ -249,6 +250,7 @@ public class PluginsController {
                     case "author": info.author = value; break;
                     case "version": info.version = value; break;
                     case "min_version": info.minVersion = value; break;
+                    case "app_version": info.minVersion = value; break; // ">=X"; compareVersions strips the operator
                     case "icon": info.icon = value; break;
                     default: break;
                 }
@@ -541,6 +543,51 @@ public class PluginsController {
         }
     }
 
+    /** Pre-send hook: returns the (possibly modified) request, or CANCEL_SENTINEL to drop it. */
+    public Object dispatchPreRequest(String requestName, int account, Object request) {
+        if (!isPythonReady()) {
+            return request;
+        }
+        try {
+            PyObject out = loader.callAttr("dispatch_pre_request", requestName, account, request);
+            if (out == null) {
+                return request;
+            }
+            return out.toJava(Object.class); // the (possibly modified) request, or CANCEL_SENTINEL
+        } catch (Throwable t) {
+            FileLog.e(t);
+            return request;
+        }
+    }
+
+    /** Outgoing-message hook: returns true if a plugin cancelled the send (params mutated in place). */
+    public boolean dispatchSendMessage(int account, Object params) {
+        if (!isPythonReady()) {
+            return false;
+        }
+        try {
+            PyObject out = loader.callAttr("dispatch_on_send_message", account, params);
+            return out != null && out.toJava(Boolean.class);
+        } catch (Throwable t) {
+            FileLog.e(t);
+            return false;
+        }
+    }
+
+    /** Updates hook: returns true if a plugin cancelled processing this updates container. */
+    public boolean dispatchUpdates(String containerName, int account, Object updates) {
+        if (!isPythonReady()) {
+            return false;
+        }
+        try {
+            PyObject out = loader.callAttr("dispatch_updates", containerName, account, updates);
+            return out != null && out.toJava(Boolean.class);
+        } catch (Throwable t) {
+            FileLog.e(t);
+            return false;
+        }
+    }
+
     public boolean hasRequestHooks() {
         if (!isPythonReady()) {
             return false;
@@ -553,11 +600,160 @@ public class PluginsController {
         }
     }
 
+    public boolean hasSendMessageHooks() {
+        if (!isPythonReady()) {
+            return false;
+        }
+        try {
+            PyObject b = loader.callAttr("has_send_message_hooks");
+            return b != null && b.toJava(Boolean.class);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public boolean hasUpdateHooks() {
+        if (!isPythonReady()) {
+            return false;
+        }
+        try {
+            PyObject b = loader.callAttr("has_update_hooks");
+            return b != null && b.toJava(Boolean.class);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public boolean hasMenuItems(String menuType) {
+        if (!isPythonReady()) {
+            return false;
+        }
+        try {
+            PyObject b = loader.callAttr("has_menu_items", menuType);
+            return b != null && b.toJava(Boolean.class);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private void refreshRequestHooks() {
         try {
             PluginRequestInterceptor.setActive(hasRequestHooks());
         } catch (Throwable t) {
             FileLog.e(t);
+        }
+        try {
+            PluginSendMessageInterceptor.setActive(hasSendMessageHooks());
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+        try {
+            PluginUpdatesInterceptor.setActive(hasUpdateHooks());
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+        try {
+            PluginMessageMenuInterceptor.setActive(hasMenuItems("message_context_menu"));
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+    }
+
+    private void registerAppLifecycle() {
+        try {
+            if (appContext instanceof android.app.Application) {
+                ((android.app.Application) appContext).registerActivityLifecycleCallbacks(
+                        new android.app.Application.ActivityLifecycleCallbacks() {
+                            @Override public void onActivityResumed(android.app.Activity a) { dispatchAppEvent("resume"); }
+                            @Override public void onActivityPaused(android.app.Activity a) { dispatchAppEvent("pause"); }
+                            @Override public void onActivityStarted(android.app.Activity a) { dispatchAppEvent("start"); }
+                            @Override public void onActivityStopped(android.app.Activity a) { dispatchAppEvent("stop"); }
+                            @Override public void onActivityCreated(android.app.Activity a, android.os.Bundle b) { }
+                            @Override public void onActivitySaveInstanceState(android.app.Activity a, android.os.Bundle b) { }
+                            @Override public void onActivityDestroyed(android.app.Activity a) { }
+                        });
+            }
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+    }
+
+    /** Deliver an AppEvent (start/stop/pause/resume) to plugins overriding on_app_event. */
+    public void dispatchAppEvent(String event) {
+        if (!isPythonReady()) {
+            return;
+        }
+        try {
+            loader.callAttr("dispatch_app_event", event);
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+    }
+
+    // ------------------------------------------------------------------ menu items
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getMenuItems(String menuType) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (!isPythonReady()) {
+            return out;
+        }
+        try {
+            PyObject model = loader.callAttr("get_menu_items", menuType);
+            if (model != null) {
+                Object java = model.toJava(List.class);
+                if (java instanceof List) {
+                    for (Object row : (List<Object>) java) {
+                        if (row instanceof Map) {
+                            out.add((Map<String, Object>) row);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+        return out;
+    }
+
+    /** Run a menu item's on_click(context). context may be null or a Java Map of context values. */
+    public void onMenuItemClick(String pluginId, String itemId, Object context) {
+        if (!isPythonReady()) {
+            return;
+        }
+        try {
+            loader.callAttr("invoke_menu_item", pluginId, itemId, context);
+        } catch (Throwable t) {
+            logError(pluginId, "invoke_menu_item", t);
+        }
+    }
+
+    /** Append plugin DRAWER_MENU items into the drawer's ItemOptions popup. */
+    public void addDrawerMenuItems(org.telegram.ui.Components.ItemOptions io) {
+        if (io == null || !isPythonReady()) {
+            return;
+        }
+        try {
+            for (Map<String, Object> m : getMenuItems("drawer_menu")) {
+                final String pluginId = String.valueOf(m.get("plugin_id"));
+                final String itemId = String.valueOf(m.get("item_id"));
+                final String text = String.valueOf(m.get("text"));
+                final int icon = resolveDrawable(m.get("icon"));
+                io.add(icon, text, () -> onMenuItemClick(pluginId, itemId, null));
+            }
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+    }
+
+    private int resolveDrawable(Object name) {
+        if (!(name instanceof String) || appContext == null) {
+            return 0;
+        }
+        try {
+            return appContext.getResources().getIdentifier((String) name, "drawable", appContext.getPackageName());
+        } catch (Throwable t) {
+            return 0;
         }
     }
 

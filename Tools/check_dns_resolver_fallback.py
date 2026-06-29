@@ -85,6 +85,7 @@ def main() -> int:
     resolver_class = method_body(connections, "private static class ResolveHostByNameTask")
     resolver_body = method_body(resolver_class, "protected ResolvedDomain doInBackground")
     get_host_body = method_body(connections, "public static void getHostByName")
+    negative_preflight_body = method_body(connections, "public static boolean isHostResolveNegativeCached")
     load_doh = method_body(connections, "private static DohJsonResponse loadDohJson")
     chain_index = connections.find("private static final HostResolver[] HOST_RESOLVER_CHAIN")
 
@@ -107,6 +108,49 @@ def main() -> int:
     require("resolveHost(currentHostName" in resolver_body, "ResolveHostByNameTask must delegate to resolveHost chain", failures)
     require("dnsCache.get(hostName)" in get_host_body and "isFresh(now)" in get_host_body, "getHostByName must use fresh in-memory DNS cache before async resolving", failures)
     require("dnsCache.put(context.host, resolved)" in connections or "dnsCache.put(currentHostName, result)" in connections, "successful resolver results must be cached", failures)
+    require(
+        "HOST_RESOLVER_NEGATIVE_TTL_MS = 45 * 1000L" in connections
+        and "private static class NegativeDnsCacheEntry" in connections
+        and "negativeDnsCache" in connections
+        and "readNegativeDnsCache(hostName, now)" in get_host_body
+        and "readNegativeDnsCache(hostName, now)" in negative_preflight_body
+        and "DNS_NEGATIVE_CACHE_NATIVE_SENTINEL" in connections
+        and "native_onHostNameResolved(hostName, address, DNS_NEGATIVE_CACHE_NATIVE_SENTINEL)" in get_host_body,
+        "getHostByName must use a 45s negative DNS cache before coalescing or launching resolver tasks",
+        failures,
+    )
+    require(
+        "DNS_BLOCKED_ZERO_NATIVE_SENTINEL" in connections
+        and "isBlockedZeroAddress" in connections
+        and "isAnyLocalAddress()" in connections
+        and "recordBlockedZeroAddress" in connections
+        and "blockedZeroAddress()" in connections
+        and "blockedZeroAddress ? DNS_BLOCKED_ZERO_NATIVE_SENTINEL : \"\"" in connections
+        and "native_onHostNameResolved(hostName, address, DNS_BLOCKED_ZERO_NATIVE_SENTINEL)" in connections
+        and "filterBlockedZeroIpv4Addresses" in connections,
+        "resolver must treat 0.0.0.0 as dns_blocked_zero_address instead of caching or returning it as a usable IPv4",
+        failures,
+    )
+    require(
+        "filterBlockedZeroIpv6Addresses" in connections
+        and "filterIpv6Addresses(List<InetAddress> inetAddresses, ResolveContext context)" in connections
+        and "filterBlockedZeroIpv6Addresses(ipv6, null)" in connections
+        and "context.recordBlockedZeroAddress();" in method_body(connections, "private static ArrayList<String> filterIpv6Addresses")
+        and "type == 28" in connections
+        and "isBlockedZeroAddress(data)" in method_body(connections, "private static ResolvedDomain parseDohHostResponse"),
+        "resolver must treat :: as dns_blocked_zero_address instead of caching or returning it as a usable IPv6",
+        failures,
+    )
+    require(
+        "recordNegativeDnsCache(host, context.negativeReason())" in connections
+        and "recordFailureReason" in connections
+        and '"all_resolvers_failed"' in connections
+        and '"no_ipv4_answer"' in connections
+        and '"nxdomain"' in connections
+        and '"timeout"' in connections,
+        "resolver hard failures must enter negative DNS cache with a classified reason",
+        failures,
+    )
     require(
         "List<String> ipv4" in connections
         and "List<String> ipv6" in connections
@@ -158,6 +202,13 @@ def main() -> int:
         failures,
     )
     require(
+        "virtual bool isHostResolveNegativeCached(std::string domain, int32_t instanceNum) = 0;" in read(ROOT / "TMessagesProj/jni/tgnet/Defines.h")
+        and "isHostResolveNegativeCached(host, instanceNum)" in read(ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp")
+        and "dns_negative_cache_hit" in read(ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"),
+        "native host resolve must preflight Java negative DNS cache before publishing host_resolve_start",
+        failures,
+    )
+    require(
         'if (TextUtils.isEmpty(name))' in load_doh
         and 'throw new UnknownHostException("empty_host")' in load_doh,
         "DoH loader must reject empty host names before building a URL with name=",
@@ -180,7 +231,7 @@ def main() -> int:
         "resolver must use stale DNS after resolver-chain failure before recording hard chain failure",
         failures,
     )
-    require("tryAndroidDnsResolverA(context.host)" in connections and "tryInetAddressA(context.host)" in connections, "system resolver must try Android DNS before InetAddress", failures)
+    require("tryAndroidDnsResolverA(context)" in connections and "tryInetAddressA(context)" in connections, "system resolver must try Android DNS before InetAddress", failures)
     require("DnsResolver.getInstance().query(null, hostName, DnsResolver.TYPE_A" in connections, "Android DnsResolver must use TYPE_A for host resolver", failures)
     require("CancellationSignal cancellationSignal = new CancellationSignal();" in connections and "cancellationSignal.cancel();" in connections, "Android DNS queries must be cancellable", failures)
     require("InetAddress.getAllByName(hostName)" in connections, "system resolver must keep InetAddress fallback", failures)

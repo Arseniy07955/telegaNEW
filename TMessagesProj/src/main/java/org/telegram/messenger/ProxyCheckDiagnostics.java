@@ -20,6 +20,7 @@ public class ProxyCheckDiagnostics {
     public static final String DNS_CACHE_HIT = "dns_cache_hit";
     public static final String DNS_CACHE_STORE = "dns_cache_store";
     public static final String PHASE_ADAPTIVE_RECIPE = "phase_adaptive_recipe";
+    public static final String SECRET_DOMAIN_SANITIZED = "secret_domain_sanitized";
     public static final String HOST_RESOLVE_START = "host_resolve_start";
     public static final String CONNECT_START = "connect_start";
     public static final String SOCKET_CONNECT_START = "socket_connect_start";
@@ -39,6 +40,8 @@ public class ProxyCheckDiagnostics {
     public static final String ADMISSION_TIMEOUT = "admission_timeout";
     public static final String ENDPOINT_COOLDOWN_TIMEOUT = "endpoint_cooldown_timeout";
     public static final String DNS_COALESCE_TIMEOUT = "dns_coalesce_timeout";
+    public static final String DNS_NEGATIVE_CACHE_HIT = "dns_negative_cache_hit";
+    public static final String DNS_BLOCKED_ZERO_ADDRESS = "dns_blocked_zero_address";
     public static final String HOST_RESOLVE_FAILED = "host_resolve_failed";
     public static final String HOST_RESOLVE_TIMEOUT = "host_resolve_timeout";
     public static final String TCP_CONNECT_GATE_TIMEOUT = "tcp_connect_gate_timeout";
@@ -76,6 +79,7 @@ public class ProxyCheckDiagnostics {
             case DNS_CACHE_HIT:
             case DNS_CACHE_STORE:
             case PHASE_ADAPTIVE_RECIPE:
+            case SECRET_DOMAIN_SANITIZED:
             case HOST_RESOLVE_START:
             case CONNECT_START:
             case SOCKET_CONNECT_START:
@@ -95,6 +99,8 @@ public class ProxyCheckDiagnostics {
             case ADMISSION_TIMEOUT:
             case ENDPOINT_COOLDOWN_TIMEOUT:
             case DNS_COALESCE_TIMEOUT:
+            case DNS_NEGATIVE_CACHE_HIT:
+            case DNS_BLOCKED_ZERO_ADDRESS:
             case HOST_RESOLVE_FAILED:
             case HOST_RESOLVE_TIMEOUT:
             case TCP_CONNECT_GATE_TIMEOUT:
@@ -223,6 +229,14 @@ public class ProxyCheckDiagnostics {
         return title("ProxyStatusConnectingSlow", R.string.ProxyStatusConnectingSlow);
     }
 
+    private static long connectedPingMs(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo != null && proxyInfo.ping != 0) {
+            return proxyInfo.ping;
+        }
+        int live = ConnectionsManager.native_getCurrentPingTime(UserConfig.selectedAccount);
+        return live > 0 ? live : 0;
+    }
+
     public static String statusText(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
         if (proxyInfo == null) {
             return LocaleController.getString(R.string.ProxyStatusUnknownFail);
@@ -232,8 +246,9 @@ public class ProxyCheckDiagnostics {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
             if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
-                if (proxyInfo.ping != 0) {
-                    return LocaleController.getString(R.string.Connected) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
+                long ping = connectedPingMs(proxyInfo);
+                if (ping != 0) {
+                    return LocaleController.getString(R.string.Connected) + ", " + LocaleController.formatString("Ping", R.string.Ping, ping);
                 }
                 return LocaleController.getString(R.string.Connected);
             }
@@ -277,8 +292,9 @@ public class ProxyCheckDiagnostics {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
         if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
-            if (proxyInfo.ping != 0) {
-                return LocaleController.getString(R.string.ProxyWindowStatusReady) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
+            long ping = connectedPingMs(proxyInfo);
+            if (ping != 0) {
+                return LocaleController.getString(R.string.ProxyWindowStatusReady) + ", " + LocaleController.formatString("Ping", R.string.Ping, ping);
             }
             return LocaleController.getString(R.string.ProxyWindowStatusReady);
         }
@@ -318,6 +334,8 @@ public class ProxyCheckDiagnostics {
                 return title("ProxyStatusDnsCacheStore", R.string.ProxyStatusDnsCacheStore);
             case PHASE_ADAPTIVE_RECIPE:
                 return title("ProxyStatusPhaseAdaptiveRecipe", R.string.ProxyStatusPhaseAdaptiveRecipe);
+            case SECRET_DOMAIN_SANITIZED:
+                return title("ProxyStatusSecretDomainSanitized", R.string.ProxyStatusSecretDomainSanitized);
             case HOST_RESOLVE_START:
                 return title("ProxyStatusHostResolve", R.string.ProxyStatusHostResolve);
             case CONNECT_START:
@@ -356,6 +374,10 @@ public class ProxyCheckDiagnostics {
                 return title("ProxyStatusEndpointCooldownTimeout", R.string.ProxyStatusEndpointCooldownTimeout);
             case DNS_COALESCE_TIMEOUT:
                 return title("ProxyStatusDnsCoalesceTimeout", R.string.ProxyStatusDnsCoalesceTimeout);
+            case DNS_NEGATIVE_CACHE_HIT:
+                return title("ProxyStatusDnsNegativeCacheHit", R.string.ProxyStatusDnsNegativeCacheHit);
+            case DNS_BLOCKED_ZERO_ADDRESS:
+                return title("ProxyStatusDnsBlockedZeroAddress", R.string.ProxyStatusDnsBlockedZeroAddress);
             case HOST_RESOLVE_FAILED:
                 return title("ProxyStatusHostResolveFailed", R.string.ProxyStatusHostResolveFailed);
             case HOST_RESOLVE_TIMEOUT:
@@ -452,6 +474,8 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusDnsCacheStore);
             case PHASE_ADAPTIVE_RECIPE:
                 return LocaleController.getString(R.string.ProxyStatusPhaseAdaptiveRecipe);
+            case SECRET_DOMAIN_SANITIZED:
+                return LocaleController.getString(R.string.ProxyStatusSecretDomainSanitized);
             case HOST_RESOLVE_START:
                 return LocaleController.getString(R.string.ProxyStatusHostResolve);
             case CONNECT_START:
@@ -490,6 +514,10 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusEndpointCooldownTimeout);
             case DNS_COALESCE_TIMEOUT:
                 return LocaleController.getString(R.string.ProxyStatusDnsCoalesceTimeout);
+            case DNS_NEGATIVE_CACHE_HIT:
+                return LocaleController.getString(R.string.ProxyStatusDnsNegativeCacheHit);
+            case DNS_BLOCKED_ZERO_ADDRESS:
+                return LocaleController.getString(R.string.ProxyStatusDnsBlockedZeroAddress);
             case HOST_RESOLVE_FAILED:
                 return LocaleController.getString(R.string.ProxyStatusHostResolveFailed);
             case HOST_RESOLVE_TIMEOUT:

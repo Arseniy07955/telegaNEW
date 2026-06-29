@@ -77,6 +77,11 @@ def main() -> int:
         require(phase.upper() in diagnostics, f"ProxyCheckDiagnostics must define {phase}", failures)
         require(phase in analyzer, f"analyzer must know {phase}", failures)
 
+    require("secret_domain_sanitized" in java_phase_names(), "phase contract must expose Java live phase secret_domain_sanitized", failures)
+    require("secret_domain_sanitized" in native_phase_names(), "phase contract must expose native live phase secret_domain_sanitized", failures)
+    require("SECRET_DOMAIN_SANITIZED" in diagnostics, "ProxyCheckDiagnostics must define secret_domain_sanitized", failures)
+    require("secret_domain_sanitized" in analyzer, "analyzer must know secret_domain_sanitized", failures)
+
     require(
         "mtproxy_tls_after_client_hello" in socket
         and "hex=" in socket
@@ -114,6 +119,8 @@ def main() -> int:
         require(phase in recipe_body, f"native endpoint policy must treat {phase} as a recipe failure", failures)
         if phase not in {"true_client_hello_timeout", "client_hello_sent_no_server_hello"}:
             require(phase not in cooldown_body, f"{phase} must not cooldown/quarantine the endpoint directly", failures)
+    for phase in ("secret_parse_invalid_domain_control_char", "secret_parse_invalid_domain"):
+        require(phase in cooldown_body, f"native endpoint policy must quarantine invalid secret phase {phase}", failures)
     require(
         '"unsupported_for_current_client"' in cooldown_body
         and '"unsupported_for_current_client"' not in recipe_body,
@@ -227,9 +234,23 @@ def main() -> int:
     )
     require(
         "UNSUPPORTED_CLIENT_FAILURE_BACKOFF_MS = 15 * 60 * 1000L" in health
+        and "INVALID_SECRET_FAILURE_BACKOFF_MS = 15 * 60 * 1000L" in health
+        and "INVALID_SECRET_ROTATED_AWAY_HOLD_MS = 15 * 60 * 1000L" in health
         and "rotatedAwayHoldMs(normalized)" in health
         and "failureBackoffMs(state.lastDiagnostic" in health,
-        "existing Java endpoint health policy must give unsupported-for-current-client a longer exact-endpoint hold/backoff",
+        "existing Java endpoint health policy must give unsupported-for-current-client and invalid-secret phases a longer exact-endpoint hold/backoff",
+        failures,
+    )
+    invalid_secret_policy = block(
+        phase_policy,
+        "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:",
+        "case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:",
+    )
+    require(
+        "SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR" in invalid_secret_policy
+        and "SECRET_PARSE_INVALID_DOMAIN" in invalid_secret_policy
+        and "return failure(KeyScope.EXACT, true, true)" in invalid_secret_policy,
+        "invalid secret-domain phases must backoff and rotate/quarantine the exact proxy config in Java",
         failures,
     )
     require(
@@ -244,6 +265,20 @@ def main() -> int:
         and "secret_parse_invalid_domain_control_char" in socket
         and "validateMtProxySecretDomain" in socket,
         "native FakeTLS setup must sanitize and validate SNI before ClientHello construction",
+        failures,
+    )
+    require(
+        "secretDomainSanitized" in socket
+        and 'publishProxyConnectionStage("secret_domain_sanitized")' in socket
+        and "recordSecretDomainSanitized" in socket
+        and "mtproxy_startup secret_domain_sanitized" in socket,
+        "native FakeTLS setup must continue with a valid sanitized control-char SNI and publish it once per endpoint",
+        failures,
+    )
+    require(
+        "recordSecretDomainSanitized" in endpoint_policy
+        and "recordSecretDomainSanitized" in endpoint_policy_h,
+        "endpoint policy must deduplicate secret_domain_sanitized logs by endpoint key",
         failures,
     )
     require(

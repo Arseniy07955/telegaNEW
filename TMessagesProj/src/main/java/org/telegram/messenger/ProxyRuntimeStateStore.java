@@ -9,6 +9,7 @@ import java.util.Locale;
 
 public final class ProxyRuntimeStateStore {
     private static final long DNS_OUTAGE_WINDOW_MS = 60 * 1000L;
+    private static final long DNS_PREVIOUS_FAILURE_WINDOW_MS = 60 * 1000L;
     private static final long DNS_VISIBLE_DELAY_MS = 800L;
     private static final HashMap<String, DnsOutageState> dnsOutageStates = new HashMap<>();
     private static long pendingDnsVisibleGeneration;
@@ -78,9 +79,14 @@ public final class ProxyRuntimeStateStore {
             logControl("decision=held_by_current_proxy_usable source=" + event.source + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " held_by=" + heldBy);
             return new Decision("held_by_current_proxy_usable", event.phase, event.endpointKey, false, false, true);
         }
+        rememberDnsResolveFailurePhase(currentProxy, event.phase, event.timestamp);
         if (shouldHoldHostResolveFailureByDnsOutage(currentProxy, event.phase, event.timestamp)) {
             logControl("decision=dns_outage_hold source=" + event.source + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, event.timestamp));
             return new Decision("dns_outage_hold", event.phase, event.endpointKey, false, false, true);
+        }
+        if (shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)) {
+            logControl("decision=telemetry_only reason=previous_dns_outage source=" + event.source + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, event.timestamp));
+            return new Decision("telemetry_only", event.phase, event.endpointKey, false, false, false);
         }
 
         if (shouldDelayDnsVisiblePhase(event.phase)) {
@@ -190,7 +196,15 @@ public final class ProxyRuntimeStateStore {
     }
 
     private static boolean shouldKeepLifecycleFailureTelemetryOnly(String phase) {
-        return ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED.equals(ProxyCheckDiagnostics.normalize(phase));
+        String normalized = ProxyCheckDiagnostics.normalize(phase);
+        return ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED.equals(normalized)
+                || ProxyCheckDiagnostics.DNS_NEGATIVE_CACHE_HIT.equals(normalized);
+    }
+
+    private static boolean shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(SharedConfig.ProxyInfo proxyInfo, String phase, long now) {
+        return proxyInfo != null
+                && ProxyCheckDiagnostics.CONNECTION_NOT_STARTED.equals(ProxyCheckDiagnostics.normalize(phase))
+                && previousPhaseWasDnsOutageOrResolveFailed(proxyInfo.address, now);
     }
 
     private static void scheduleDnsVisiblePhase(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent event) {
@@ -372,11 +386,18 @@ public final class ProxyRuntimeStateStore {
     }
 
     public static ProxyHealthStore.EndpointFailureResult markEndpointFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
-        if (proxyInfo == null || !ProxyPhasePolicy.canBackoff(diagnostic)) {
+        if (proxyInfo == null) {
             return ProxyHealthStore.EndpointFailureResult.noop(diagnostic);
         }
         long now = SystemClock.elapsedRealtime();
         String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        if (shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(proxyInfo, normalized, now)) {
+            logControl("decision=telemetry_only reason=previous_dns_outage source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " host=" + dnsHost(proxyInfo) + " failures=" + dnsOutageFailures(proxyInfo, now));
+            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
+        }
+        if (!ProxyPhasePolicy.canBackoff(diagnostic)) {
+            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
+        }
         clearPendingDnsVisiblePhase(ProxyEndpointKey.liveStage(proxyInfo), now);
         if (ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)) {
             logControl("decision=ignored_rotated_away source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
@@ -390,6 +411,7 @@ public final class ProxyRuntimeStateStore {
             logControl("decision=held_by_current_proxy_usable source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + heldByCurrentProxyPhase(proxyInfo, now));
             return ProxyHealthStore.EndpointFailureResult.noop(normalized);
         }
+        rememberDnsResolveFailurePhase(proxyInfo, normalized, now);
         if (shouldHoldHostResolveFailureByDnsOutage(proxyInfo, normalized, now)) {
             logControl("decision=dns_outage_hold source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " host=" + dnsHost(proxyInfo) + " failures=" + dnsOutageFailures(proxyInfo, now));
             return ProxyHealthStore.EndpointFailureResult.noop(normalized);
@@ -513,14 +535,19 @@ public final class ProxyRuntimeStateStore {
         SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
         String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
         long now = SystemClock.elapsedRealtime();
-        if (!ProxyPhasePolicy.isPunitiveFailure(normalized)) {
-            logRotation("decision=ignored_non_punitive phase=" + normalized + " endpoint=" + endpointKey);
-            return false;
-        }
         boolean candidate = account == UserConfig.selectedAccount
                 && currentProxy != null
                 && ProxyEndpointKey.matchesLiveStage(currentProxy, endpointKey)
                 && !isCurrentProxyUsable(currentProxy, now);
+        if (candidate && shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, normalized, now)) {
+            logRotation("decision=telemetry_only reason=previous_dns_outage phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
+            logControl("decision=telemetry_only reason=previous_dns_outage phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
+            return false;
+        }
+        if (!ProxyPhasePolicy.isPunitiveFailure(normalized)) {
+            logRotation("decision=ignored_non_punitive phase=" + normalized + " endpoint=" + endpointKey);
+            return false;
+        }
         if (currentProxy != null && ProxyEndpointKey.matchesLiveStage(currentProxy, endpointKey) && isCurrentProxyUsable(currentProxy, now)) {
             if (ProxyHealthStore.hasFreshUsableSuccess(currentProxy, now)) {
                 logRotation("decision=held_by_usable_success phase=" + normalized + " endpoint=" + endpointKey + " held_by=" + heldByUsablePhase(currentProxy, now));
@@ -578,6 +605,46 @@ public final class ProxyRuntimeStateStore {
         return currentProxy != null && key != null && key.equals(ProxyEndpointKey.exact(currentProxy));
     }
 
+    private static void rememberDnsResolveFailurePhase(SharedConfig.ProxyInfo proxyInfo, String phase, long now) {
+        if (proxyInfo == null) {
+            return;
+        }
+        String normalized = ProxyCheckDiagnostics.normalize(phase);
+        if (!ProxyCheckDiagnostics.HOST_RESOLVE_FAILED.equals(normalized)
+                && !ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT.equals(normalized)
+                && !ProxyCheckDiagnostics.DNS_NEGATIVE_CACHE_HIT.equals(normalized)
+                && !ProxyCheckDiagnostics.DNS_BLOCKED_ZERO_ADDRESS.equals(normalized)) {
+            return;
+        }
+        String key = normalizeDnsHost(proxyInfo.address);
+        if (key.length() == 0) {
+            return;
+        }
+        synchronized (dnsOutageStates) {
+            DnsOutageState state = dnsOutageStateForHostLocked(key, now);
+            state.lastResolveFailureAtMs = now;
+        }
+    }
+
+    private static boolean previousPhaseWasDnsOutageOrResolveFailed(String host, long now) {
+        String key = normalizeDnsHost(host);
+        if (key.length() == 0) {
+            return false;
+        }
+        synchronized (dnsOutageStates) {
+            DnsOutageState state = dnsOutageStates.get(key);
+            if (state == null) {
+                return false;
+            }
+            boolean previousDnsOutage = state.failures > 0
+                    && now - state.windowStartedAtMs <= DNS_OUTAGE_WINDOW_MS
+                    && state.hasAllProvidersFailed();
+            boolean previousResolveFailed = state.lastResolveFailureAtMs > 0
+                    && now - state.lastResolveFailureAtMs <= DNS_PREVIOUS_FAILURE_WINDOW_MS;
+            return previousDnsOutage || previousResolveFailed;
+        }
+    }
+
     public static void recordDnsResolverProviderFailure(String host, String provider, String reason) {
         String key = normalizeDnsHost(host);
         if (key.length() == 0 || !isDnsOutageProvider(provider)) {
@@ -604,9 +671,23 @@ public final class ProxyRuntimeStateStore {
             if (state.hasAllProvidersFailed()) {
                 state.failures++;
                 state.lastFailureAtMs = now;
+                state.lastResolveFailureAtMs = now;
                 logControl("decision=dns_outage_record host=" + key + " failures=" + state.failures + " providers=system,google_json_doh,cloudflare_json_doh");
             }
         }
+    }
+
+    public static void recordDnsNegativeCacheHit(String host, String reason) {
+        String key = normalizeDnsHost(host);
+        if (key.length() == 0) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        synchronized (dnsOutageStates) {
+            DnsOutageState state = dnsOutageStateForHostLocked(key, now);
+            state.lastResolveFailureAtMs = now;
+        }
+        logControl("decision=dns_negative_cache_hit host=" + key + " reason=" + reason);
     }
 
     public static void recordDnsResolveSuccess(String host, String provider) {
@@ -691,6 +772,7 @@ public final class ProxyRuntimeStateStore {
         boolean googleFailed;
         boolean systemFailed;
         long lastFailureAtMs;
+        long lastResolveFailureAtMs;
 
         DnsOutageState(String host, long now) {
             this.host = host;

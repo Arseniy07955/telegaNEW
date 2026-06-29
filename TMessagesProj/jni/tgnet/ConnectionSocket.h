@@ -74,6 +74,7 @@ private:
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
+    bool resetTransportSocketForOpenConnection();
     void openConnectionInternal(bool ipv6);
     void queueAdjustWriteOpAfterOutboundAppend(const char *reason);
     void adjustWriteOp();
@@ -151,7 +152,9 @@ private:
     void recordMtProxyEndpointFailure(const char *diagnostic, const char *reason);
     void recordMtProxyEndpointHandshakeOk(const char *reason);
     void recordMtProxyEndpointDataPathSuccess(const char *reason);
-    bool mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6);
+    void publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength);
+    void closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason);
+    bool mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6, bool *blockedZeroAddress);
     void mtProxyEndpointStoreResolvedAddress(const std::string &host, const std::string &ip);
     std::string currentMtProxyRecipeId();
     std::string mtProxyRecipeIdForPolicyState(int32_t recipeLevel, int32_t alternateProfileIndex, bool greaseSupported, bool probeGrease);

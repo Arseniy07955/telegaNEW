@@ -1,8 +1,4 @@
-"""
-extera_utils — small compatibility helpers (class-proxy DSL, text/metadata utilities).
-
-Kept intentionally light; extend as community plugins require more of the surface.
-"""
+"""extera_utils — compatibility helpers (class-proxy DSL lives in extera_utils.classes)."""
 
 from java import dynamic_proxy  # re-exported for convenience
 

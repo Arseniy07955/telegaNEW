@@ -277,6 +277,7 @@
     <string name="ProxyStatusDnsCacheHit">Используем сохранённый IP прокси...</string>
     <string name="ProxyStatusDnsCacheStore">IP прокси сохранён...</string>
     <string name="ProxyStatusPhaseAdaptiveRecipe">Меняем рецепт запуска прокси...</string>
+    <string name="ProxyStatusSecretDomainSanitized">Используем очищенный SNI прокси...</string>
     <string name="ProxyStatusHostResolve">Ищем адрес прокси...</string>
     <string name="ProxyStatusConnectStart">Готовим подключение к прокси...</string>
     <string name="ProxyStatusTcpConnecting">Открываем TCP-соединение...</string>
@@ -298,6 +299,8 @@
     <string name="ProxyStatusAdmissionTimeout">Слот подключения к прокси не дождался запуска TCP</string>
     <string name="ProxyStatusEndpointCooldownTimeout">Пауза прокси истекла до запуска TCP</string>
     <string name="ProxyStatusDnsCoalesceTimeout">Ожидание DNS-слота истекло до запуска DNS</string>
+    <string name="ProxyStatusDnsNegativeCacheHit">DNS-ошибка прокси кратко закэширована</string>
+    <string name="ProxyStatusDnsBlockedZeroAddress">DNS прокси вернул заблокированный адрес 0.0.0.0</string>
     <string name="ProxyStatusHostResolveFailed">Не удалось найти адрес прокси</string>
     <string name="ProxyStatusHostResolveTimeout">DNS-запрос прокси не ответил вовремя</string>
     <string name="ProxyStatusTcpConnectGateTimeout">Не дождались запуска TCP-подключения к прокси</string>

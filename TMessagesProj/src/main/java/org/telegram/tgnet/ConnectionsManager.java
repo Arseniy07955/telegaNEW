@@ -70,6 +70,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
@@ -199,6 +200,13 @@ public class ConnectionsManager extends BaseController {
     private static final int HOST_RESOLVER_TOTAL_TIMEOUT_MS = 3000;
     private static final long HOST_RESOLVER_MAX_FRESH_TTL_MS = 30 * 60 * 1000L;
     private static final long HOST_RESOLVER_STALE_TTL_MS = 24 * 60 * 60 * 1000L;
+    private static final long HOST_RESOLVER_NEGATIVE_TTL_MS = 45 * 1000L;
+    private static final String DNS_NEGATIVE_CACHE_NATIVE_SENTINEL = "dns_negative_cache_hit";
+    private static final String DNS_BLOCKED_ZERO_NATIVE_SENTINEL = "dns_blocked_zero_address";
+    private static final String DNS_REASON_ALL_RESOLVERS_FAILED = "all_resolvers_failed";
+    private static final String DNS_REASON_NO_IPV4_ANSWER = "no_ipv4_answer";
+    private static final String DNS_REASON_NXDOMAIN = "nxdomain";
+    private static final String DNS_REASON_TIMEOUT = "timeout";
 
     private static long lastDnsRequestTime;
 
@@ -292,7 +300,22 @@ public class ConnectionsManager extends BaseController {
         }
     }
 
+    private static class NegativeDnsCacheEntry {
+        final long expiresAtMs;
+        final String reason;
+
+        NegativeDnsCacheEntry(long expiresAtMs, String reason) {
+            this.expiresAtMs = expiresAtMs;
+            this.reason = TextUtils.isEmpty(reason) ? DNS_REASON_ALL_RESOLVERS_FAILED : reason;
+        }
+
+        boolean isFresh(long now) {
+            return now <= expiresAtMs;
+        }
+    }
+
     private static HashMap<String, ResolvedDomain> dnsCache = new HashMap<>();
+    private static HashMap<String, NegativeDnsCacheEntry> negativeDnsCache = new HashMap<>();
 
     private static int lastClassGuid = 1;
 
@@ -1137,6 +1160,71 @@ public class ConnectionsManager extends BaseController {
         AndroidUtilities.runOnUIThread(() -> NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.needShowAlert, 3));
     }
 
+    private static String normalizeDnsCacheHost(String hostName) {
+        if (TextUtils.isEmpty(hostName)) {
+            return "";
+        }
+        return hostName.trim().toLowerCase(Locale.US);
+    }
+
+    private static NegativeDnsCacheEntry readNegativeDnsCache(String hostName, long now) {
+        String key = normalizeDnsCacheHost(hostName);
+        if (key.length() == 0) {
+            return null;
+        }
+        synchronized (negativeDnsCache) {
+            NegativeDnsCacheEntry entry = negativeDnsCache.get(key);
+            if (entry == null) {
+                return null;
+            }
+            if (entry.isFresh(now)) {
+                return entry;
+            }
+            negativeDnsCache.remove(key);
+            return null;
+        }
+    }
+
+    private static void recordNegativeDnsCache(String hostName, String reason) {
+        String key = normalizeDnsCacheHost(hostName);
+        if (key.length() == 0) {
+            return;
+        }
+        String safeReason = TextUtils.isEmpty(reason) ? DNS_REASON_ALL_RESOLVERS_FAILED : reason;
+        long now = SystemClock.elapsedRealtime();
+        synchronized (negativeDnsCache) {
+            negativeDnsCache.put(key, new NegativeDnsCacheEntry(now + HOST_RESOLVER_NEGATIVE_TTL_MS, safeReason));
+        }
+        FileLog.d("dns_resolver negative_cache_store host=" + key + " reason=" + safeReason + " ttl_ms=" + HOST_RESOLVER_NEGATIVE_TTL_MS);
+    }
+
+    private static void clearNegativeDnsCache(String hostName) {
+        String key = normalizeDnsCacheHost(hostName);
+        if (key.length() == 0) {
+            return;
+        }
+        synchronized (negativeDnsCache) {
+            negativeDnsCache.remove(key);
+        }
+    }
+
+    private static void logNegativeDnsCacheHit(String hostName, NegativeDnsCacheEntry entry, long now) {
+        String key = normalizeDnsCacheHost(hostName);
+        long ttl = Math.max(0, entry.expiresAtMs - now);
+        FileLog.d("dns_resolver negative_cache_hit host=" + key + " reason=" + entry.reason + " ttl_ms=" + ttl);
+        ProxyRuntimeStateStore.recordDnsNegativeCacheHit(hostName, entry.reason);
+    }
+
+    public static boolean isHostResolveNegativeCached(String hostName) {
+        long now = SystemClock.elapsedRealtime();
+        NegativeDnsCacheEntry entry = readNegativeDnsCache(hostName, now);
+        if (entry == null) {
+            return false;
+        }
+        logNegativeDnsCacheHit(hostName, entry, now);
+        return true;
+    }
+
     public static void getHostByName(String hostName, long address) {
         AndroidUtilities.runOnUIThread(() -> {
             long now = SystemClock.elapsedRealtime();
@@ -1145,10 +1233,25 @@ public class ConnectionsManager extends BaseController {
                 resolvedDomain = dnsCache.get(hostName);
             }
             if (resolvedDomain != null && resolvedDomain.isFresh(now)) {
+                String cachedAddress = resolvedDomain.getAddress();
+                if (isBlockedZeroAddress(cachedAddress)) {
+                    synchronized (dnsCache) {
+                        dnsCache.remove(hostName);
+                    }
+                    native_onHostNameResolved(hostName, address, DNS_BLOCKED_ZERO_NATIVE_SENTINEL);
+                    return;
+                }
+                clearNegativeDnsCache(hostName);
                 logDnsResult("cache", "success", hostName, resolvedDomain);
                 ProxyRuntimeStateStore.recordDnsResolveSuccess(hostName, "cache");
-                native_onHostNameResolved(hostName, address, resolvedDomain.getAddress());
+                native_onHostNameResolved(hostName, address, cachedAddress);
             } else {
+                NegativeDnsCacheEntry negativeEntry = readNegativeDnsCache(hostName, now);
+                if (negativeEntry != null) {
+                    logNegativeDnsCacheHit(hostName, negativeEntry, now);
+                    native_onHostNameResolved(hostName, address, DNS_NEGATIVE_CACHE_NATIVE_SENTINEL);
+                    return;
+                }
                 ResolveHostByNameTask task = resolvingHostnameTasks.get(hostName);
                 if (task == null) {
                     task = new ResolveHostByNameTask(hostName);
@@ -1616,7 +1719,74 @@ public class ConnectionsManager extends BaseController {
         FileLog.d("dns_resolver provider=" + provider + " result=" + result + " host=" + host + " ipv4=" + ipv4Count + " ipv6=" + ipv6Count + " source=" + source);
     }
 
-    private static ArrayList<String> filterIpv4Addresses(List<InetAddress> inetAddresses) {
+    private static boolean isBlockedZeroAddress(String address) {
+        if (TextUtils.isEmpty(address)) {
+            return false;
+        }
+        String normalized = address.trim();
+        int zoneIndex = normalized.indexOf('%');
+        if (zoneIndex >= 0) {
+            normalized = normalized.substring(0, zoneIndex);
+        }
+        if ("0.0.0.0".equals(normalized)
+                || "::".equals(normalized)
+                || "0:0:0:0:0:0:0:0".equals(normalized)) {
+            return true;
+        }
+        try {
+            return InetAddress.getByName(normalized).isAnyLocalAddress();
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
+    private static ArrayList<String> filterBlockedZeroIpv4Addresses(List<String> rawAddresses, ResolveContext context) {
+        ArrayList<String> addresses = new ArrayList<>();
+        if (rawAddresses == null) {
+            return addresses;
+        }
+        for (int a = 0, N = rawAddresses.size(); a < N; a++) {
+            String address = rawAddresses.get(a);
+            if (TextUtils.isEmpty(address)) {
+                continue;
+            }
+            if (isBlockedZeroAddress(address)) {
+                if (context != null) {
+                    context.recordBlockedZeroAddress();
+                }
+                continue;
+            }
+            if (!addresses.contains(address)) {
+                addresses.add(address);
+            }
+        }
+        return addresses;
+    }
+
+    private static ArrayList<String> filterBlockedZeroIpv6Addresses(List<String> rawAddresses, ResolveContext context) {
+        ArrayList<String> addresses = new ArrayList<>();
+        if (rawAddresses == null) {
+            return addresses;
+        }
+        for (int a = 0, N = rawAddresses.size(); a < N; a++) {
+            String address = rawAddresses.get(a);
+            if (TextUtils.isEmpty(address)) {
+                continue;
+            }
+            if (isBlockedZeroAddress(address)) {
+                if (context != null) {
+                    context.recordBlockedZeroAddress();
+                }
+                continue;
+            }
+            if (!addresses.contains(address)) {
+                addresses.add(address);
+            }
+        }
+        return addresses;
+    }
+
+    private static ArrayList<String> filterIpv4Addresses(List<InetAddress> inetAddresses, ResolveContext context) {
         ArrayList<String> addresses = new ArrayList<>();
         if (inetAddresses == null) {
             return addresses;
@@ -1625,6 +1795,12 @@ public class ConnectionsManager extends BaseController {
             InetAddress inetAddress = inetAddresses.get(a);
             if (inetAddress instanceof Inet4Address) {
                 String hostAddress = inetAddress.getHostAddress();
+                if (isBlockedZeroAddress(hostAddress)) {
+                    if (context != null) {
+                        context.recordBlockedZeroAddress();
+                    }
+                    continue;
+                }
                 if (!TextUtils.isEmpty(hostAddress) && !addresses.contains(hostAddress)) {
                     addresses.add(hostAddress);
                 }
@@ -1633,7 +1809,7 @@ public class ConnectionsManager extends BaseController {
         return addresses;
     }
 
-    private static ArrayList<String> filterIpv6Addresses(List<InetAddress> inetAddresses) {
+    private static ArrayList<String> filterIpv6Addresses(List<InetAddress> inetAddresses, ResolveContext context) {
         ArrayList<String> addresses = new ArrayList<>();
         if (inetAddresses == null) {
             return addresses;
@@ -1642,6 +1818,12 @@ public class ConnectionsManager extends BaseController {
             InetAddress inetAddress = inetAddresses.get(a);
             if (inetAddress instanceof Inet6Address) {
                 String hostAddress = inetAddress.getHostAddress();
+                if (isBlockedZeroAddress(hostAddress)) {
+                    if (context != null) {
+                        context.recordBlockedZeroAddress();
+                    }
+                    continue;
+                }
                 if (!TextUtils.isEmpty(hostAddress) && !addresses.contains(hostAddress)) {
                     addresses.add(hostAddress);
                 }
@@ -1655,16 +1837,19 @@ public class ConnectionsManager extends BaseController {
     }
 
     private static ResolvedDomain resolvedDomainFromAddresses(List<String> ipv4, List<String> ipv6, String source, long ttlMs) {
-        if ((ipv4 == null || ipv4.isEmpty()) && (ipv6 == null || ipv6.isEmpty())) {
+        ArrayList<String> filteredIpv4 = filterBlockedZeroIpv4Addresses(ipv4, null);
+        ArrayList<String> filteredIpv6 = filterBlockedZeroIpv6Addresses(ipv6, null);
+        if (filteredIpv4.isEmpty() && filteredIpv6.isEmpty()) {
             return null;
         }
         long now = SystemClock.elapsedRealtime();
         long freshTtl = Math.max(1, Math.min(ttlMs, HOST_RESOLVER_MAX_FRESH_TTL_MS));
-        return new ResolvedDomain(ipv4, ipv6, now + freshTtl, now + freshTtl + HOST_RESOLVER_STALE_TTL_MS, source);
+        return new ResolvedDomain(filteredIpv4, filteredIpv6, now + freshTtl, now + freshTtl + HOST_RESOLVER_STALE_TTL_MS, source);
     }
 
     @SuppressLint("NewApi")
-    private static ResolvedDomain tryAndroidDnsResolverA(String hostName) {
+    private static ResolvedDomain tryAndroidDnsResolverA(ResolveContext context) {
+        String hostName = context.host;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return null;
         }
@@ -1676,7 +1861,7 @@ public class ConnectionsManager extends BaseController {
             DnsResolver.getInstance().query(null, hostName, DnsResolver.TYPE_A, DnsResolver.FLAG_EMPTY, DNS_DIRECT_EXECUTOR, cancellationSignal, new DnsResolver.Callback<List<InetAddress>>() {
                 @Override
                 public void onAnswer(List<InetAddress> answer, int rcode) {
-                    result.set(filterIpv4Addresses(answer));
+                    result.set(filterIpv4Addresses(answer, context));
                     latch.countDown();
                 }
 
@@ -1713,7 +1898,8 @@ public class ConnectionsManager extends BaseController {
         return resolvedDomain;
     }
 
-    private static ResolvedDomain tryInetAddressA(String hostName) {
+    private static ResolvedDomain tryInetAddressA(ResolveContext context) {
+        String hostName = context.host;
         try {
             InetAddress[] inetAddresses = InetAddress.getAllByName(hostName);
             ArrayList<String> addresses = new ArrayList<>(inetAddresses.length);
@@ -1722,11 +1908,19 @@ public class ConnectionsManager extends BaseController {
                 InetAddress inetAddress = inetAddresses[a];
                 if (inetAddress instanceof Inet4Address) {
                     String hostAddress = inetAddress.getHostAddress();
+                    if (isBlockedZeroAddress(hostAddress)) {
+                        context.recordBlockedZeroAddress();
+                        continue;
+                    }
                     if (!TextUtils.isEmpty(hostAddress) && !addresses.contains(hostAddress)) {
                         addresses.add(hostAddress);
                     }
                 } else if (inetAddress instanceof Inet6Address) {
                     String hostAddress = inetAddress.getHostAddress();
+                    if (isBlockedZeroAddress(hostAddress)) {
+                        context.recordBlockedZeroAddress();
+                        continue;
+                    }
                     if (!TextUtils.isEmpty(hostAddress) && !ipv6Addresses.contains(hostAddress)) {
                         ipv6Addresses.add(hostAddress);
                     }
@@ -1745,7 +1939,7 @@ public class ConnectionsManager extends BaseController {
         return null;
     }
 
-    private static ResolvedDomain parseDohHostResponse(byte[] bytes, String source) throws Exception {
+    private static ResolvedDomain parseDohHostResponse(byte[] bytes, String source, ResolveContext context) throws Exception {
         JSONObject jsonObject = new JSONObject(new String(bytes));
         JSONArray array = jsonObject.optJSONArray("Answer");
         if (array == null) {
@@ -1764,8 +1958,20 @@ public class ConnectionsManager extends BaseController {
             long answerTtl = Math.max(1, object.optLong("TTL", 300)) * 1000L;
             ttlMs = Math.min(ttlMs, answerTtl);
             if (type == 1 && data.indexOf('.') > 0 && !ipv4.contains(data)) {
+                if (isBlockedZeroAddress(data)) {
+                    if (context != null) {
+                        context.recordBlockedZeroAddress();
+                    }
+                    continue;
+                }
                 ipv4.add(data);
             } else if (type == 28 && data.indexOf(':') > 0 && !ipv6.contains(data)) {
+                if (isBlockedZeroAddress(data)) {
+                    if (context != null) {
+                        context.recordBlockedZeroAddress();
+                    }
+                    continue;
+                }
                 ipv6.add(data);
             }
         }
@@ -1796,7 +2002,7 @@ public class ConnectionsManager extends BaseController {
                 remainingDnsBudgetMs(context, HOST_RESOLVER_DOH_READ_TIMEOUT_MS),
                 null
         );
-        return parseDohHostResponse(response.bytes, provider);
+        return parseDohHostResponse(response.bytes, provider, context);
     }
 
     private static ResolvedDomain resolveFromDnsCache(String host, boolean freshOnly) {
@@ -1825,16 +2031,21 @@ public class ConnectionsManager extends BaseController {
         boolean cloudflareFailed = false;
         for (HostResolver resolver : HOST_RESOLVER_CHAIN) {
             if ((task != null && task.isCancelled()) || dnsBudgetExpired(context)) {
+                if (dnsBudgetExpired(context)) {
+                    context.recordFailureReason(DNS_REASON_TIMEOUT);
+                }
                 break;
             }
             String resolverName = resolver.name();
             try {
                 ResolvedDomain resolved = resolver.resolve(host, type, context);
                 if (resolved != null && resolved.hasAddresses()) {
+                    clearNegativeDnsCache(host);
                     logDnsResult(resolver.name(), "success", host, resolved);
                     ProxyRuntimeStateStore.recordDnsResolveSuccess(host, resolver.name());
                     return resolved;
                 }
+                context.recordFailureReason(DNS_REASON_NO_IPV4_ANSWER);
                 if (isDnsOutageProvider(resolverName)) {
                     if ("system".equals(resolverName)) {
                         systemFailed = true;
@@ -1846,6 +2057,7 @@ public class ConnectionsManager extends BaseController {
                     ProxyRuntimeStateStore.recordDnsResolverProviderFailure(host, resolver.name(), "empty");
                 }
             } catch (FileNotFoundException | UnknownHostException | SocketTimeoutException | SSLException e) {
+                context.recordFailureReason(dnsFailureReasonForException(e));
                 if (isDnsOutageProvider(resolverName)) {
                     if ("system".equals(resolverName)) {
                         systemFailed = true;
@@ -1862,13 +2074,27 @@ public class ConnectionsManager extends BaseController {
             }
         }
         if (stale != null && stale.isStale(SystemClock.elapsedRealtime())) {
+            clearNegativeDnsCache(host);
             logDnsResult("cache", "stale_dns_used", host, stale);
             ProxyRuntimeStateStore.recordDnsResolveSuccess(host, "cache_stale");
             return stale;
         }
+        if (!context.blockedZeroAddress()) {
+            recordNegativeDnsCache(host, context.negativeReason());
+        }
         ProxyRuntimeStateStore.recordDnsResolveChainFailure(host, systemFailed, googleFailed, cloudflareFailed);
         logDnsResult("chain", "resolve_failed", host, null);
         return null;
+    }
+
+    private static String dnsFailureReasonForException(Throwable e) {
+        if (e instanceof SocketTimeoutException) {
+            return DNS_REASON_TIMEOUT;
+        }
+        if (e instanceof UnknownHostException || e instanceof FileNotFoundException) {
+            return DNS_REASON_NXDOMAIN;
+        }
+        return DNS_REASON_ALL_RESOLVERS_FAILED;
     }
 
     private static boolean isDnsOutageProvider(String provider) {
@@ -1888,6 +2114,8 @@ public class ConnectionsManager extends BaseController {
         final long startedAtMs;
         final int generation;
         final int timeoutMs;
+        private String failureReason = DNS_REASON_ALL_RESOLVERS_FAILED;
+        private boolean blockedZeroAddress;
 
         ResolveContext(String host, boolean preferIpv6, long startedAtMs, int generation, int timeoutMs) {
             this.host = host;
@@ -1895,6 +2123,35 @@ public class ConnectionsManager extends BaseController {
             this.startedAtMs = startedAtMs;
             this.generation = generation;
             this.timeoutMs = timeoutMs;
+        }
+
+        void recordFailureReason(String reason) {
+            if (TextUtils.isEmpty(reason)) {
+                return;
+            }
+            if (DNS_REASON_TIMEOUT.equals(reason)
+                    || DNS_REASON_ALL_RESOLVERS_FAILED.equals(failureReason)) {
+                failureReason = reason;
+            } else if (DNS_REASON_NXDOMAIN.equals(reason)
+                    && DNS_REASON_NO_IPV4_ANSWER.equals(failureReason)) {
+                failureReason = reason;
+            }
+        }
+
+        void recordBlockedZeroAddress() {
+            blockedZeroAddress = true;
+            recordFailureReason(DNS_REASON_NO_IPV4_ANSWER);
+        }
+
+        boolean blockedZeroAddress() {
+            return blockedZeroAddress;
+        }
+
+        String negativeReason() {
+            if (dnsBudgetExpired(this)) {
+                return DNS_REASON_TIMEOUT;
+            }
+            return TextUtils.isEmpty(failureReason) ? DNS_REASON_ALL_RESOLVERS_FAILED : failureReason;
         }
     }
 
@@ -1913,11 +2170,11 @@ public class ConnectionsManager extends BaseController {
     private static class SystemDnsResolver implements HostResolver {
         @Override
         public ResolvedDomain resolve(String host, int type, ResolveContext context) {
-            ResolvedDomain android = tryAndroidDnsResolverA(context.host);
+            ResolvedDomain android = tryAndroidDnsResolverA(context);
             if (android != null) {
                 return android;
             }
-            return tryInetAddressA(context.host);
+            return tryInetAddressA(context);
         }
 
         @Override
@@ -2021,6 +2278,7 @@ public class ConnectionsManager extends BaseController {
 
         private ArrayList<Long> addresses = new ArrayList<>();
         private String currentHostName;
+        private boolean blockedZeroAddress;
 
         public ResolveHostByNameTask(String hostName) {
             super();
@@ -2036,12 +2294,15 @@ public class ConnectionsManager extends BaseController {
 
         protected ResolvedDomain doInBackground(Void... voids) {
             ResolveContext context = new ResolveContext(currentHostName, false, SystemClock.elapsedRealtime(), dnsResolveGeneration.getAndIncrement(), HOST_RESOLVER_TOTAL_TIMEOUT_MS);
-            return resolveHost(currentHostName, DnsResolver.TYPE_A, context, this);
+            ResolvedDomain result = resolveHost(currentHostName, DnsResolver.TYPE_A, context, this);
+            blockedZeroAddress = context.blockedZeroAddress();
+            return result;
         }
 
         @Override
         protected void onPostExecute(final ResolvedDomain result) {
             if (result != null) {
+                clearNegativeDnsCache(currentHostName);
                 synchronized (dnsCache) {
                     dnsCache.put(currentHostName, result);
                 }
@@ -2050,7 +2311,7 @@ public class ConnectionsManager extends BaseController {
                 }
             } else {
                 for (int a = 0, N = addresses.size(); a < N; a++) {
-                    native_onHostNameResolved(currentHostName, addresses.get(a), "");
+                    native_onHostNameResolved(currentHostName, addresses.get(a), blockedZeroAddress ? DNS_BLOCKED_ZERO_NATIVE_SENTINEL : "");
                 }
             }
             resolvingHostnameTasks.remove(currentHostName);

@@ -9,6 +9,8 @@ final class ProxyHealthStore {
     private static final long PROXY_CHECK_FAILURE_BACKOFF_MAX_MS = 8 * 60 * 1000L;
     private static final long PROXY_CHECK_LIVE_FAILURE_DEDUP_MS = 1500L;
     private static final long PROXY_CHECK_CONNECTED_GRACE_MS = 60 * 1000L;
+    private static final long INVALID_SECRET_FAILURE_BACKOFF_MS = 15 * 60 * 1000L;
+    private static final long INVALID_SECRET_ROTATED_AWAY_HOLD_MS = 15 * 60 * 1000L;
     private static final long UNSUPPORTED_CLIENT_FAILURE_BACKOFF_MS = 15 * 60 * 1000L;
     private static final long UNSUPPORTED_CLIENT_ROTATED_AWAY_HOLD_MS = 15 * 60 * 1000L;
     private static final long USABLE_SUCCESS_HOLD_MS = 45 * 1000L;
@@ -319,18 +321,32 @@ final class ProxyHealthStore {
     }
 
     private static long failureBackoffMs(String diagnostic, int consecutiveFailures) {
-        if (ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT.equals(ProxyCheckDiagnostics.normalize(diagnostic))) {
+        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        if (ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT.equals(normalized)) {
             return UNSUPPORTED_CLIENT_FAILURE_BACKOFF_MS;
+        }
+        if (isInvalidSecretDiagnostic(normalized)) {
+            return INVALID_SECRET_FAILURE_BACKOFF_MS;
         }
         long multiplier = 1L << Math.min(2, Math.max(0, consecutiveFailures - 1));
         return Math.min(PROXY_CHECK_FAILURE_BACKOFF_MAX_MS, PROXY_CHECK_FAILURE_BACKOFF_MS * multiplier);
     }
 
     private static long rotatedAwayHoldMs(String diagnostic) {
-        if (ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT.equals(ProxyCheckDiagnostics.normalize(diagnostic))) {
+        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        if (ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT.equals(normalized)) {
             return UNSUPPORTED_CLIENT_ROTATED_AWAY_HOLD_MS;
         }
+        if (isInvalidSecretDiagnostic(normalized)) {
+            return INVALID_SECRET_ROTATED_AWAY_HOLD_MS;
+        }
         return ROTATED_AWAY_HOLD_MS;
+    }
+
+    private static boolean isInvalidSecretDiagnostic(String diagnostic) {
+        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        return ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR.equals(normalized)
+                || ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN.equals(normalized);
     }
 
     static int punitiveFailuresToRotate() {

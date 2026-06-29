@@ -78,31 +78,47 @@ public final class PluginRequestInterceptor {
             }
             try {
                 final Object[] args = param.args;
-                if (args == null || args.length < 2 || !(args[1] instanceof RequestDelegate)) {
-                    return; // no onComplete delegate (e.g. timestamp/updates path)
+                if (args == null || args.length < 2 || !(args[0] instanceof TLObject)) {
+                    return;
                 }
-                final RequestDelegate orig = (RequestDelegate) args[1];
-                final TLObject request = (args[0] instanceof TLObject) ? (TLObject) args[0] : null;
-                final String name = request != null ? request.getClass().getSimpleName() : "";
+                TLObject request = (TLObject) args[0];
+                String name = request.getClass().getSimpleName();
                 final int account = accountOf(param.thisObject);
 
-                args[1] = (RequestDelegate) (response, error) -> {
-                    TLObject deliver = response;
-                    try {
-                        Object out = PluginsController.getInstance()
-                                .dispatchPostRequest(name, account, response, error);
-                        if (CANCEL_SENTINEL.equals(out)) {
-                            return; // HookStrategy.CANCEL — swallow the response
+                // pre_request_hook: inspect / modify / cancel the outgoing request before it is sent.
+                Object pre = PluginsController.getInstance().dispatchPreRequest(name, account, request);
+                if (CANCEL_SENTINEL.equals(pre)) {
+                    param.setResult(null); // skip sending entirely
+                    return;
+                }
+                if (pre instanceof TLObject && pre != request) {
+                    args[0] = pre;
+                    request = (TLObject) pre;
+                    name = request.getClass().getSimpleName();
+                }
+
+                // post_request_hook: wrap the onComplete delegate (args[1]) when present.
+                if (args[1] instanceof RequestDelegate) {
+                    final RequestDelegate orig = (RequestDelegate) args[1];
+                    final String reqName = name;
+                    args[1] = (RequestDelegate) (response, error) -> {
+                        TLObject deliver = response;
+                        try {
+                            Object out = PluginsController.getInstance()
+                                    .dispatchPostRequest(reqName, account, response, error);
+                            if (CANCEL_SENTINEL.equals(out)) {
+                                return; // HookStrategy.CANCEL — swallow the response
+                            }
+                            if (out instanceof TLObject) {
+                                deliver = (TLObject) out;
+                            }
+                            // else out == null: pass-through — deliver the original response (may be null on error)
+                        } catch (Throwable t) {
+                            FileLog.e(t);
                         }
-                        if (out instanceof TLObject) {
-                            deliver = (TLObject) out;
-                        }
-                        // else out == null: pass-through — deliver the original response (may be null on error)
-                    } catch (Throwable t) {
-                        FileLog.e(t);
-                    }
-                    orig.run(deliver, error);
-                };
+                        orig.run(deliver, error);
+                    };
+                }
             } catch (Throwable t) {
                 FileLog.e(t);
             }

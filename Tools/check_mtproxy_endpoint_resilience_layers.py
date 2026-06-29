@@ -336,6 +336,23 @@ def main():
         "DNS cache key must be host/port-scoped instead of secret/SNI-scoped",
     )
     require(
+        "mtProxyIsBlockedZeroAddress" in socket
+        and "AF_INET6" in socket
+        and "closeMtProxyDnsBlockedZeroAddress" in socket
+        and "dns_blocked_zero_address" in socket
+        and "bool *blockedZeroAddress" in socket
+        and "if (blockedZeroAddress != nullptr)" in socket
+        and "closeSocket(1, -1)" in socket,
+        "native DNS cache hit/store paths must diagnose 0.0.0.0 as dns_blocked_zero_address and stop before TCP connect",
+    )
+    require(
+        "isBlockedZeroAddress" in endpoint_policy
+        and "AF_INET6" in endpoint_policy
+        and "lastGoodIpv4 = ip" in endpoint_policy
+        and "if (isBlockedZeroAddress(ip))" in endpoint_policy,
+        "endpoint DNS cache must never store 0.0.0.0 as a last-good IPv4 address",
+    )
+    require(
         "MtProxyEndpointPolicy::networkEndpointKeyFor" in socket and "networkEndpointKeyFor" in endpoint_policy,
         "pre-TLS endpoint resilience must have a host/port-scoped network key separate from secret/SNI recipe state",
     )
@@ -410,7 +427,7 @@ def main():
     request_end = socket.find("void ConnectionSocket::onHostNameResolved", request_start)
     request_body = socket[request_start:request_end]
     no_delegate = request_body.find("manager.delegate == nullptr")
-    no_delegate_cache = request_body.find("mtProxyEndpointUseCachedHostAddress(waitingForHostResolve, &cachedIpv6)")
+    no_delegate_cache = request_body.find("mtProxyEndpointUseCachedHostAddress(waitingForHostResolve, &cachedIpv6, &blockedZeroAddress)")
     no_delegate_not_started = request_body.find('proxyCheckDiagnostic = "connection_not_started"')
     require(
         no_delegate != -1
@@ -422,7 +439,7 @@ def main():
     resolved_start = socket.find("void ConnectionSocket::onHostNameResolved")
     resolved_end = socket.find("void ConnectionSocket::openConnectionInternal", resolved_start)
     resolved_body = socket[resolved_start:resolved_end]
-    cache_after_delegate_failure = resolved_body.find("mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6)")
+    cache_after_delegate_failure = resolved_body.find("mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6, &blockedZeroAddress)")
     host_resolve_failure = resolved_body.find('proxyCheckDiagnostic = "host_resolve_failed"')
     store_resolved = resolved_body.find("mtProxyEndpointStoreResolvedAddress(host, ip)")
     require(

@@ -88,6 +88,7 @@ public:
     static FailureResult recordFailure(const MtProxyEndpointContext &context, const std::string &phase, int64_t now);
     static void recordHandshakeOk(const MtProxyEndpointContext &context, const char *reason);
     static DataPathSuccessResult recordDataPathSuccess(const MtProxyEndpointContext &context, const char *reason, int64_t now);
+    static bool recordSecretDomainSanitized(const std::string &endpointKey);
     static GreaseProbeResult readGreaseProbeState(const std::string &recipeCacheKey);
     static int32_t recipeLevelForEndpoint(const std::string &endpointKey);
     static int32_t recipeAlternateProfileIndexForEndpoint(const std::string &endpointKey);

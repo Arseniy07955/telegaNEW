@@ -1,37 +1,42 @@
 """
 ZaStoGram plugin SDK — base classes (exteraGram-compatible).
 
-A plugin is a single .plugin Python file that defines module-level metadata
-(__id__, __name__, __version__, __min_version__, __icon__, ...) and a subclass of
-BasePlugin. The host (PluginsController + _plugin_loader) instantiates it, injects a
-Java PluginContext as ``self._context`` and drives its lifecycle.
-
-Method hooking is backed by Pine's Xposed-compatible engine on the Java side; the
-``param`` handed to hook callbacks is a real de.robv.android.xposed MethodHookParam
-(``param.thisObject``, ``param.args``, ``param.getResult()``, ``param.setResult(...)``).
+A plugin is a single .plugin Python file with module-level metadata (__id__, __name__, ...)
+and a subclass of BasePlugin. The host instantiates it, injects a Java PluginContext as
+``self._context`` and drives its lifecycle.
 """
 
 
 class HookStrategy:
-    """Return strategy for high-level request/response hooks."""
-    DEFAULT = 0   # let the original result flow through unchanged
-    MODIFY = 1    # deliver HookResult.response instead
-    CANCEL = 2    # swallow the result entirely
-    # exteraGram aliases
-    REPLACE = 1
+    """Return strategy for high-level request/response/update/message hooks."""
+    DEFAULT = 0        # let the original flow through unchanged
+    MODIFY = 1         # deliver the modified object (HookResult.request/response/update/updates/params)
+    CANCEL = 2         # cancel/stop the operation
+    MODIFY_FINAL = 3   # modify AND stop further plugin processing of this event
+    REPLACE = 1        # exteraGram alias for MODIFY
 
 
 class HookResult:
-    def __init__(self, strategy=HookStrategy.DEFAULT, response=None):
+    def __init__(self, strategy=HookStrategy.DEFAULT, response=None, request=None,
+                 update=None, updates=None, params=None):
         self.strategy = strategy
         self.response = response
+        self.request = request
+        self.update = update
+        self.updates = updates
+        self.params = params
+
+
+class AppEvent:
+    """Lifecycle events delivered to BasePlugin.on_app_event."""
+    START = "start"
+    STOP = "stop"
+    PAUSE = "pause"
+    RESUME = "resume"
 
 
 class MethodHook:
-    """
-    Xposed-style method hook. Subclass and override before/after_hooked_method.
-    ``param`` is a Java MethodHookParam.
-    """
+    """Xposed-style method hook. ``param`` is a Java MethodHookParam."""
 
     def before_hooked_method(self, param):
         pass
@@ -41,7 +46,7 @@ class MethodHook:
 
 
 class XposedHook(MethodHook):
-    """Convenience hook built from plain callables: XposedHook(before=fn, after=fn)."""
+    """Convenience hook from plain callables: XposedHook(before=fn, after=fn)."""
 
     def __init__(self, before=None, after=None):
         self._before = before
@@ -56,66 +61,103 @@ class XposedHook(MethodHook):
             self._after(param)
 
 
+class MenuItemType:
+    """Which app menu an added item appears in (see BasePlugin.add_menu_item)."""
+    MESSAGE_CONTEXT_MENU = "message_context_menu"  # long-press on a message
+    DRAWER_MENU = "drawer_menu"                     # main navigation drawer
+    CHAT_ACTION_MENU = "chat_action_menu"           # 3-dot menu inside a chat
+    PROFILE_ACTION_MENU = "profile_action_menu"     # 3-dot menu on a profile
+
+
+class MenuItemData:
+    """
+    A menu item added via BasePlugin.add_menu_item(). on_click(context) receives a dict with
+    context-specific data (e.g. message / dialog_id / user / fragment for the relevant menu).
+    """
+
+    def __init__(self, menu_type, text, on_click, item_id=None, icon=None, subtext=None,
+                 condition=None, priority=0):
+        self.menu_type = menu_type
+        self.text = text
+        self.on_click = on_click
+        self.item_id = item_id
+        self.icon = icon
+        self.subtext = subtext
+        self.condition = condition   # MVEL visibility expression (not yet evaluated by host)
+        self.priority = priority
+
+
 class BasePlugin:
 
     def __init__(self):
-        # Injected by the loader before on_plugin_load():
         self._context = None      # Java org.telegram.plugins.PluginContext
         self.id = None
         self.name = None
-        # Request-name filters registered via add_hook(); see post_request_hook dispatch.
-        self._request_hooks = []
+        self._request_hooks = []  # (name, match_substring) filters from add_hook()
+        self._menu_items = []     # MenuItemData registered via add_menu_item()
+        self._send_message_hook = False  # set by add_on_send_message_hook()
 
     # ------------------------------------------------------------------ lifecycle
 
     def on_plugin_load(self):
-        """Called once when the plugin is enabled. Install hooks here."""
         pass
 
     def on_plugin_unload(self):
-        """Called when the plugin is disabled/removed. Hooks are auto-removed by the host."""
+        pass
+
+    def on_app_event(self, event_type):
+        """Called on AppEvent.START/STOP/PAUSE/RESUME."""
         pass
 
     def create_settings(self):
-        """Return a list of ui.settings items to render on the plugin's settings screen."""
         return []
 
     # ------------------------------------------------------------------ high-level hooks
 
     def pre_request_hook(self, request_name, account, request):
-        """Reserved: not yet dispatched by the host. Only post_request_hook currently fires."""
+        """Before an outgoing request is sent. Return HookResult (CANCEL / MODIFY w/ .request)."""
         return HookResult(strategy=HookStrategy.DEFAULT)
 
     def post_request_hook(self, request_name, account, response, error):
-        """Called just before a response is delivered (override to inspect/modify/cancel)."""
+        """Just before a response is delivered. Return HookResult (MODIFY w/ .response / CANCEL)."""
+        return HookResult(strategy=HookStrategy.DEFAULT)
+
+    def on_update_hook(self, update_name, account, update):
+        """A single incoming update. Return HookResult (MODIFY w/ .update)."""
+        return HookResult(strategy=HookStrategy.DEFAULT)
+
+    def on_updates_hook(self, container_name, account, updates):
+        """An updates container. Return HookResult (MODIFY w/ .updates)."""
+        return HookResult(strategy=HookStrategy.DEFAULT)
+
+    def on_send_message_hook(self, account, params):
+        """Outgoing message params just before send. Return HookResult (MODIFY w/ .params / CANCEL)."""
         return HookResult(strategy=HookStrategy.DEFAULT)
 
     # ------------------------------------------------------------------ method hooking
 
     def hook_method(self, method, hook):
-        """Hook a single java.lang.reflect.Member with a MethodHook. Returns an Unhook."""
         return self._context.hookMethod(method, hook)
 
     def hook_all_constructors(self, clazz, hook):
-        """Hook every constructor of a java.lang.Class. Returns a list of Unhooks."""
         return self._context.hookAllConstructors(clazz, hook)
 
     def unhook_method(self, unhook):
-        """Remove a previously installed hook."""
         if unhook is not None:
             self._context.unhook(unhook)
 
-    def add_hook(self, request_name, match_substring=False):
-        """
-        Register interest in a request by (TL) name so post_request_hook fires for it.
-        e.g. add_hook("TL_account_getAuthorizations") or add_hook("getAuthorizations", True).
-        """
+    def add_hook(self, request_name, match_substring=False, priority=0):
+        """Register interest in a (TL) request name so pre/post_request_hook fires for it."""
         self._request_hooks.append((str(request_name), bool(match_substring)))
         return (request_name, match_substring)
 
+    def add_on_send_message_hook(self, priority=0):
+        """Enable on_send_message_hook for this plugin."""
+        self._send_message_hook = True
+
     def _matches_request(self, request_name):
         if not self._request_hooks:
-            return None  # no filters registered → caller decides
+            return None  # no filters → caller decides
         for name, substring in self._request_hooks:
             if substring:
                 if name in str(request_name):
@@ -123,6 +165,18 @@ class BasePlugin:
             elif name == str(request_name):
                 return True
         return False
+
+    # ------------------------------------------------------------------ menu items
+
+    def add_menu_item(self, item):
+        """Register a MenuItemData; it appears in the menu named by item.menu_type."""
+        self._menu_items.append(item)
+        return item.item_id if getattr(item, "item_id", None) is not None else item
+
+    def remove_menu_item(self, item_id):
+        """Remove a previously added menu item by its item_id (or the object returned by add)."""
+        self._menu_items = [m for m in self._menu_items
+                            if m is not item_id and getattr(m, "item_id", None) != item_id]
 
     # ------------------------------------------------------------------ settings storage
 
@@ -147,10 +201,44 @@ class BasePlugin:
                 return default
         return str(value)
 
-    def set_setting(self, key, value):
+    def set_setting(self, key, value, reload_settings=False):
         self._context.setSetting(key, value)
+        if reload_settings:
+            try:
+                self._context.reloadSettings()
+            except Exception:
+                pass
 
-    # ------------------------------------------------------------------ logging
+    def export_settings(self):
+        """Return a dict of all persisted settings for this plugin."""
+        out = {}
+        try:
+            m = self._context.getAllSettings()
+            if m is not None:
+                for k in m.keySet():
+                    out[str(k)] = m.get(k)
+        except Exception:
+            pass
+        return out
+
+    def import_settings(self, settings, reload_settings=True):
+        if not settings:
+            return
+        try:
+            for k, v in settings.items():
+                self._context.setSetting(str(k), v)
+        except Exception:
+            pass
+        if reload_settings:
+            try:
+                self._context.reloadSettings()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------ misc
+
+    def getName(self):
+        return self.name or self.id
 
     def log(self, msg):
         try:

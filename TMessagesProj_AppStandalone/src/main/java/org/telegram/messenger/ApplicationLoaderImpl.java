@@ -130,6 +130,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void addItemOptions(ItemOptions itemOptions) {
+        super.addItemOptions(itemOptions); // ZaStoGram: render plugin DRAWER_MENU items
         if (SMSJobController.getInstance(UserConfig.selectedAccount).isAvailable()) {
             CharSequence text = LocaleController.getString(R.string.SmsJobsMenu);
             if (MessagesController.getGlobalMainSettings().getBoolean("newppsms", true)) {

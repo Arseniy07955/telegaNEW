@@ -50,6 +50,7 @@ FRESH_USABLE_FAILURE_OVERWRITE_PHASES = {
     "tcp_not_connected",
     "host_resolve_failed",
     "host_resolve_timeout",
+    "dns_blocked_zero_address",
     "tcp_connected_no_pong",
     "network_block_suspected",
     "true_client_hello_timeout",

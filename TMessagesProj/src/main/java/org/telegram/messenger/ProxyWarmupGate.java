@@ -46,6 +46,7 @@ public final class ProxyWarmupGate {
     private static final int USABLE_RAMP_SECOND_AT_MS = 2000;
     private static final int USABLE_RAMP_STABLE_MS = 5000;
     private static final int PRE_USABLE_PREFETCH_DELAY_MS = 1500;
+    private static final long WARMUP_DECISION_LOG_DEDUP_MS = 1000L;
     private static final String DECISION_ALLOW = "decision=allow";
     private static final String DECISION_DELAY = "decision=delay";
     private static final String DECISION_RAMP = "decision=ramp";
@@ -55,6 +56,8 @@ public final class ProxyWarmupGate {
     private static long usableAtMs = -1;
     private static long lastStateChangeAtMs = -1;
     private static int delayedRequests;
+    private static String lastDecisionLogKey = "";
+    private static long lastDecisionLogAtMs;
     private static final HashMap<String, DelayedBucket> delayedBuckets = new HashMap<>();
 
     private static final class DelayedOperation {
@@ -429,6 +432,10 @@ public final class ProxyWarmupGate {
         if (!BuildVars.LOGS_ENABLED) {
             return;
         }
+        long now = SystemClock.elapsedRealtime();
+        if (!shouldLogDecisionLocked(warmupState, decision, requestClass, account, dcId, delay, max, now)) {
+            return;
+        }
         StringBuilder builder = new StringBuilder("proxy_warmup state=");
         builder.append(warmupState.name().toLowerCase(Locale.US));
         builder.append(" ").append(decision);
@@ -450,8 +457,28 @@ public final class ProxyWarmupGate {
             builder.append(" endpoint=").append(endpointKey);
         }
         if (lastStateChangeAtMs > 0) {
-            builder.append(" state_age=").append(Math.max(0, SystemClock.elapsedRealtime() - lastStateChangeAtMs));
+            builder.append(" state_age=").append(Math.max(0, now - lastStateChangeAtMs));
         }
         FileLog.d(builder.toString());
+    }
+
+    private static boolean shouldLogDecisionLocked(ProxyWarmupState warmupState, String decision, NetworkRequestClass requestClass, int account, int dcId, long delay, int max, long now) {
+        if (!DECISION_RAMP.equals(decision) && !DECISION_DELAY.equals(decision)) {
+            return true;
+        }
+        String key = warmupState.name()
+                + "|" + decision
+                + "|" + requestClass.name()
+                + "|" + account
+                + "|" + dcId
+                + "|" + delay
+                + "|" + max
+                + "|" + (endpointKey != null ? endpointKey : "");
+        if (key.equals(lastDecisionLogKey) && now - lastDecisionLogAtMs < WARMUP_DECISION_LOG_DEDUP_MS) {
+            return false;
+        }
+        lastDecisionLogKey = key;
+        lastDecisionLogAtMs = now;
+        return true;
     }
 }

@@ -106,6 +106,8 @@ def main() -> int:
         "TCP_CONNECT_GATE_TIMEOUT",
         "ENDPOINT_COOLDOWN_TIMEOUT",
         "DNS_COALESCE_TIMEOUT",
+        "DNS_BLOCKED_ZERO_ADDRESS",
+        "DNS_NEGATIVE_CACHE_HIT",
     ):
         decision = phase_return(policy, phase)
         if "failure(" not in decision or "false, false" not in decision:

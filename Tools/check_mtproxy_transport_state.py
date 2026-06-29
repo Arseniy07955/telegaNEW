@@ -1082,6 +1082,36 @@ def main() -> int:
         "closeSocket enter/cleanup must be checked through the shared action requirements policy",
         failures,
     )
+    open_body = method_body(socket, "void ConnectionSocket::openConnection", "void ConnectionSocket::openConnectionInternal")
+    open_release_pos = open_body.find('releaseMtProxyEndpointTcpConnect("openConnection_reset")')
+    open_cancel_pos = open_body.find("cancelProxyHandshakeAdmission();")
+    open_reset_pos = open_body.find("if (!resetTransportSocketForOpenConnection())")
+    open_prepared_pos = open_body.find('setTransportState(TransportState::Prepared, "openConnection")')
+    require(
+        -1 not in (open_release_pos, open_cancel_pos, open_reset_pos, open_prepared_pos)
+        and open_release_pos < open_cancel_pos < open_reset_pos < open_prepared_pos,
+        "openConnection must cancel old gates and prove stale native socket resources are gone before entering Prepared",
+        failures,
+    )
+    reset_open_body = method_body(socket, "bool ConnectionSocket::resetTransportSocketForOpenConnection", "void ConnectionSocket::openConnection")
+    require(
+        "bool resetTransportSocketForOpenConnection();" in header
+        and 'setTransportState(TransportState::Closing, "openConnection_reset")' in reset_open_body
+        and "stateMachine.epollCtlDel" in reset_open_body
+        and "stateMachine.closeNativeSocket" in reset_open_body
+        and 'setSocketFd(-1, "openConnection_reset_close_native_socket")' in reset_open_body
+        and 'setTransportState(TransportState::Idle, "openConnection_reset_cleanup")' in reset_open_body
+        and "bool resetClean = socketFd < 0" in reset_open_body
+        and "currentTransportState == TransportState::Idle" in reset_open_body
+        and "waitingForHostResolve.empty()" in reset_open_body
+        and "!proxyHandshakeAdmissionActive" in reset_open_body
+        and "!proxyHandshakeAdmissionQueued" in reset_open_body
+        and "!proxyEndpointTcpConnectActive" in reset_open_body
+        and "logTransportInvariant" in reset_open_body
+        and "onDisconnected(" not in reset_open_body,
+        "openConnection reset must tear down stale fd/epoll/pre-TCP state and verify Idle invariants without notifying a normal disconnect",
+        failures,
+    )
     epoll_delete_policy_body = method_body(socket, "bool ConnectionSocket::canUnregisterEpollSocket", "bool ConnectionSocket::canCloseNativeSocket")
     require(
         'checkTransportActionRequirements("epoll_ctl_del")' in epoll_delete_policy_body,

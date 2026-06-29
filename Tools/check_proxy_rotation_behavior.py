@@ -23,6 +23,7 @@ NON_PUNITIVE_ROTATION_PHASES = (
     "connect_start",
     "socket_connect_start",
     "dns_cache_hit",
+    "dns_blocked_zero_address",
     "server_hello_hmac_ok",
     "first_tls_app_sent",
 )
@@ -100,6 +101,7 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
         good_trigger = session / "good_trigger.txt"
         dns_outage_trigger = session / "dns_outage_trigger.txt"
         dns_outage_hold = session / "dns_outage_hold.txt"
+        dns_blocked_zero_trigger = session / "dns_blocked_zero_trigger.txt"
         rotated_away_bad = session / "rotated_away_bad.txt"
         rotated_away_good = session / "rotated_away_good.txt"
         live_trigger.write_text(
@@ -141,6 +143,12 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
                 "06-25 20:33:00.200 D/tmessages dns_resolver fallback provider=cloudflare_json_doh host=avito.mosru.v6.rocks reason=UnknownHostException",
                 "06-25 20:33:00.300 D/tmessages dns_resolver provider=chain result=resolve_failed host=avito.mosru.v6.rocks ipv4=0 ipv6=0 source=",
                 "06-25 20:33:00.500 proxy_rotation decision=dns_outage_hold phase=host_resolve_failed endpoint=avito.mosru.v6.rocks:45631 host=avito.mosru.v6.rocks",
+            ),
+            encoding="utf-8",
+        )
+        dns_blocked_zero_trigger.write_text(
+            runtime_log_fixture(
+                "06-25 20:33:20.000 proxy_rotation decision=trigger phase=dns_blocked_zero_address endpoint=mt2.ddproxy.xyz:443 count=2 required=2",
             ),
             encoding="utf-8",
         )
@@ -224,6 +232,20 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
         require(
             dns_outage_hold_result.returncode == 0,
             dns_outage_hold_result.stderr.strip() or "runtime log verifier must accept dns_outage_hold instead of host_resolve_failed rotation",
+            failures,
+        )
+        dns_blocked_zero_result = subprocess.run(
+            [sys.executable, str(RUNTIME_LOG_VERIFIER), str(dns_blocked_zero_trigger)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        require(
+            dns_blocked_zero_result.returncode != 0
+            and "proxy_rotation trigger from non-punitive phase" in dns_blocked_zero_result.stderr,
+            "runtime log verifier must reject proxy_rotation trigger from dns_blocked_zero_address",
             failures,
         )
         rotated_away_bad_result = subprocess.run(
@@ -477,6 +499,14 @@ def main() -> int:
             "ProxyHealthStore.rememberLiveFailure",
         ),
         "explicit host_resolve_failed endpoint failures must be held by DNS outage before warmup failure or endpoint backoff",
+        failures,
+    )
+    require(
+        "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)" in on_native_stage
+        and "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(proxyInfo, normalized, now)" in mark_endpoint_failure
+        and "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, normalized, now)" in should_schedule_fallback
+        and "previous_dns_outage" in store,
+        "connection_not_started that follows a DNS outage must stay telemetry-only and must not backoff, rotate, or schedule fallback",
         failures,
     )
     require(

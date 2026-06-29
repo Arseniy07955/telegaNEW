@@ -42,6 +42,8 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
             case ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT:
             case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
             case ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT:
             case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
             case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
@@ -93,6 +95,7 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.ADMISSION_QUEUE:
             case ProxyCheckDiagnostics.ENDPOINT_COOLDOWN:
             case ProxyCheckDiagnostics.PHASE_ADAPTIVE_RECIPE:
+            case ProxyCheckDiagnostics.SECRET_DOMAIN_SANITIZED:
             case ProxyCheckDiagnostics.CONNECT_START:
             case ProxyCheckDiagnostics.CLIENT_HELLO_SENT:
             case ProxyCheckDiagnostics.ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
@@ -127,11 +130,13 @@ public final class ProxyPhasePolicy {
 
             case ProxyCheckDiagnostics.TCP_CONNECT_GATE_TIMEOUT:
             case ProxyCheckDiagnostics.DNS_COALESCE_TIMEOUT:
+            case ProxyCheckDiagnostics.DNS_NEGATIVE_CACHE_HIT:
+            case ProxyCheckDiagnostics.DNS_BLOCKED_ZERO_ADDRESS:
                 return failure(KeyScope.NETWORK, false, false);
 
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
-                return failure(KeyScope.EXACT, false, false);
+                return failure(KeyScope.EXACT, true, true);
 
             case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
             case ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT:

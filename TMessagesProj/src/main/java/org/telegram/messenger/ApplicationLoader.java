@@ -673,7 +673,11 @@ public class ApplicationLoader extends Application {
     }
 
     public void addItemOptions(ItemOptions itemOptions) {
-
+        // ZaStoGram: render plugin DRAWER_MENU items in the navigation drawer popup.
+        try {
+            org.telegram.plugins.PluginsController.getInstance().addDrawerMenuItems(itemOptions);
+        } catch (Throwable ignore) {
+        }
     }
 
     public boolean checkRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {

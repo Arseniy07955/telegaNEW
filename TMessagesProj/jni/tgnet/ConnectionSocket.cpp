@@ -266,9 +266,23 @@ static bool validateMtProxySecretDomain(const std::string &domain) {
     return labelLength > 0 && labelLength <= 63 && !labelStartsWithHyphen && domain.back() != '-';
 }
 
-static const char *sanitizeMtProxySecretDomain(const std::string &rawDomain, std::string *sanitizedDomain) {
+static bool mtProxyIsBlockedZeroAddress(const std::string &ip) {
+    struct in_addr parsedAddress;
+    if (inet_pton(AF_INET, ip.c_str(), &parsedAddress.s_addr) == 1) {
+        return parsedAddress.s_addr == 0;
+    }
+    struct in6_addr parsedIpv6Address;
+    static const struct in6_addr anyIpv6Address = IN6ADDR_ANY_INIT;
+    return inet_pton(AF_INET6, ip.c_str(), &parsedIpv6Address) == 1
+            && memcmp(&parsedIpv6Address, &anyIpv6Address, sizeof(parsedIpv6Address)) == 0;
+}
+
+static const char *sanitizeMtProxySecretDomain(const std::string &rawDomain, std::string *sanitizedDomain, bool *secretDomainSanitized) {
     std::string trimmed = trimMtProxySecretDomain(rawDomain);
     bool hasControl = false;
+    if (secretDomainSanitized != nullptr) {
+        *secretDomainSanitized = false;
+    }
     for (unsigned char c : trimmed) {
         if (std::iscntrl(c)) {
             hasControl = true;
@@ -284,11 +298,12 @@ static const char *sanitizeMtProxySecretDomain(const std::string &rawDomain, std
             }
         }
     }
-    if (hasControl) {
-        return "secret_parse_invalid_domain_control_char";
+    const std::string &domain = sanitizedDomain != nullptr ? *sanitizedDomain : trimmed;
+    if (!validateMtProxySecretDomain(domain)) {
+        return hasControl ? "secret_parse_invalid_domain_control_char" : "secret_parse_invalid_domain";
     }
-    if (!validateMtProxySecretDomain(sanitizedDomain != nullptr ? *sanitizedDomain : trimmed)) {
-        return "secret_parse_invalid_domain";
+    if (hasControl && secretDomainSanitized != nullptr) {
+        *secretDomainSanitized = true;
     }
     return nullptr;
 }
@@ -2290,10 +2305,14 @@ void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer(uint32_t delay, int3
                 if (!waitingForHostResolve.empty()) {
                     bool cachedIpv6 = delayedIpv6;
                     std::string host = waitingForHostResolve;
-                    if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6)) {
+                    bool blockedZeroAddress = false;
+                    if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6, &blockedZeroAddress)) {
                         setWaitingForHostResolve("", "dns_coalesce_cached_address");
                         setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_cached_address");
                         openConnectionInternal(cachedIpv6);
+                        return;
+                    }
+                    if (blockedZeroAddress) {
                         return;
                     }
                     setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_request_pending");
@@ -2678,13 +2697,34 @@ void ConnectionSocket::recordMtProxyEndpointDataPathSuccess(const char *reason) 
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup endpoint_data_path_success network_key=%s key=%s recipe_key=%s reason=%s cached_recipe_level=%d cached_recipe=%d working_recipe=%s recipe_id=%s", this, currentMtProxyNetworkEndpointKey.c_str(), currentMtProxyEndpointKey.c_str(), currentMtProxyRecipeCacheKey.c_str(), reason != nullptr ? reason : "unknown", success.cachedRecipeLevel, success.cachedRecipe ? 1 : 0, workingRecipeId.c_str(), workingRecipeId.c_str());
 }
 
-bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6) {
+void ConnectionSocket::closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason) {
+    setWaitingForHostResolve("", "dns_blocked_zero_address");
+    setMtProxyDnsResolveAttemptStarted(false, "dns_blocked_zero_address");
+    setMtProxyPreTcpWaitPhase(MtProxyStartupPhase::None, 0, "dns_blocked_zero_address");
+    setProxyEndpointDnsCoalesceReady(false, "dns_blocked_zero_address");
+    proxyCheckDiagnostic = "dns_blocked_zero_address";
+    publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup dns_blocked_zero_address host=%s ip=%s reason=%s", this, host.c_str(), ip.c_str(), reason != nullptr ? reason : "unknown");
+    closeSocket(1, -1);
+}
+
+bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6, bool *blockedZeroAddress) {
+    if (blockedZeroAddress != nullptr) {
+        *blockedZeroAddress = false;
+    }
     if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty()) {
         return false;
     }
     std::string cachedIpv4;
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     MtProxyEndpointPolicy::useCachedHostAddress(currentMtProxyDnsCacheKey, now, &cachedIpv4);
+    if (mtProxyIsBlockedZeroAddress(cachedIpv4)) {
+        if (blockedZeroAddress != nullptr) {
+            *blockedZeroAddress = true;
+        }
+        closeMtProxyDnsBlockedZeroAddress(host, cachedIpv4, "dns_cache_hit");
+        return false;
+    }
     if (cachedIpv4.empty() || inet_pton(AF_INET, cachedIpv4.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
         return false;
     }
@@ -2698,6 +2738,10 @@ bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress(const std::string &ho
 
 void ConnectionSocket::mtProxyEndpointStoreResolvedAddress(const std::string &host, const std::string &ip) {
     if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty() || ip.empty()) {
+        return;
+    }
+    if (mtProxyIsBlockedZeroAddress(ip)) {
+        closeMtProxyDnsBlockedZeroAddress(host, ip, "dns_cache_store");
         return;
     }
     struct in_addr parsedAddress;
@@ -3423,7 +3467,9 @@ std::string ConnectionSocket::deriveMtProxyTerminalDiagnostic(int32_t reason, in
         return proxyCheckDiagnostic;
     }
     if (proxyCheckDiagnostic == "secret_parse_invalid_domain_control_char"
-            || proxyCheckDiagnostic == "secret_parse_invalid_domain") {
+            || proxyCheckDiagnostic == "secret_parse_invalid_domain"
+            || proxyCheckDiagnostic == "dns_negative_cache_hit"
+            || proxyCheckDiagnostic == "dns_blocked_zero_address") {
         return proxyCheckDiagnostic;
     }
     bool startupActive = startupTimeline.hasLocalWait()
@@ -3850,9 +3896,83 @@ bool ConnectionSocket::sendPendingTlsFrame() {
     return true;
 }
 
+bool ConnectionSocket::resetTransportSocketForOpenConnection() {
+    bool hasOpenResources = socketFd >= 0
+            || epollRegistered
+            || currentTransportState != TransportState::Idle
+            || !waitingForHostResolve.empty()
+            || adjustWriteOpAfterResolve
+            || adjustWriteOpAfterPreTcpGate
+            || startupTimeline.dnsResolveAttemptStarted()
+            || startupTimeline.tcpConnectAttemptStarted()
+            || startupTimeline.hasLocalWait()
+            || proxyHandshakeAdmissionActive
+            || proxyHandshakeAdmissionQueued
+            || proxyHandshakeAdmissionQueuePublished
+            || proxyHandshakeAdmissionReady
+            || proxyEndpointTcpConnectActive
+            || proxyEndpointTcpConnectReady
+            || proxyEndpointTcpConnectGatePublished
+            || proxyEndpointBackoffReady
+            || proxyEndpointDnsCoalesceReady;
+    if (hasOpenResources) {
+        logTransportSnapshot("open_connection_reset", "openConnection_reset");
+        if (currentTransportState != TransportState::Closing) {
+            setTransportState(TransportState::Closing, "openConnection_reset");
+        }
+        if (epollRegistered) {
+            if (socketFd >= 0 && canUnregisterEpollSocket()) {
+                stateMachine.epollCtlDel(ConnectionsManager::getInstance(instanceNum).epolFd);
+            }
+            setEpollRegistered(false, "openConnection_reset_epoll_ctl_del");
+        }
+        if (socketFd >= 0) {
+            if (canCloseNativeSocket()) {
+                if (!stateMachine.closeNativeSocket("openConnection_reset_close_native_socket") && LOGS_ENABLED) {
+                    DEBUG_E("connection(%p) unable to close stale socket during openConnection reset", this);
+                }
+            }
+            setSocketFd(-1, "openConnection_reset_close_native_socket");
+        }
+    }
+    setWaitingForHostResolve("", "openConnection_reset_cleanup");
+    setAdjustWriteOpAfterResolve(false, "openConnection_reset_cleanup");
+    setAdjustWriteOpAfterPreTcpGate(false, "openConnection_reset_cleanup");
+    setMtProxyTcpConnectAttemptStarted(false, "openConnection_reset_cleanup");
+    setMtProxyDnsResolveAttemptStarted(false, "openConnection_reset_cleanup");
+    setMtProxyPreTcpWaitPhase(MtProxyStartupPhase::None, 0, "openConnection_reset_cleanup");
+    setProxyHandshakeAdmissionState(0, 0, 0, 0, "openConnection_reset_cleanup");
+    setProxyEndpointTcpConnectGateState(0, 0, 0, "openConnection_reset_cleanup");
+    setProxyEndpointBackoffReady(false, "openConnection_reset_cleanup");
+    setProxyEndpointDnsCoalesceReady(false, "openConnection_reset_cleanup");
+    setTransportState(TransportState::Idle, "openConnection_reset_cleanup");
+    bool resetClean = socketFd < 0
+            && !epollRegistered
+            && currentTransportState == TransportState::Idle
+            && waitingForHostResolve.empty()
+            && !adjustWriteOpAfterResolve
+            && !adjustWriteOpAfterPreTcpGate
+            && !startupTimeline.dnsResolveAttemptStarted()
+            && !startupTimeline.tcpConnectAttemptStarted()
+            && !startupTimeline.hasLocalWait()
+            && !proxyHandshakeAdmissionActive
+            && !proxyHandshakeAdmissionQueued
+            && !proxyEndpointTcpConnectActive;
+    if (!resetClean) {
+        logTransportInvariant("openConnection", "reset_not_clean");
+        logTransportSnapshot("open_connection_reset_failed", "openConnection_reset_cleanup");
+    }
+    return resetClean;
+}
+
 void ConnectionSocket::openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType, int32_t datacenterId, bool mediaConnection) {
     releaseMtProxyEndpointTcpConnect("openConnection_reset");
     cancelProxyHandshakeAdmission();
+    if (!resetTransportSocketForOpenConnection()) {
+        proxyCheckDiagnostic = "connection_not_started";
+        if (LOGS_ENABLED) DEBUG_E("connection(%p) mtproxy_startup open_connection_reset_failed address=%s port=%u", this, address.c_str(), (unsigned int) port);
+        return;
+    }
     clearPendingClientHello();
     clearPendingTlsFrame();
     currentNetworkType = networkType;
@@ -4103,7 +4223,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             setProxyAuthState(10, "faketls_proxy_setup");
             currentSecret = proxySecret->substr(1, 16);
             std::string sanitizedSecretDomain;
-            const char *domainDiagnostic = sanitizeMtProxySecretDomain(proxySecret->substr(17), &sanitizedSecretDomain);
+            bool secretDomainSanitized = false;
+            const char *domainDiagnostic = sanitizeMtProxySecretDomain(proxySecret->substr(17), &sanitizedSecretDomain, &secretDomainSanitized);
             currentSecretDomain = sanitizedSecretDomain;
             currentSecretIsFakeTls = true;
             currentMtProxyDnsCacheKey = MtProxyEndpointPolicy::dnsCacheKeyFor(*proxyAddress, proxyPort);
@@ -4122,6 +4243,9 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) mtproxy_startup secret_domain_invalid phase=%s raw_len=%d sanitized=%s", this, proxyCheckDiagnostic.c_str(), (int) (proxySecret->size() - 17), currentSecretDomain.c_str());
                 closeSocket(1, -1);
                 return;
+            }
+            if (secretDomainSanitized) {
+                publishSanitizedSecretDomainIfNeeded(proxySecret->size() - 17);
             }
             currentEffectiveProxyTlsProfile = MtProxyAdaptivePolicy::resolveEffectiveTlsProfile(currentProxyTlsProfile, currentProxyTlsProfileKey);
             currentClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(proxyOptions.clientHelloFragmentation);
@@ -4180,8 +4304,14 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup resolved_sslip host=%s address=%s", this, proxyAddress->c_str(), sslipAddress.c_str());
                 }
             }
-            if (continueCheckAddress && mtProxyEndpointUseCachedHostAddress(*proxyAddress, &ipv6)) {
-                continueCheckAddress = false;
+            if (continueCheckAddress) {
+                bool blockedZeroAddress = false;
+                if (mtProxyEndpointUseCachedHostAddress(*proxyAddress, &ipv6, &blockedZeroAddress)) {
+                    continueCheckAddress = false;
+                }
+                if (blockedZeroAddress) {
+                    return;
+                }
             }
             if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
@@ -4261,7 +4391,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             setProxyAuthState(10, "faketls_direct_setup");
             currentSecret = secret.substr(1, 16);
             std::string sanitizedSecretDomain;
-            const char *domainDiagnostic = sanitizeMtProxySecretDomain(secret.substr(17), &sanitizedSecretDomain);
+            bool secretDomainSanitized = false;
+            const char *domainDiagnostic = sanitizeMtProxySecretDomain(secret.substr(17), &sanitizedSecretDomain, &secretDomainSanitized);
             currentSecretDomain = sanitizedSecretDomain;
             currentSecretIsFakeTls = true;
             currentMtProxyNetworkEndpointKey = MtProxyEndpointPolicy::networkEndpointKeyFor(address, port);
@@ -4280,6 +4411,9 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) mtproxy_startup secret_domain_invalid phase=%s raw_len=%d sanitized=%s", this, proxyCheckDiagnostic.c_str(), (int) (secret.size() - 17), currentSecretDomain.c_str());
                 closeSocket(1, -1);
                 return;
+            }
+            if (secretDomainSanitized) {
+                publishSanitizedSecretDomainIfNeeded(secret.size() - 17);
             }
             currentEffectiveProxyTlsProfile = MtProxyAdaptivePolicy::resolveEffectiveTlsProfile(currentProxyTlsProfile, currentProxyTlsProfileKey);
             currentClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(managerOptions.clientHelloFragmentation);
@@ -4450,6 +4584,20 @@ bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &pa
         }
     }
     return true;
+}
+
+void ConnectionSocket::publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength) {
+    if (!isCurrentMtProxyConnection() || currentMtProxyEndpointKey.empty()) {
+        return;
+    }
+    if (!MtProxyEndpointPolicy::recordSecretDomainSanitized(currentMtProxyEndpointKey)) {
+        return;
+    }
+    proxyCheckDiagnostic = "secret_domain_sanitized";
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_startup secret_domain_sanitized raw_len=%d sanitized=%s", this, (int) rawDomainLength, currentSecretDomain.c_str());
+    }
+    publishProxyConnectionStage("secret_domain_sanitized");
 }
 
 void ConnectionSocket::publishProxyConnectionStage(const char *diagnostic) {
@@ -5407,9 +5555,13 @@ void ConnectionSocket::requestPendingHostResolve() {
     ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
     if (manager.delegate == nullptr) {
         bool cachedIpv6 = false;
-        if (mtProxyEndpointUseCachedHostAddress(waitingForHostResolve, &cachedIpv6)) {
+        bool blockedZeroAddress = false;
+        if (mtProxyEndpointUseCachedHostAddress(waitingForHostResolve, &cachedIpv6, &blockedZeroAddress)) {
             setWaitingForHostResolve("", "host_resolve_cached_address");
             openConnectionInternal(cachedIpv6);
+            return;
+        }
+        if (blockedZeroAddress) {
             return;
         }
         proxyCheckDiagnostic = "connection_not_started";
@@ -5418,6 +5570,16 @@ void ConnectionSocket::requestPendingHostResolve() {
         return;
     }
     std::string host = waitingForHostResolve;
+    if (manager.delegate->isHostResolveNegativeCached(host, instanceNum)) {
+        setWaitingForHostResolve("", "dns_negative_cache_hit");
+        setMtProxyDnsResolveAttemptStarted(false, "dns_negative_cache_hit");
+        setMtProxyPreTcpWaitPhase(MtProxyStartupPhase::None, 0, "dns_negative_cache_hit");
+        proxyCheckDiagnostic = "dns_negative_cache_hit";
+        publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup dns_negative_cache_hit host=%s key=%s", this, host.c_str(), proxyHandshakeAdmissionKey.c_str());
+        closeSocket(1, -1);
+        return;
+    }
     publishProxyConnectionStage("host_resolve_start");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup host_resolve_start admission_mode=%s connection_pattern=%s host=%s key=%s", this, mtProxyConnectionPatternModeName(currentConnectionPatternMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), host.c_str(), proxyHandshakeAdmissionKey.c_str());
     setMtProxyDnsResolveAttemptStarted(true, "host_resolve_start");
@@ -5433,10 +5595,25 @@ void ConnectionSocket::onHostNameResolved(std::string host, std::string ip, bool
             setWaitingForHostResolve("", "host_resolve_callback");
             setMtProxyDnsResolveAttemptStarted(false, "host_resolve_callback");
             setMtProxyPreTcpWaitPhase(MtProxyStartupPhase::None, 0, "host_resolve_callback");
+            if (ip == "dns_negative_cache_hit") {
+                proxyCheckDiagnostic = "dns_negative_cache_hit";
+                publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup dns_negative_cache_hit host=%s callback=1", this, host.c_str());
+                closeSocket(1, -1);
+                return;
+            }
+            if (ip == "dns_blocked_zero_address" || mtProxyIsBlockedZeroAddress(ip)) {
+                closeMtProxyDnsBlockedZeroAddress(host, ip, "host_resolve_callback");
+                return;
+            }
             if (ip.empty() || inet_pton(AF_INET, ip.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
                 bool cachedIpv6 = ipv6;
-                if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6)) {
+                bool blockedZeroAddress = false;
+                if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6, &blockedZeroAddress)) {
                     openConnectionInternal(cachedIpv6);
+                    return;
+                }
+                if (blockedZeroAddress) {
                     return;
                 }
                 proxyCheckDiagnostic = "host_resolve_failed";

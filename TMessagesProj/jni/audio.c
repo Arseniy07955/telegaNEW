@@ -220,9 +220,8 @@ static int writeOggPage(ogg_page *page, FILE *os) {
     return written;
 }
 
-const opus_int32 bitrate = OPUS_BITRATE_MAX;
+const opus_int32 voice_record_bitrate = 16000;
 const opus_int32 frame_size = 960;
-const int with_cvbr = 1;
 const int max_ogg_delay = 0;
 const int comment_padding = 512;
 
@@ -350,10 +349,21 @@ int initRecorder(const char *path, opus_int32 sampleRate) {
     min_bytes = max_frame_bytes = (1275 * 3 + 7) * header.nb_streams;
     _packet = malloc(max_frame_bytes);
     
-    result = opus_encoder_ctl(_encoder, OPUS_SET_BITRATE(bitrate));
-    //result = opus_encoder_ctl(_encoder, OPUS_SET_COMPLEXITY(10));
+    result = opus_encoder_ctl(_encoder, OPUS_SET_BITRATE(voice_record_bitrate));
     if (result != OPUS_OK) {
         LOGE("Error OPUS_SET_BITRATE returned: %s", opus_strerror(result));
+        return 0;
+    }
+
+    result = opus_encoder_ctl(_encoder, OPUS_SET_VBR(1));
+    if (result != OPUS_OK) {
+        LOGE("Error OPUS_SET_VBR returned: %s", opus_strerror(result));
+        return 0;
+    }
+
+    result = opus_encoder_ctl(_encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+    if (result != OPUS_OK) {
+        LOGE("Error OPUS_SET_SIGNAL returned: %s", opus_strerror(result));
         return 0;
     }
     

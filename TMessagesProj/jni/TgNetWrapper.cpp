@@ -44,6 +44,7 @@ jmethodID jclass_ConnectionsManager_onBytesSent;
 jmethodID jclass_ConnectionsManager_onBytesReceived;
 jmethodID jclass_ConnectionsManager_onRequestNewServerIpAndPort;
 jmethodID jclass_ConnectionsManager_onProxyError;
+jmethodID jclass_ConnectionsManager_isHostResolveNegativeCached;
 jmethodID jclass_ConnectionsManager_getHostByName;
 jmethodID jclass_ConnectionsManager_getInitFlags;
 jmethodID jclass_ConnectionsManager_onPremiumFloodWait;
@@ -453,6 +454,13 @@ class Delegate : public ConnectiosManagerDelegate {
         jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onProxyError);
     }
 
+    bool isHostResolveNegativeCached(std::string domain, int32_t instanceNum) {
+        jstring domainName = jniEnv[instanceNum]->NewStringUTF(domain.c_str());
+        jboolean result = jniEnv[instanceNum]->CallStaticBooleanMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_isHostResolveNegativeCached, domainName);
+        jniEnv[instanceNum]->DeleteLocalRef(domainName);
+        return result == JNI_TRUE;
+    }
+
     void getHostByName(std::string domain, int32_t instanceNum, ConnectionSocket *socket) {
         jstring domainName = jniEnv[instanceNum]->NewStringUTF(domain.c_str());
         jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_getHostByName, domainName, (jlong) (intptr_t) socket);
@@ -776,6 +784,10 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     }
     jclass_ConnectionsManager_onProxyError = env->GetStaticMethodID(jclass_ConnectionsManager, "onProxyError", "()V");
     if (jclass_ConnectionsManager_onProxyError == 0) {
+        return JNI_FALSE;
+    }
+    jclass_ConnectionsManager_isHostResolveNegativeCached = env->GetStaticMethodID(jclass_ConnectionsManager, "isHostResolveNegativeCached", "(Ljava/lang/String;)Z");
+    if (jclass_ConnectionsManager_isHostResolveNegativeCached == 0) {
         return JNI_FALSE;
     }
     jclass_ConnectionsManager_getHostByName = env->GetStaticMethodID(jclass_ConnectionsManager, "getHostByName", "(Ljava/lang/String;J)V");

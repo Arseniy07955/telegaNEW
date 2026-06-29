@@ -176,6 +176,7 @@ def main() -> int:
         )
 
     delay_idx = on_native_stage.find("shouldDelayDnsVisiblePhase(event.phase)")
+    dns_connection_hold_idx = on_native_stage.find("shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)")
     visible_write_idx = on_native_stage.find("if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))")
     require(
         delay_idx >= 0
@@ -183,6 +184,16 @@ def main() -> int:
         and delay_idx < visible_write_idx
         and 'return new Decision("telemetry_only"' in on_native_stage,
         "DNS telemetry debounce must run before the generic visible mirror branch",
+        failures,
+    )
+    require(
+        dns_connection_hold_idx >= 0
+        and visible_write_idx >= 0
+        and dns_connection_hold_idx < visible_write_idx
+        and "ProxyCheckDiagnostics.CONNECTION_NOT_STARTED" in store
+        and "previous_dns_outage" in store
+        and 'return new Decision("telemetry_only", event.phase, event.endpointKey, false, false, false)' in on_native_stage,
+        "connection_not_started after a DNS outage/resolve failure must stay telemetry_only before visible mirror/backoff/rotation",
         failures,
     )
     require(
