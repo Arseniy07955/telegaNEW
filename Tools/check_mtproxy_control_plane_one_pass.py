@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "Tools"
 MESSENGER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger"
 TGNET_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
+ROTATION = MESSENGER / "ProxyRotationController.java"
 JNI = ROOT / "TMessagesProj/jni"
 TGNET = JNI / "tgnet"
 
@@ -66,8 +67,20 @@ def verify_runtime_contract(failures: list[str]) -> None:
     )
     require(
         bad_proxy_check_overwrite.returncode != 0
-        and "proxy-check/candidate event mirrored as active visible status" in bad_proxy_check_overwrite.stderr,
+        and "non-active origin mirrored as active visible status" in bad_proxy_check_overwrite.stderr,
         "runtime verifier must reject proxy-check/candidate visible overwrite after fresh usable success",
+        failures,
+    )
+
+    bad_same_endpoint_proxy_check_success = run_verifier(
+        base_log(
+            "06-30 13:20:31.000 proxy_control decision=visible_usable_success source=native_stage origin=proxy_check account=0 phase=first_tls_app_recv endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
+        )
+    )
+    require(
+        bad_same_endpoint_proxy_check_success.returncode != 0
+        and "non-active origin mirrored as active visible status" in bad_same_endpoint_proxy_check_success.stderr,
+        "runtime verifier must reject same-endpoint proxy_check usable success as global visible success",
         failures,
     )
 
@@ -79,6 +92,29 @@ def verify_runtime_contract(failures: list[str]) -> None:
     require(
         good_proxy_check_isolated.returncode == 0,
         good_proxy_check_isolated.stderr.strip() or "runtime verifier must accept proxy_list_only candidate telemetry",
+        failures,
+    )
+
+    good_same_endpoint_proxy_check_isolated = run_verifier(
+        base_log(
+            "06-30 13:20:31.000 proxy_control decision=proxy_list_only source=native_stage origin=proxy_check account=0 phase=first_tls_app_recv endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
+        )
+    )
+    require(
+        good_same_endpoint_proxy_check_isolated.returncode == 0,
+        good_same_endpoint_proxy_check_isolated.stderr.strip() or "runtime verifier must accept same-endpoint proxy_check row-only telemetry",
+        failures,
+    )
+
+    bad_non_active_rotation = run_verifier(
+        base_log(
+            "06-30 13:20:31.000 proxy_rotation decision=trigger phase=mtproxy_packet_sent_no_response endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army origin=proxy_check count=2",
+        )
+    )
+    require(
+        bad_non_active_rotation.returncode != 0
+        and "proxy_rotation trigger from non-active origin" in bad_non_active_rotation.stderr,
+        "runtime verifier must reject proxy rotation triggers from non-active origins",
         failures,
     )
 
@@ -96,9 +132,10 @@ def verify_runtime_contract(failures: list[str]) -> None:
 
     good_terminal_quarantine = run_verifier(
         base_log(
-            "06-30 13:20:40.000 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:wb.ru",
-            "06-30 13:20:40.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:wb.ru cancelled=3",
-            "06-30 13:20:40.020 proxy_control decision=ignored_cancelled_generation source=native_stage origin=active_proxy account=0 phase=ignored_cancelled_generation endpoint=fast2.mtproxy.zip:443:ee:wb.ru",
+            "06-30 13:20:40.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru active_selected=1",
+            "06-30 13:20:40.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru proxy_check_cancelled=0 native_cancelled=3",
+            "06-30 13:20:40.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
+            "06-30 13:20:40.030 proxy_control decision=ignored_cancelled_generation source=native_stage origin=active_proxy account=0 phase=ignored_cancelled_generation endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
         )
     )
     require(
@@ -140,6 +177,7 @@ def main() -> int:
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     diagnostics = read(MESSENGER / "ProxyCheckDiagnostics.java")
     scheduler = read(MESSENGER / "ProxyCheckScheduler.java")
+    rotation = read(ROTATION)
     java_connections = read(TGNET_JAVA)
     wrapper = read(JNI / "TgNetWrapper.cpp")
     defines = read(TGNET / "Defines.h")
@@ -159,7 +197,25 @@ def main() -> int:
     require("enum Origin" in event and "ACTIVE_PROXY" in event and "PROXY_CHECK" in event and "PROXY_LIST_ROW" in event, "ProxyConnectionEvent must carry explicit origin values", failures)
     require("origin" in wrapper and "probeKey" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V" in wrapper, "JNI proxy stage callback must carry origin and probe key", failures)
     require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin)" in defines, "native delegate must expose proxy stage origin and probe key", failures)
-    require("decision=proxy_list_only" in runtime and "Origin.ACTIVE_PROXY" in runtime, "ProxyRuntimeStateStore must keep proxy-check/candidate telemetry out of active visible status", failures)
+    require(
+        "if (!isActiveProxyEvent(event))" in runtime
+        and "updateProxyRowOnly" in runtime
+        and "active_origin_required" in runtime,
+        "ProxyRuntimeStateStore must route non-active proxy events to row-only handling before active visible/backoff policy",
+        failures,
+    )
+    require(
+        "event.origin.wireName" in java_connections
+        and "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName)" in java_connections,
+        "ConnectionsManager must propagate proxy event origin through proxyConnectionStageChanged notifications",
+        failures,
+    )
+    require(
+        "ignore_non_active_origin" in rotation
+        and "ProxyConnectionEvent.Origin.ACTIVE_PROXY.wireName.equals(origin)" in rotation,
+        "ProxyRotationController must ignore proxyConnectionStageChanged events whose origin is not active_proxy",
+        failures,
+    )
 
     require("isOneShotTerminal" in phase_policy, "ProxyPhasePolicy must expose one-shot terminal verdicts", failures)
     require("terminal_quarantine" in runtime and "quarantineAndCancelEndpoint" in runtime, "runtime store must centralize terminal quarantine", failures)

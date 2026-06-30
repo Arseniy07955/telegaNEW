@@ -84,6 +84,11 @@ public final class ProxyEndpointKey {
             if (domain.length() > 0) {
                 builder.append(":").append(domain);
             }
+        } else {
+            String hash = secretHashForLiveStage(secret);
+            if (hash.length() > 0) {
+                builder.append(":secret_hash=").append(hash);
+            }
         }
         return builder.toString();
     }
@@ -158,6 +163,19 @@ public final class ProxyEndpointKey {
             return "";
         }
         return sanitizeSecretDomainForLiveStage(new String(secret, 17, secret.length - 17, StandardCharsets.UTF_8));
+    }
+
+    static String secretHashForLiveStage(byte[] secret) {
+        if (secret == null || secret.length == 0) {
+            return "";
+        }
+        byte[] digest = Utilities.computeSHA256(secret, 0, secret.length);
+        if (digest == null || digest.length < 8) {
+            return "";
+        }
+        byte[] shortDigest = new byte[8];
+        System.arraycopy(digest, 0, shortDigest, 0, shortDigest.length);
+        return Utilities.bytesToHex(shortDigest).toLowerCase(Locale.US);
     }
 
     static String sanitizeSecretDomainForLiveStage(String domain) {

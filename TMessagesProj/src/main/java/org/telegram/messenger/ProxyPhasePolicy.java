@@ -15,7 +15,7 @@ public final class ProxyPhasePolicy {
         NETWORK
     }
 
-    private static final PhaseInfo NEUTRAL_NONE = new PhaseInfo(Kind.NEUTRAL, KeyScope.NONE, false, false, true, false);
+    private static final PhaseInfo NEUTRAL_NONE = new PhaseInfo(Kind.NEUTRAL, KeyScope.NONE, false, false, true, false, false);
 
     private ProxyPhasePolicy() {
     }
@@ -57,7 +57,7 @@ public final class ProxyPhasePolicy {
     public static boolean isLocalOrLiveNonPunitive(String phase) {
         return isLivePhase(phase)
                 || !canBackoff(phase)
-                || !canRotate(phase);
+                || (!canRotate(phase) && !terminalExactConfig(phase));
     }
 
     public static boolean canOverwriteVisible(String phase) {
@@ -66,6 +66,10 @@ public final class ProxyPhasePolicy {
 
     public static boolean usableSuccess(String phase) {
         return classify(phase).usableSuccess;
+    }
+
+    public static boolean terminalExactConfig(String phase) {
+        return classify(phase).terminalExactConfig;
     }
 
     public static boolean isLivePhase(String phase) {
@@ -98,7 +102,8 @@ public final class ProxyPhasePolicy {
 
     private static PhaseInfo classify(String phase) {
         // Coordinator-owned exact phases: mtproxy_probe_wait, mtproxy_probe_wait_timeout,
-        // faketls_server_hello_wait_timeout, server_closed_after_client_hello.
+        // faketls_server_hello_wait_timeout, server_closed_after_client_hello,
+        // unrecognized_response_after_client_hello.
         switch (ProxyCheckDiagnostics.normalize(phase)) {
             case ProxyCheckDiagnostics.OK:
             case ProxyCheckDiagnostics.CHECKING:
@@ -127,15 +132,17 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.HOST_RESOLVE_START:
             case ProxyCheckDiagnostics.SOCKET_CONNECT_START:
             case ProxyCheckDiagnostics.SOCKET_CONNECTED:
-            case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:
             case ProxyCheckDiagnostics.WAITING_TCP:
                 return live(KeyScope.NETWORK);
+
+            case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:
+                return live(KeyScope.EXACT);
 
             case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:
                 return success(KeyScope.EXACT);
 
             case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:
-                return success(KeyScope.NETWORK);
+                return success(KeyScope.EXACT);
 
             case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:
                 return failure(KeyScope.NONE, false, false);
@@ -160,7 +167,6 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.TCP_NOT_CONNECTED:
             case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
             case ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED:
-            case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
             case ProxyCheckDiagnostics.DROPPED_EARLY_AFTER_APPDATA:
                 return failure(KeyScope.NETWORK, true, true);
 
@@ -170,12 +176,16 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.CLIENT_HELLO_SENT_NO_SERVER_HELLO:
             case ProxyCheckDiagnostics.TLS_ALERT_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
             case ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED:
                 return failure(KeyScope.EXACT, false, false);
 
             case ProxyCheckDiagnostics.UNSUPPORTED_FOR_CURRENT_CLIENT:
+                return terminalExactFailure();
+
+            case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
             case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
             case ProxyCheckDiagnostics.CONNECTING_TIMEOUT:
                 return failure(KeyScope.EXACT, true, true);
@@ -195,15 +205,19 @@ public final class ProxyPhasePolicy {
     }
 
     private static PhaseInfo live(KeyScope keyScope) {
-        return new PhaseInfo(Kind.LIVE, keyScope, false, false, true, false);
+        return new PhaseInfo(Kind.LIVE, keyScope, false, false, true, false, false);
     }
 
     private static PhaseInfo success(KeyScope keyScope) {
-        return new PhaseInfo(Kind.SUCCESS, keyScope, false, false, true, true);
+        return new PhaseInfo(Kind.SUCCESS, keyScope, false, false, true, true, false);
     }
 
     private static PhaseInfo failure(KeyScope keyScope, boolean canBackoff, boolean canRotate) {
-        return new PhaseInfo(Kind.FAILURE, keyScope, canBackoff, canRotate, true, false);
+        return new PhaseInfo(Kind.FAILURE, keyScope, canBackoff, canRotate, true, false, false);
+    }
+
+    private static PhaseInfo terminalExactFailure() {
+        return new PhaseInfo(Kind.FAILURE, KeyScope.EXACT, true, false, true, false, true);
     }
 
     private static final class PhaseInfo {
@@ -213,14 +227,16 @@ public final class ProxyPhasePolicy {
         final boolean canRotate;
         final boolean canOverwriteVisible;
         final boolean usableSuccess;
+        final boolean terminalExactConfig;
 
-        PhaseInfo(Kind kind, KeyScope keyScope, boolean canBackoff, boolean canRotate, boolean canOverwriteVisible, boolean usableSuccess) {
+        PhaseInfo(Kind kind, KeyScope keyScope, boolean canBackoff, boolean canRotate, boolean canOverwriteVisible, boolean usableSuccess, boolean terminalExactConfig) {
             this.kind = kind;
             this.keyScope = keyScope;
             this.canBackoff = canBackoff;
             this.canRotate = canRotate;
             this.canOverwriteVisible = canOverwriteVisible;
             this.usableSuccess = usableSuccess;
+            this.terminalExactConfig = terminalExactConfig;
         }
     }
 }

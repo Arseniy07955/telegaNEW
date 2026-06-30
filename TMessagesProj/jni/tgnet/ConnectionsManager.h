@@ -79,6 +79,7 @@ public:
     void setSystemLangCode(std::string langCode);
     void updateDcSettings(uint32_t datacenterId, bool workaround, bool ifLoadingTryAgain);
     void setPushConnectionEnabled(bool value);
+    void setLivePingInterval(int32_t intervalMs);
     void applyDnsConfig(NativeByteBuffer *buffer, std::string phone, int32_t date);
     int64_t checkProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options, onRequestTimeFunc requestTimeFunc, jobject ptr1);
     void cancelProxyCheck(int64_t pingId);
@@ -106,8 +107,10 @@ private:
     void wakeup();
     void processServerResponse(TLObject *message, int64_t messageId, int32_t messageSeqNo, int64_t messageSalt, Connection *connection, int64_t innerMsgId, int64_t containerMessageId);
     void sendPing(Datacenter *datacenter, bool usePushConnection);
-    void sendMessagesToConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck);
-    void sendMessagesToConnectionWithConfirmation(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck);
+    bool sendMessagesToConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck, bool requeueOnDeadConnection = true);
+    bool sendMessagesToConnectionWithConfirmation(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck, bool requeueOnDeadConnection = true);
+    void requeueMessagesForDeadConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, const char *reason);
+    void removeQuickAckMappingForMessages(int32_t quickAckId, const std::vector<std::unique_ptr<NetworkMessage>> &messages);
     void requestSaltsForDatacenter(Datacenter *datacenter, bool media, bool useTempConnection);
     void clearRequestsForDatacenter(Datacenter *datacenter, HandshakeType type);
     void registerForInternalPushUpdates();
@@ -170,6 +173,7 @@ private:
     int64_t pushSessionId = 0;
     int32_t currentPingTime = 0;
     int32_t currentPingTimeLive = 0;
+    int32_t livePingIntervalOverride = 0;
     bool registeringForPush = false;
     int64_t lastPushPingTime = 0;
     int32_t nextPingTimeOffset = 60000 * 3;

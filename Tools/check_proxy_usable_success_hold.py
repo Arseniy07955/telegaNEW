@@ -413,26 +413,33 @@ def main() -> int:
     status_text = method_body(read(MESSENGER / "ProxyCheckDiagnostics.java"), "public static String statusText")
     header_text = method_body(read(MESSENGER / "ProxyCheckDiagnostics.java"), "public static String headerStatusText")
     color_key = method_body(read(MESSENGER / "ProxyCheckDiagnostics.java"), "public static int statusColorKey")
-    connected_check = "currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating"
+    connected_check = "currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)"
+    diagnostics_text = read(MESSENGER / "ProxyCheckDiagnostics.java")
     require(
         status_text.find(connected_check) != -1
         and status_text.find("hasFreshLivePhase(proxyInfo)") != -1
         and status_text.find(connected_check) < status_text.find("hasFreshLivePhase(proxyInfo)"),
-        "connected current-proxy status text must outrank unresolved live socket phases",
+        "connected current-proxy status text must be gated before unresolved live socket phases",
         failures,
     )
     require(
         header_text.find(connected_check) != -1
         and header_text.find("hasFreshLivePhase(proxyInfo)") != -1
         and header_text.find(connected_check) < header_text.find("hasFreshLivePhase(proxyInfo)"),
-        "connected current-proxy header text must outrank unresolved live socket phases",
+        "connected current-proxy header text must be gated before unresolved live socket phases",
         failures,
     )
     require(
         color_key.find(connected_check) != -1
         and color_key.find("hasFreshLivePhase(proxyInfo)") != -1
         and color_key.find(connected_check) < color_key.find("hasFreshLivePhase(proxyInfo)"),
-        "connected current-proxy color must outrank unresolved live socket phases",
+        "connected current-proxy color must be gated before unresolved live socket phases",
+        failures,
+    )
+    require(
+        "currentConnectionIsUsableForStatus" in diagnostics_text
+        and "hasFreshLivePhase(proxyInfo) && isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic)" in diagnostics_text,
+        "MTProxy connected status must require a fresh data-path success phase",
         failures,
     )
 

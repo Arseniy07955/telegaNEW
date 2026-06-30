@@ -164,6 +164,7 @@ static bool failureCanBeShadowedBySuccess(const std::string &diagnostic) {
             || diagnostic == "client_hello_sent_no_server_hello"
             || diagnostic == "tls_alert_after_client_hello"
             || diagnostic == "short_tls_response_after_client_hello"
+            || diagnostic == "unrecognized_response_after_client_hello"
             || diagnostic == "unrecognized_tls_response_after_client_hello"
             || diagnostic == "server_hello_hmac_mismatch"
             || diagnostic == "unsupported_for_current_client"
@@ -249,7 +250,6 @@ std::string MtProxyEndpointPolicy::stateKeyForPhase(const std::string &phase, co
             || phase == "host_resolve_timeout"
             || phase == "tcp_not_connected"
             || phase == "tcp_connected_no_pong"
-            || phase == "mtproxy_packet_sent_no_response"
             || phase == "dropped_early_after_appdata")
             && !networkEndpointKey.empty()) {
         return networkEndpointKey;

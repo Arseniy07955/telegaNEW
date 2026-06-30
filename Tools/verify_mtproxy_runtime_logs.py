@@ -60,6 +60,7 @@ FRESH_USABLE_FAILURE_OVERWRITE_PHASES = {
     "client_hello_sent_no_server_hello",
     "tls_alert_after_client_hello",
     "short_tls_response_after_client_hello",
+    "unrecognized_response_after_client_hello",
     "unrecognized_tls_response_after_client_hello",
     "server_hello_hmac_mismatch",
     "background_handshake_aborted",
@@ -88,7 +89,6 @@ PUNITIVE_ROTATION_PHASES = {
     "host_resolve_failed",
     "host_resolve_timeout",
     "tcp_connected_no_pong",
-    "unsupported_for_current_client",
     "mtproxy_packet_sent_no_response",
     "post_handshake_no_appdata",
     "dropped_early_after_appdata",
@@ -178,6 +178,10 @@ def verify_visible_success_hold(lines: list[str]) -> list[str]:
             continue
         phase = line_field(line, "phase")
         endpoint = line_field(line, "endpoint")
+        origin = line_field(line, "origin")
+        if decision in {"visible_usable_success", "visible_only"} and origin and origin != "active_proxy":
+            failures.append(f"non-active origin mirrored as active visible status: {line}")
+            continue
         if decision == "visible_usable_success" and phase in USABLE_SUCCESS_PROXY_PHASES:
             usable_successes.append((line_time_ms(line), endpoint, line))
             continue
@@ -369,6 +373,15 @@ def verify_rotation_hysteresis(lines: list[str]) -> list[str]:
     for line in lines:
         if proxy_control_decision(line) == "visible_usable_success" and line_field(line, "phase") in USABLE_SUCCESS_PROXY_PHASES:
             usable_successes.append((line_time_ms(line), line_field(line, "endpoint"), line))
+            continue
+        if "proxy_rotation decision=trigger" in line:
+            origin = line_field(line, "origin")
+            if origin and origin != "active_proxy":
+                failures.append(f"proxy_rotation trigger from non-active origin: {line}")
+        if "proxy_rotation decision=trigger_terminal_exact" in line:
+            phase = line_field(line, "phase")
+            if phase not in TERMINAL_ONE_SHOT_PHASES:
+                failures.append(f"terminal exact rotation trigger from non-terminal phase: {line}")
             continue
         if "proxy_rotation decision=trigger" not in line:
             continue

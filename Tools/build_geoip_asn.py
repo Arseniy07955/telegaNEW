@@ -48,9 +48,10 @@ def clean_owner(description, country):
     if not description:
         return ""
     owner = description.strip()
-    # iptoasn often appends ", <CC>" — drop it, the flag already shows the country.
-    if country and owner.upper().endswith("," + country.upper()):
-        owner = owner[: -(len(country) + 1)].strip()
+    # iptoasn often appends ", <CC>" (with or without a space) — drop it; the flag shows the country.
+    idx = owner.rfind(",")
+    if idx != -1 and country and owner[idx + 1:].strip().upper() == country.upper():
+        owner = owner[:idx].strip()
     if owner.lower() in ("not routed", "none", "-", ""):
         return ""
     encoded = owner.encode("utf-8")

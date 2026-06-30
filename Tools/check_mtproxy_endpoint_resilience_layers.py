@@ -414,7 +414,7 @@ def main():
         "TCP connect gate release must release the same host/port network key it acquired",
     )
     dns_cache_start = socket.find("bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress")
-    dns_cache_end = socket.find("std::string ConnectionSocket::currentMtProxyRecipeId", dns_cache_start)
+    dns_cache_end = socket.find("MtProxyAdaptivePolicy::RecipeInput ConnectionSocket::currentMtProxyRecipeInput", dns_cache_start)
     dns_cache_body = socket[dns_cache_start:dns_cache_end]
     require(
         "currentMtProxyDnsCacheKey" in dns_cache_body
@@ -461,7 +461,7 @@ def main():
         "FakeTLS failures must affect the next connection recipe, not only logs",
     )
     recipe_start = probe_coordinator.find("bool MtProxyProbeCoordinator::failureNeedsRecipe")
-    recipe_end = probe_coordinator.find("int32_t MtProxyProbeCoordinator::recipeLevelForProbe", recipe_start)
+    recipe_end = probe_coordinator.find("MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe", recipe_start)
     recipe_body = probe_coordinator[recipe_start:recipe_end]
     require(
         "true_client_hello_timeout" in recipe_body
@@ -498,10 +498,10 @@ def main():
         and '"host_resolve_timeout"' in state_key_body
         and '"tcp_not_connected"' in state_key_body
         and '"tcp_connected_no_pong"' in state_key_body
-        and '"mtproxy_packet_sent_no_response"' in state_key_body
+        and '"mtproxy_packet_sent_no_response"' not in state_key_body
         and '"dropped_early_after_appdata"' in state_key_body
         and "networkEndpointKey" in state_key_body,
-        "DNS/TCP/plain-dd failures must record cooldown on the host/port network key, while FakeTLS recipe stays secret/SNI-scoped",
+        "DNS/TCP failures must use host/port network key, while DD no-response and FakeTLS data-path failures stay exact-config scoped",
     )
     require(
         "proxyEndpointResilience[result.stateKey]" in endpoint_policy
@@ -534,32 +534,32 @@ def main():
         and invalid_reason_guard < first_reset,
         "endpoint data-path success helper must reject non-appdata reasons before clearing endpoint cooldown/backoff",
     )
+    adaptive_policy = (ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp").read_text(encoding="utf-8", errors="replace")
     require(
-        "MT_PROXY_PROBE_RECIPE_MAX_LEVEL = 4" in probe_coordinator,
-        "phase-adaptive recipe must have four levels: no-fragment, compatibility profiles, quiet startup, then endpoint exhaustion",
+        "RecipeCursor" in adaptive_policy
+        and "buildRecipeCursorLadder" in adaptive_policy
+        and "CompatibilityRecipe" in adaptive_policy
+        and "nextCursor" in adaptive_policy,
+        "phase-adaptive recipe must use the broad cursor ladder before endpoint exhaustion",
     )
     recipe_apply_start = socket.find("void ConnectionSocket::applyMtProxyPhaseAdaptiveRecipe")
     recipe_apply_end = socket.find("void ConnectionSocket::markProxyHandshakeClientHelloSent", recipe_apply_start)
     recipe_apply_body = socket[recipe_apply_start:recipe_apply_end]
-    adaptive_policy = (ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp").read_text(encoding="utf-8", errors="replace")
-    generic_recipe_start = adaptive_policy.find("if (input.recipeLevel >= 1 && result.clientHelloFragmentation")
-    fragment_step = adaptive_policy.find("result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF", generic_recipe_start)
-    legacy_step = adaptive_policy.find("input.recipeLevel == 2")
-    alternate_step = adaptive_policy.find("input.recipeLevel >= 3", legacy_step)
-    parser_step = adaptive_policy.find("input.recipeLevel >= 4", alternate_step)
-    quiet_step = adaptive_policy.find("result.connectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET", parser_step)
+    fragment_step = adaptive_policy.find("CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT")
+    legacy_step = adaptive_policy.find("CLIENT_HELLO_LEGACY_NO_GREASE_NO_MODERN_EXTENSIONS")
+    parser_step = adaptive_policy.find("PARSER_TOLERATE_EXTRA_RECORDS_BEFORE_SERVER_HELLO")
+    optional_no_sni_step = adaptive_policy.find("SNI_OPTIONAL_NO_SNI")
+    classic_step = adaptive_policy.find("CLASSIC_STANDARD_INTERMEDIATE")
     require(
-        generic_recipe_start != -1
-        and fragment_step != -1
+        fragment_step != -1
         and legacy_step != -1
-        and alternate_step != -1
         and parser_step != -1
-        and quiet_step != -1
-        and fragment_step < parser_step < quiet_step
+        and optional_no_sni_step != -1
+        and classic_step != -1
         and "MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE" in adaptive_policy
-        and "alternateCompatibilityTlsProfile(input.alternateProfileIndex)" in adaptive_policy
-        and "MT_PROXY_SERVER_HELLO_PARSER_RESERVED" in adaptive_policy,
-        "phase-adaptive recipe must progress through no-fragment, legacy/no-modern, alternate profiles, then reserved parser/quiet startup",
+        and "MT_PROXY_SERVER_HELLO_PARSER_EXTRA_RECORDS" in adaptive_policy
+        and "MT_PROXY_SERVER_HELLO_PARSER_FRAGMENTED_SERVER_HELLO" in adaptive_policy,
+        "phase-adaptive recipe must progress through named ClientHello, SNI, parser, and classic buckets",
     )
     require(
         "result.connectionPatternMode == MT_PROXY_CONNECTION_PATTERN_BROWSER" in adaptive_policy
@@ -568,7 +568,8 @@ def main():
     )
     require(
         "MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE" in adaptive_policy
-        and "alternateCompatibilityTlsProfile(input.alternateProfileIndex)" in adaptive_policy,
+        and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in adaptive_policy
+        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy,
         "phase-adaptive recipe must switch to another known-compatible TLS profile",
     )
     require(
@@ -577,8 +578,12 @@ def main():
         "phase-adaptive ClientHello failures must be able to switch between Android Chrome and Firefox Android TLS profiles",
     )
     require(
-        "input.recipeLevel >= 4" in adaptive_policy and "MT_PROXY_CONNECTION_PATTERN_QUIET" in adaptive_policy,
-        "quiet startup must wait until the fourth phase-adaptive step, after no-fragment and profile adaptation",
+        "recipeId(const CompatibilityRecipe" in adaptive_policy
+        and "familyName" in adaptive_policy
+        and "sniVariantName" in adaptive_policy
+        and "parserVariantName" in adaptive_policy
+        and "classicVariantName" in adaptive_policy,
+        "recipe ids must include full cursor identity for broad ladder observability",
     )
     require(
         "input.lastDiagnostic == \"post_handshake_no_appdata\"" in adaptive_policy

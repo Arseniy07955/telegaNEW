@@ -20,6 +20,11 @@ static constexpr int32_t MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE = 8;
 
 static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_STANDARD = 0;
 static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_RESERVED = 1;
+static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_LENIENT_RECORD = 2;
+static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_EXTRA_RECORDS = 3;
+static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_CCS_TICKET_ORDERING = 4;
+static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_FRAGMENTED_SERVER_HELLO = 5;
+static constexpr int32_t MT_PROXY_SERVER_HELLO_PARSER_TLS_ALERT_EXACT_DESC = 6;
 
 static constexpr int32_t MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF = 0;
 static constexpr int32_t MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT = 1;
@@ -71,7 +76,7 @@ static inline int32_t normalizeMtProxyTlsProfileOption(int32_t value) {
 }
 
 static inline int32_t normalizeMtProxyServerHelloParserOption(int32_t value) {
-    if (value >= MT_PROXY_SERVER_HELLO_PARSER_STANDARD && value <= MT_PROXY_SERVER_HELLO_PARSER_RESERVED) {
+    if (value >= MT_PROXY_SERVER_HELLO_PARSER_STANDARD && value <= MT_PROXY_SERVER_HELLO_PARSER_TLS_ALERT_EXACT_DESC) {
         return value;
     }
     return MT_PROXY_SERVER_HELLO_PARSER_STANDARD;

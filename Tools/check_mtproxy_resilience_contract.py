@@ -79,7 +79,7 @@ def main() -> None:
     recipe = slice_between(
         probe_coordinator,
         "bool MtProxyProbeCoordinator::failureNeedsRecipe",
-        "int32_t MtProxyProbeCoordinator::recipeLevelForProbe",
+        "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe",
     )
     cooldown = slice_between(
         endpoint_policy,
@@ -169,9 +169,9 @@ def main() -> None:
         "endpoint failures must route through the phase-aware state-key helper",
     )
     require(
-        '"mtproxy_packet_sent_no_response"' in endpoint_key
+        '"mtproxy_packet_sent_no_response"' not in endpoint_key
         and '"mtproxy_packet_sent_no_response"' not in recipe,
-        "dd/plain first-packet no-response must be endpoint backoff, never FakeTLS recipe adaptation",
+        "dd/plain first-packet no-response must be exact-config backoff, never network backoff or FakeTLS recipe adaptation",
     )
 
     # Layer 3: FakeTLS phase-adaptive recipe only after post-ClientHello evidence.
@@ -182,6 +182,7 @@ def main() -> None:
         "client_hello_sent_no_server_hello",
         "tls_alert_after_client_hello",
         "short_tls_response_after_client_hello",
+        "unrecognized_response_after_client_hello",
         "unrecognized_tls_response_after_client_hello",
         "server_hello_hmac_mismatch",
         "post_handshake_no_appdata",
@@ -194,11 +195,12 @@ def main() -> None:
     require(
         "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF" in adaptive_policy
         and "MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE" in adaptive_policy
-        and "alternateCompatibilityTlsProfile(input.alternateProfileIndex)" in adaptive_policy
-        and "MT_PROXY_SERVER_HELLO_PARSER_RESERVED" in adaptive_policy
-        and "result.connectionPatternMode = MT_PROXY_CONNECTION_PATTERN_QUIET" in adaptive_policy
+        and "CLIENT_HELLO_ANDROID_CHROME_NO_FRAGMENT" in adaptive_policy
+        and "CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT" in adaptive_policy
+        and "MT_PROXY_SERVER_HELLO_PARSER_EXTRA_RECORDS" in adaptive_policy
+        and "MT_PROXY_SERVER_HELLO_PARSER_FRAGMENTED_SERVER_HELLO" in adaptive_policy
         and "currentClientHelloFragmentation = recipe.clientHelloFragmentation" in socket,
-        "phase-adaptive recipe must progress by no-fragment, legacy/no-modern, alternate profiles, then reserved parser/quiet startup",
+        "phase-adaptive recipe must progress by explicit ClientHello families and parser variants",
     )
 
     # Layer 4: data path is guarded and data-aware; no idle sleeps that stall MTProto.

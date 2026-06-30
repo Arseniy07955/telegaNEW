@@ -33,12 +33,14 @@ RECIPE_FAILURES = {
     "client_hello_sent_no_server_hello",
     "tls_alert_after_client_hello",
     "short_tls_response_after_client_hello",
+    "unrecognized_response_after_client_hello",
     "unrecognized_tls_response_after_client_hello",
     "server_hello_hmac_mismatch",
 }
 LEGACY_OR_JAVA_ONLY_RECIPE_FAILURES = {
     "true_client_hello_timeout",
     "client_hello_sent_no_server_hello",
+    "unrecognized_tls_response_after_client_hello",
 }
 
 
@@ -112,8 +114,9 @@ def main() -> int:
         "looksLikeMtProxyTlsAlert" in socket
         and '"tls_alert_after_client_hello"' in socket
         and '"short_tls_response_after_client_hello"' in socket
-        and '"unrecognized_tls_response_after_client_hello"' in socket,
-        "ConnectionSocket must split alert, short, and unrecognized post-ClientHello responses",
+        and '"unrecognized_response_after_client_hello"' in socket
+        and '"unrecognized_tls_response_after_client_hello"' in probe_coordinator + adaptive_policy,
+        "ConnectionSocket must split alert, short, and unrecognized post-ClientHello responses while policy retains the legacy TLS alias",
         failures,
     )
     require(
@@ -124,7 +127,7 @@ def main() -> int:
         failures,
     )
 
-    recipe_body = block(probe_coordinator, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "int32_t MtProxyProbeCoordinator::recipeLevelForProbe")
+    recipe_body = block(probe_coordinator, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe")
     cooldown_body = block(endpoint_policy, "bool MtProxyEndpointPolicy::failureNeedsCooldown", "int64_t MtProxyEndpointPolicy::cooldownMs")
     for phase in RECIPE_FAILURES:
         require(phase in recipe_body, f"native probe coordinator must treat {phase} as a recipe failure", failures)
@@ -140,9 +143,10 @@ def main() -> int:
     )
     require(
         "recipeExhausted" in probe_coordinator_h
-        and "workingRecipeLevel" in probe_coordinator
-        and "cachedRecipeLevel" in probe_coordinator_h,
-        "probe coordinator must track failed recipe exhaustion and cache a working recipe level",
+        and "workingCursor" in probe_coordinator
+        and "workingRecipe" in probe_coordinator
+        and "cachedCursor" in probe_coordinator_h,
+        "probe coordinator must track failed recipe exhaustion and cache the full working recipe descriptor",
         failures,
     )
     require(
@@ -153,8 +157,11 @@ def main() -> int:
     )
 
     require(
-        "MT_PROXY_PROBE_RECIPE_MAX_LEVEL = 4" in probe_coordinator,
-        "compatibility ladder must have four retry levels before endpoint exhaustion",
+        "RecipeCursor" in adaptive_policy_h
+        and "CompatibilityRecipe" in adaptive_policy_h
+        and "nextCursor" in adaptive_policy_h
+        and "recipeForCursor" in adaptive_policy_h,
+        "compatibility ladder must expose explicit cursor and recipe descriptor APIs instead of a fixed level count",
         failures,
     )
     require(
@@ -180,46 +187,54 @@ def main() -> int:
     )
     require(
         "probeKey.key = currentMtProxyProbeKey" in socket
-        and "recipeLevelForProbe(currentMtProxyProbeKey)" in socket
+        and "recipeCursorForProbe(currentMtProxyProbeKey)" in socket
         and "lastRecipeDiagnosticForProbe(currentMtProxyProbeKey)" in socket,
         "recipe failure/adaptation must read and write the probe key, not the public endpoint key",
         failures,
     )
     require(
         "recipe_failed" in socket
-        and "next_level" in socket
+        and "next_family" in socket
+        and "next_sni_variant" in socket
+        and "next_parser_variant" in socket
+        and "next_classic_variant" in socket
         and "recipe_id=" in socket
         and "server_hello_parser=" in socket,
-        "ConnectionSocket must log each recipe failure with the current recipe identity and next level",
+        "ConnectionSocket must log each recipe failure with the current recipe identity and next cursor",
         failures,
     )
     require(
-        "MtProxyRecipe MtProxyAdaptivePolicy::recipeForResult" in adaptive_policy
+        "CompatibilityRecipe MtProxyAdaptivePolicy::recipeForCursor" in adaptive_policy
+        and "MtProxyRecipe MtProxyAdaptivePolicy::recipeForResult" in adaptive_policy
         and "std::string MtProxyAdaptivePolicy::recipeId" in adaptive_policy
         and "standard_hmac_parser" in adaptive_policy
-        and "reserved_hmac_parser" in adaptive_policy,
-        "adaptive policy must derive a stable recipe id including the standard and reserved parser variants",
+        and "lenient_record_parser" in adaptive_policy
+        and "tolerate_fragmented_server_hello" in adaptive_policy,
+        "adaptive policy must derive a stable recipe id including named parser variants",
         failures,
     )
     require(
-        "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF" in adaptive_policy
-        and "compatibilityTlsProfile" in adaptive_policy
+        "CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT" in adaptive_policy_h
+        and "CLIENT_HELLO_LEGACY_NO_GREASE_NO_MODERN_EXTENSIONS" in adaptive_policy_h
         and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy
         and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in adaptive_policy,
-        "adaptive policy must try no-fragment and alternate known-compatible TLS profiles",
+        "adaptive policy must try explicit ClientHello families and known-compatible TLS profiles",
         failures,
     )
     require(
-        "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT" not in block(adaptive_policy, "MtProxyAdaptivePolicy::RecipeResult MtProxyAdaptivePolicy::applyRecipe", "int32_t MtProxyAdaptivePolicy::resolveEffectiveTlsProfile"),
-        "post-ClientHello compatibility failures must not escalate by enabling ClientHello fragmentation",
+        "SNI_OPTIONAL_NO_SNI" in adaptive_policy_h
+        and "experimentalNoSni" in adaptive_policy_h
+        and "optional_no_sni" in adaptive_policy,
+        "optional no-SNI must be an explicit experimental recipe output, not a separate probe key",
         failures,
     )
     handshake_ok_body = block(probe_coordinator, "void MtProxyProbeCoordinator::completeSuccess", "void MtProxyProbeCoordinator::completeUnsupported")
     require(
         "server_hello_hmac_ok" in handshake_ok_body
         and "probeKey" in handshake_ok_body
-        and "state.workingRecipeLevel = state.recipeLevel" in handshake_ok_body,
-        "server_hello_hmac_ok must cache the current working recipe for the exact probe key",
+        and "state.workingCursor = state.cursor" in handshake_ok_body
+        and "state.workingRecipe = recipe" in handshake_ok_body,
+        "server_hello_hmac_ok must cache the full current working recipe for the exact probe key",
         failures,
     )
 
@@ -234,8 +249,9 @@ def main() -> int:
     )
     require(
         "UNSUPPORTED_FOR_CURRENT_CLIENT" in recipe_phases
-        and "failure(KeyScope.EXACT, true, true)" in recipe_phases,
-        "unsupported_for_current_client must be the Java endpoint-rotation phase",
+        and "terminalExactFailure()" in recipe_phases
+        and "terminalExactConfig" in phase_policy,
+        "unsupported_for_current_client must be a terminal exact-config verdict, not a normal rotation/hysteresis failure",
         failures,
     )
     require(

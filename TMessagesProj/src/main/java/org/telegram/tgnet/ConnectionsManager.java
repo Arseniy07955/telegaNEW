@@ -825,6 +825,10 @@ public class ConnectionsManager extends BaseController {
         native_setPushConnectionEnabled(currentAccount, value);
     }
 
+    public void setLivePingInterval(int intervalMs) {
+        native_setLivePingInterval(currentAccount, intervalMs);
+    }
+
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         String proxyAddress = preferences.getString("proxy_ip", "");
@@ -1110,8 +1114,8 @@ public class ConnectionsManager extends BaseController {
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.d("proxy_connection_stage account=" + currentAccount + " origin=" + event.origin.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey);
             }
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey);
-            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey);
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);
         });
     }
 
@@ -1555,6 +1559,7 @@ public class ConnectionsManager extends BaseController {
     public static native void native_setSystemLangCode(int currentAccount, String langCode);
     public static native void native_setJava(boolean useJavaByteBuffers);
     public static native void native_setPushConnectionEnabled(int currentAccount, boolean value);
+    public static native void native_setLivePingInterval(int currentAccount, int intervalMs);
     public static native void native_applyDnsConfig(int currentAccount, long address, String phone, int date);
     public static native long native_checkProxy(int currentAccount, String address, int port, String username, String password, String secret, MtProxyOptions options, RequestTimeDelegate requestTimeDelegate);
     public static native void native_cancelProxyCheck(int currentAccount, long pingId);

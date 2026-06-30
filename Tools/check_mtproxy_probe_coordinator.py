@@ -91,8 +91,9 @@ def verify_runtime_contract(failures: list[str]) -> None:
     good_terminal = run_verifier(
         base_log(
             "06-30 14:02:00.000 connection(0x1) mtproxy_startup recipe_exhausted key=fast2.mtproxy.zip:443:ee:xapi.ozon.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru failed_phase=faketls_server_hello_wait_timeout next=unsupported_for_current_client generation=3",
-            "06-30 14:02:00.010 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
+            "06-30 14:02:00.010 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru active_selected=1",
             "06-30 14:02:00.020 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru proxy_check_cancelled=0 native_cancelled=3",
+            "06-30 14:02:00.025 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
             "06-30 14:02:00.030 proxy_control decision=ignored_cancelled_generation source=native_stage origin=active_proxy account=2 phase=ignored_cancelled_generation endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
         )
     )
@@ -133,7 +134,7 @@ def main() -> int:
     require("state.status == ProbeStatus::WORKING_RECIPE_FOUND" in coordinator_cpp, "working recipe reuse must also cover the successful default level-0 recipe", failures)
     require("completeFailure" in coordinator_h and "completeSuccess" in coordinator_h and "completeUnsupported" in coordinator_h, "coordinator must own recipe success/failure/terminal transitions", failures)
     require("MT_PROXY_PROBE_UNSUPPORTED_HOLD_MS" in coordinator_cpp and "15 * 60 * 1000" in coordinator_cpp, "unsupported probe state must quarantine exact config for 15 minutes", failures)
-    require("recipeLevel" in coordinator_cpp and "workingRecipeLevel" in coordinator_cpp and "lastRecipeDiagnostic" in coordinator_cpp, "recipe ladder state must live in coordinator", failures)
+    require("RecipeCursor" in coordinator_cpp and "workingRecipe" in coordinator_cpp and "lastRecipeDiagnostic" in coordinator_cpp, "recipe ladder state must live in coordinator as a cursor and full working recipe", failures)
 
     require("MtProxyProbeCoordinator.h" in socket_cpp and "mtProxyProbeBeginOrJoin" in socket_cpp, "ConnectionSocket must delegate probe admission to coordinator", failures)
     require("MtProxyStartupPhase::ProbeWait" in timeline_h and "mtproxy_probe_wait" in timeline_cpp, "startup timeline must model probe wait as a pre-TCP local wait", failures)
@@ -166,11 +167,12 @@ def main() -> int:
         failures,
     )
     require("owner_generation" in socket_cpp and "ignored_cancelled_generation" in socket_cpp, "native sockets must log generation-aware joins and cancellations", failures)
+    require("working_recipe_cached" in socket_cpp and "working_recipe_cached" in analyzer, "owner success must emit a working_recipe_cached marker for later reuse proof", failures)
 
     require("recipeLevelForEndpoint" not in socket_cpp and "recordFailure(context, phase" not in socket_cpp, "ConnectionSocket must not mutate recipe ladder through MtProxyEndpointPolicy", failures)
     require("failureNeedsRecipe" not in endpoint_policy, "endpoint cooldown policy must not own FakeTLS recipe progression", failures)
 
-    for phase in ("mtproxy_probe_wait", "server_closed_after_client_hello", "faketls_server_hello_wait_timeout"):
+    for phase in ("mtproxy_probe_wait", "server_closed_after_client_hello", "faketls_server_hello_wait_timeout", "unrecognized_response_after_client_hello"):
         require(phase in diagnostics, f"ProxyCheckDiagnostics must expose {phase}", failures)
         require(phase in phase_policy, f"ProxyPhasePolicy must classify {phase}", failures)
         require(phase in phase_contract, f"phase contract must include {phase}", failures)

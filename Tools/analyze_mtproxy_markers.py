@@ -87,6 +87,7 @@ FAKETLS_FAILURE_VERDICTS = {
     "client_hello_sent_no_server_hello",
     "tls_alert_after_client_hello",
     "short_tls_response_after_client_hello",
+    "unrecognized_response_after_client_hello",
     "unrecognized_tls_response_after_client_hello",
     "server_hello_hmac_mismatch",
     "background_handshake_aborted",
@@ -362,6 +363,7 @@ class Attempt:
             "mtproxy_tls_after_client_hello": "mtproxy_tls_after_client_hello",
             "tls_alert_after_client_hello": "tls_alert_after_client_hello",
             "short_tls_response_after_client_hello": "short_tls_response_after_client_hello",
+            "unrecognized_response_after_client_hello": "unrecognized_response_after_client_hello",
             "unrecognized_tls_response_after_client_hello": "unrecognized_tls_response_after_client_hello",
             "post_client_hello_response_failed": "post_client_hello_response_failed",
             "unsupported_for_current_client": "unsupported_for_current_client",
@@ -380,6 +382,7 @@ class Attempt:
             "probe_start": "probe_start",
             "probe_join": "probe_join",
             "probe_working_recipe": "probe_working_recipe",
+            "working_recipe_cached": "working_recipe_cached",
             "probe_terminal_unsupported": "probe_terminal_unsupported",
             "probe_wait_timer_fire": "probe_wait_timer_fire",
             "probe_owner_complete": "probe_owner_complete",
@@ -519,8 +522,8 @@ class Attempt:
                 return "tls_alert_after_client_hello"
             if has("short_tls_response_after_client_hello"):
                 return "short_tls_response_after_client_hello"
-            if has("unrecognized_tls_response_after_client_hello"):
-                return "unrecognized_tls_response_after_client_hello"
+            if has("unrecognized_response_after_client_hello") or has("unrecognized_tls_response_after_client_hello"):
+                return "unrecognized_response_after_client_hello"
             if has("server_hello_hmac_mismatch") or has("server_hello_hmac_timeout") or has("server_hello_hmac_wait"):
                 return "server_hello_hmac_mismatch"
             if has("true_client_hello_timeout"):
@@ -1821,7 +1824,7 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- tls_alert_after_client_hello: TCP and ClientHello completed; probable TLS alert / non-ServerHello record after ClientHello. Inspect mtproxy_tls_after_client_hello hex/record_len/alert fields before blaming the proxy.")
     print("- short_tls_response_after_client_hello: bytes arrived after ClientHello, but not enough for a parseable ServerHello flight.")
     print("- unrecognized_tls_response_after_client_hello: bytes arrived after ClientHello, but the FakeTLS parser did not recognize the server response.")
-    print("- unsupported_for_current_client: every allowed compatibility recipe failed; rotate/quarantine the exact endpoint recipe.")
+    print("- unsupported_for_current_client: every allowed compatibility recipe failed; terminal-quarantine the exact proxy config.")
     print("- server_hello_hmac_mismatch: likely ClientHello/profile/server response mismatch, not plain packet loss.")
     print("- mtproxy_packet_sent_no_response: plain dd TCP opened and the first MTProxy packet was sent, but no server reply arrived.")
     print("- handshake_ok_no_appdata_sent: HMAC passed and on_connected fired, but this socket closed before app-data was sent; usually idle/restart noise, not a proxy failure.")

@@ -93,6 +93,7 @@ public:
         bool connectedSent = false;
         bool closeNotified = false;
         bool closeDiagnosticSuppressed = false;
+        bool deadForWrites = false;
         bool mtproxySocketConnectedLogged = false;
     };
 
@@ -124,6 +125,9 @@ public:
         bool mtproxyFirstTlsDataReceivedLogged = false;
         bool mtproxyFirstPlainDataSentLogged = false;
         bool mtproxyFirstPlainDataReceivedLogged = false;
+        bool firstTransportPacketSent = false;
+        bool firstTransportPacketReceived = false;
+        bool dataPathProven = false;
         int64_t mtproxyFirstTlsFrameSentTime = 0;
         int64_t mtproxyFirstPlainDataSentTime = 0;
         int64_t mtproxyFirstDataReceivedTime = 0;
@@ -177,8 +181,19 @@ public:
         TransportMode transportMode = TransportMode::None;
         std::string currentSecret;
         std::string currentSecretDomain;
+        std::string currentOriginalSecretDomain;
+        std::string currentSanitizedSecretDomain;
+        std::string currentLowercaseSecretDomain;
+        std::string currentNoTrailingDotSecretDomain;
+        std::string currentPunycodeSecretDomain;
+        std::string currentClientHelloSni;
         const char *currentSecretKind = "none";
         bool currentSecretIsFakeTls = false;
+        uint32_t currentAllowedSniVariants = 0;
+        int32_t currentRecipeFamily = 0;
+        int32_t currentRecipeSniVariant = 0;
+        int32_t currentRecipeParserVariant = 0;
+        int32_t currentRecipeClassicVariant = 0;
         int32_t currentProxyTlsProfile = 0;
         int32_t currentEffectiveProxyTlsProfile = 0;
         int32_t currentClientHelloFragmentation = 0;

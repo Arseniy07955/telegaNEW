@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <string>
+#include "MtProxyAdaptivePolicy.h"
 
 class MtProxyProbeCoordinator {
 public:
@@ -22,6 +23,7 @@ public:
         std::string key;
         std::string endpointKey;
         std::string networkEndpointKey;
+        uint32_t allowedSniVariants = 0;
     };
 
     struct GreaseProbeResult {
@@ -35,10 +37,9 @@ public:
         DecisionKind kind = DecisionKind::StartOwner;
         uint32_t generation = 0;
         uint32_t waitMs = 0;
-        int32_t recipeLevel = 0;
-        int32_t alternateProfileIndex = 0;
-        int32_t workingRecipeLevel = 0;
-        int32_t workingAlternateProfileIndex = 0;
+        MtProxyAdaptivePolicy::RecipeCursor cursor;
+        MtProxyAdaptivePolicy::RecipeCursor workingCursor;
+        MtProxyAdaptivePolicy::CompatibilityRecipe workingRecipe;
         std::string lastRecipeDiagnostic;
         GreaseProbeResult greaseProbe;
     };
@@ -47,10 +48,8 @@ public:
         bool recorded = false;
         bool recipeExhausted = false;
         uint32_t generation = 0;
-        int32_t recipeLevel = 0;
-        int32_t alternateProfileIndex = 0;
-        int32_t cachedRecipeLevel = 0;
-        int32_t cachedAlternateProfileIndex = 0;
+        MtProxyAdaptivePolicy::RecipeCursor cursor;
+        MtProxyAdaptivePolicy::RecipeCursor cachedCursor;
         std::string lastRecipeDiagnostic;
     };
 
@@ -66,13 +65,17 @@ public:
                                 const void *owner,
                                 const char *reason,
                                 bool recipeUsesGrease,
+                                const MtProxyAdaptivePolicy::CompatibilityRecipe &recipe,
                                 int64_t now);
     static void completeUnsupported(const ProbeKey &probeKey, const void *owner, int64_t now);
     static void cancelOwner(const ProbeKey &probeKey, const void *owner);
+    static void touchOwner(const ProbeKey &probeKey, const void *owner, int64_t now);
+    static void reapExpired(int64_t now);
 
     static bool failureNeedsRecipe(const std::string &diagnostic);
-    static int32_t recipeLevelForProbe(const std::string &probeKey);
-    static int32_t recipeAlternateProfileIndexForProbe(const std::string &probeKey);
+    static MtProxyAdaptivePolicy::RecipeCursor recipeCursorForProbe(const std::string &probeKey);
+    static MtProxyAdaptivePolicy::RecipeCursor workingRecipeCursorForProbe(const std::string &probeKey);
+    static MtProxyAdaptivePolicy::CompatibilityRecipe workingRecipeForProbe(const std::string &probeKey);
     static std::string lastRecipeDiagnosticForProbe(const std::string &probeKey);
     static GreaseProbeResult readGreaseProbeState(const std::string &probeKey);
 };

@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include "ConnectionSocketStateMachine.h"
+#include "MtProxyAdaptivePolicy.h"
 #include "MtProxyOptions.h"
 
 class NativeByteBuffer;
@@ -42,6 +43,7 @@ public:
     void setMtProxyHandshakePriority(int32_t priority);
     const char *getProxyCheckDiagnostic();
     bool isProxyCloseDiagnosticSuppressed();
+    bool isClosingOrClosedForWrites() const;
 
 protected:
     int32_t instanceNum;
@@ -143,6 +145,7 @@ private:
     bool canQueueOutboundBuffer(const char *action);
     bool canSendRawSocketBytes(const char *action);
     bool canReceiveRawSocketBytes();
+    void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);
@@ -165,9 +168,10 @@ private:
     void closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason);
     bool mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6, bool *blockedZeroAddress);
     void mtProxyEndpointStoreResolvedAddress(const std::string &host, const std::string &ip);
+    MtProxyAdaptivePolicy::RecipeInput currentMtProxyRecipeInput();
+    MtProxyAdaptivePolicy::CompatibilityRecipe currentMtProxyCompatibilityRecipe();
     std::string currentMtProxyRecipeId();
-    std::string mtProxyRecipeIdForPolicyState(int32_t recipeLevel, int32_t alternateProfileIndex, bool greaseSupported, bool probeGrease);
-    std::string nextMtProxyRecipeIdAfterFailure(int32_t recipeLevel, int32_t alternateProfileIndex);
+    std::string mtProxyRecipeIdForCursor(const MtProxyAdaptivePolicy::RecipeCursor &cursor);
     bool currentMtProxyRecipeUsesGrease();
     bool currentMtProxyRecipeIsGreaseProbe();
     bool mtProxyClassicFallbackAllowed();

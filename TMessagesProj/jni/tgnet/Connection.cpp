@@ -553,19 +553,30 @@ bool Connection::allowsCustomPadding() {
     return currentProtocolType == ProtocolTypeTLS || currentProtocolType == ProtocolTypeDD || currentProtocolType == ProtocolTypeEF;
 }
 
-void Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted) {
-    if (buff == nullptr) {
-        return;
+bool Connection::canSendRequestData(const char *reason) {
+    const char *safeReason = reason != nullptr ? reason : "unknown";
+    if (connectionState == TcpConnectionStageSuspended) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup write_gate_closed reason=%s state=%d dead_for_writes=%d", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, safeReason, (int) connectionState, isClosingOrClosedForWrites() ? 1 : 0);
+        return false;
     }
-    buff->rewind();
-    if (connectionState == TcpConnectionStageIdle || connectionState == TcpConnectionStageReconnecting || connectionState == TcpConnectionStageSuspended) {
+    if (connectionState == TcpConnectionStageIdle || connectionState == TcpConnectionStageReconnecting) {
         connect();
     }
+    if (isDisconnected() || isClosingOrClosedForWrites()) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup write_gate_disconnected reason=%s", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, safeReason);
+        return false;
+    }
+    return true;
+}
 
-    if (isDisconnected()) {
+bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted) {
+    if (buff == nullptr) {
+        return false;
+    }
+    buff->rewind();
+    if (!canSendRequestData("sendData")) {
         buff->reuse();
-        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) disconnected, don't send data", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType);
-        return;
+        return false;
     }
 
     uint32_t bufferLen = 0;
@@ -746,6 +757,7 @@ void Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
         AES_ctr128_encrypt(buffer2->bytes(), buffer2->bytes(), buffer2->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
         writeBuffer(buffer2);
     }
+    return !isClosingOrClosedForWrites();
 }
 
 inline std::string *Connection::getCurrentSecret(uint8_t secretType) {

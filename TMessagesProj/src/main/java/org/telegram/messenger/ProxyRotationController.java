@@ -107,6 +107,13 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 return;
             }
             String endpointKey = (String) args[1];
+            String origin = args.length >= 3 && args[2] instanceof String
+                    ? (String) args[2]
+                    : ProxyConnectionEvent.Origin.ACTIVE_PROXY.wireName;
+            if (!ProxyConnectionEvent.Origin.ACTIVE_PROXY.wireName.equals(origin)) {
+                log("ignore_non_active_origin origin=" + origin + " phase=" + ProxyCheckDiagnostics.normalize(diagnostic) + " endpoint=" + endpointKey);
+                return;
+            }
             if (ProxyPhasePolicy.isProxyUsableSuccessPhase(diagnostic)
                     && ProxyEndpointKey.matchesLiveStage(SharedConfig.currentProxy, endpointKey)
                     && ProxyRuntimeStateStore.isCurrentProxyUsable(SharedConfig.currentProxy)) {

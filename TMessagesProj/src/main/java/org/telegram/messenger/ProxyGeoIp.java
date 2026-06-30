@@ -191,6 +191,12 @@ public final class ProxyGeoIp {
     }
 
     private Result lookupHostBlocking(String host) {
+        if (host != null) {
+            host = host.trim();
+        }
+        if (TextUtils.isEmpty(host)) {
+            return null;
+        }
         long ip = parseIpv4(host);
         if (ip < 0) {
             try {
@@ -223,7 +229,15 @@ public final class ProxyGeoIp {
                 int c1 = buffer.get(base + 9) & 0xFF;
                 String country = (c0 != 0 && c1 != 0) ? ("" + (char) c0 + (char) c1) : null;
                 long ownerOffset = buffer.getInt(base + 10) & 0xFFFFFFFFL;
-                String owner = ownerOffset == NO_OWNER ? null : readString(stringTableOffset + (int) ownerOffset);
+                String owner = null;
+                if (ownerOffset != NO_OWNER) {
+                    // Validate before reading: a corrupt/truncated asset must never yield a wrong
+                    // in-bounds string (a negative (int) cast could otherwise wrap back into range).
+                    long absOffset = (long) stringTableOffset + ownerOffset;
+                    if (absOffset >= stringTableOffset && absOffset + 2 <= buffer.limit()) {
+                        owner = readString((int) absOffset);
+                    }
+                }
                 if (country == null && TextUtils.isEmpty(owner)) {
                     return null;
                 }
@@ -234,8 +248,11 @@ public final class ProxyGeoIp {
     }
 
     private String readString(int offset) {
+        if (offset < 0 || offset + 2 > buffer.limit()) {
+            return null;
+        }
         int length = buffer.getShort(offset) & 0xFFFF;
-        if (length <= 0) {
+        if (length <= 0 || (long) offset + 2 + length > buffer.limit()) {
             return null;
         }
         byte[] bytes = new byte[length];

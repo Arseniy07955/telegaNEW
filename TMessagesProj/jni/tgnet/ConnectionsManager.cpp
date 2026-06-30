@@ -367,7 +367,8 @@ void ConnectionsManager::select() {
     }
     if (datacenter != nullptr) {
         if (datacenter->hasAuthKey(ConnectionTypeGeneric, 1)) {
-            if (llabs(now - lastPingTime) >= (testBackend ? 2000 : 19000)) {
+            int32_t livePingInterval = livePingIntervalOverride > 0 ? livePingIntervalOverride : (testBackend ? 2000 : 19000);
+            if (llabs(now - lastPingTime) >= livePingInterval) {
                 lastPingTime = now;
                 sendPing(datacenter, false);
             }
@@ -1021,6 +1022,12 @@ void ConnectionsManager::onConnectionConnected(Connection *connection) {
         } else {
             if (connectionType == ConnectionTypeGeneric && datacenter->getDatacenterId() == currentDatacenterId) {
                 sendingPing = false;
+                // Fresh generic connection: drop the stale live-ping EWMA so the next pong reseeds it,
+                // and send the first generic ping right away so the live ping shows up immediately
+                // instead of waiting out the select-loop cadence window.
+                currentPingTimeLive = 0;
+                lastPingTime = getCurrentTimeMonotonicMillis();
+                sendPing(datacenter, false);
             }
             if (networkPaused && lastPauseTime != 0) {
                 lastPauseTime = getCurrentTimeMonotonicMillis();
@@ -1384,7 +1391,8 @@ void ConnectionsManager::processServerResponse(TLObject *message, int64_t messag
                 registerForInternalPushUpdates();
             }
             int32_t diff = getCurrentTimeMonotonicMillis() - sendingPushPingTime;
-            currentPingTimeLive = (diff + currentPingTimeLive) / 2;
+            if (diff < 1) diff = 1;
+            currentPingTimeLive = currentPingTimeLive == 0 ? diff : (diff + currentPingTimeLive) / 2;
             if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) received push ping", connection, instanceNum, datacenter->getDatacenterId(), connection->getConnectionType());
             sendingPushPing = false;
         } else {
@@ -1401,7 +1409,9 @@ void ConnectionsManager::processServerResponse(TLObject *message, int64_t messag
                 }
             } else if (response->ping_id == lastPingId) {
                 int32_t diff = (int32_t) (getCurrentTimeMonotonicMillis() / 1000) - pingTime;
-                currentPingTimeLive = ((getCurrentTimeMonotonicMillis() - pingTimeMs) + currentPingTimeLive) / 2;
+                int32_t livePingSample = (int32_t) (getCurrentTimeMonotonicMillis() - pingTimeMs);
+                if (livePingSample < 1) livePingSample = 1;
+                currentPingTimeLive = currentPingTimeLive == 0 ? livePingSample : (livePingSample + currentPingTimeLive) / 2;
                 if (abs(diff) < 10) {
                     currentPingTime = (diff + currentPingTime) / 2;
                     if (messageId != 0) {
@@ -2501,6 +2511,14 @@ void ConnectionsManager::onDatacenterHandshakeComplete(Datacenter *datacenter, H
         clearRequestsForDatacenter(datacenter, type);
     }
     processRequestQueue(AllConnectionTypes, datacenterId);
+    if (datacenterId == currentDatacenterId) {
+        // processRequestQueue(AllConnectionTypes, ...) does not send the first generic ping
+        // (the immediate sendPing only fires for connectionTypes == ConnectionTypeGeneric), so age
+        // lastPingTime past the cadence window (matching the gate constant at the select loop) to let
+        // the next iteration ping immediately, and drop the stale live-ping EWMA so the next pong reseeds it.
+        lastPingTime = getCurrentTimeMonotonicMillis() - (testBackend ? 2000 : 19000);
+        currentPingTimeLive = 0;
+    }
     if (type == HandshakeTypeTemp && !proxyCheckQueue.empty()) {
         scheduleNextProxyCheck();
     }
@@ -2513,18 +2531,79 @@ void ConnectionsManager::onDatacenterExportAuthorizationComplete(Datacenter *dat
     });
 }
 
-void ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck) {
-    if (messages.empty() || connection == nullptr) {
+void ConnectionsManager::removeQuickAckMappingForMessages(int32_t quickAckId, const std::vector<std::unique_ptr<NetworkMessage>> &messages) {
+    if (quickAckId == 0) {
         return;
+    }
+    auto quickAckIter = quickAckIdToRequestIds.find(quickAckId);
+    if (quickAckIter == quickAckIdToRequestIds.end()) {
+        return;
+    }
+    for (auto &message : messages) {
+        if (message == nullptr || message->requestId == 0) {
+            continue;
+        }
+        auto &requestIds = quickAckIter->second;
+        requestIds.erase(std::remove(requestIds.begin(), requestIds.end(), message->requestId), requestIds.end());
+    }
+    if (quickAckIter->second.empty()) {
+        quickAckIdToRequestIds.erase(quickAckIter);
+    }
+}
+
+void ConnectionsManager::requeueMessagesForDeadConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, const char *reason) {
+    if (messages.empty()) {
+        return;
+    }
+    const char *safeReason = reason != nullptr ? reason : "unknown";
+    for (auto &message : messages) {
+        if (message == nullptr || message->requestId == 0) {
+            continue;
+        }
+        for (auto iter = runningRequests.begin(); iter != runningRequests.end(); iter++) {
+            Request *request = iter->get();
+            if (request == nullptr || request->requestToken != message->requestId) {
+                continue;
+            }
+            request->clear(false);
+            request->lastResendTime = 0;
+            request->isResending = true;
+            if (LOGS_ENABLED) {
+                DEBUG_D("connection(%p) mtproxy_startup requeue_dead_connection token=%d reason=%s", connection, request->requestToken, safeReason);
+            }
+            requestsQueue.push_back(std::move(*iter));
+            runningRequests.erase(iter);
+            break;
+        }
+    }
+    messages.clear();
+}
+
+bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck, bool requeueOnDeadConnection) {
+    if (messages.empty() || connection == nullptr) {
+        return false;
+    }
+
+    if (!connection->canSendRequestData("sendMessages_pre_create")) {
+        if (requeueOnDeadConnection) {
+            requeueMessagesForDeadConnection(messages, connection, "sendMessages_pre_create");
+        } else {
+            messages.clear();
+        }
+        return false;
     }
 
     std::vector<std::unique_ptr<NetworkMessage>> currentMessages;
     Datacenter *datacenter = connection->getDatacenter();
 
+    bool sentAny = false;
     uint32_t currentSize = 0;
     size_t count = messages.size();
     for (uint32_t a = 0; a < count; a++) {
         NetworkMessage *networkMessage = messages[a].get();
+        if (networkMessage == nullptr) {
+            continue;
+        }
         currentMessages.push_back(std::move(messages[a]));
         currentSize += networkMessage->message->bytes;
 
@@ -2554,7 +2633,38 @@ void ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     }
                 }
 
-                connection->sendData(transportData, reportAck, true);
+                if (!connection->canSendRequestData("sendMessages_post_create")) {
+                    removeQuickAckMappingForMessages(quickAckId, currentMessages);
+                    transportData->reuse();
+                    for (uint32_t b = a + 1; b < count; b++) {
+                        if (messages[b] != nullptr) {
+                            currentMessages.push_back(std::move(messages[b]));
+                        }
+                    }
+                    if (requeueOnDeadConnection) {
+                        requeueMessagesForDeadConnection(currentMessages, connection, "sendMessages_post_create");
+                    } else {
+                        currentMessages.clear();
+                    }
+                    messages.clear();
+                    return sentAny;
+                }
+                if (!connection->sendData(transportData, reportAck, true)) {
+                    removeQuickAckMappingForMessages(quickAckId, currentMessages);
+                    for (uint32_t b = a + 1; b < count; b++) {
+                        if (messages[b] != nullptr) {
+                            currentMessages.push_back(std::move(messages[b]));
+                        }
+                    }
+                    if (requeueOnDeadConnection) {
+                        requeueMessagesForDeadConnection(currentMessages, connection, "sendData_rejected");
+                    } else {
+                        currentMessages.clear();
+                    }
+                    messages.clear();
+                    return sentAny;
+                }
+                sentAny = true;
             } else {
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) connection data is empty", connection);
             }
@@ -2563,14 +2673,19 @@ void ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
             currentMessages.clear();
         }
     }
+    return sentAny;
 }
 
-void ConnectionsManager::sendMessagesToConnectionWithConfirmation(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck) {
+bool ConnectionsManager::sendMessagesToConnectionWithConfirmation(std::vector<std::unique_ptr<NetworkMessage>> &messages, Connection *connection, bool reportAck, bool requeueOnDeadConnection) {
+    if (connection == nullptr) {
+        messages.clear();
+        return false;
+    }
     NetworkMessage *networkMessage = connection->generateConfirmationRequest();
     if (networkMessage != nullptr) {
         messages.push_back(std::unique_ptr<NetworkMessage>(networkMessage));
     }
-    sendMessagesToConnection(messages, connection, reportAck);
+    return sendMessagesToConnection(messages, connection, reportAck, requeueOnDeadConnection);
 }
 
 void ConnectionsManager::requestSaltsForDatacenter(Datacenter *datacenter, bool media, bool useTempConnection) {
@@ -2805,6 +2920,10 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             iter++;
             continue;
         }
+        if (!connection->canSendRequestData("process_running_request")) {
+            iter++;
+            continue;
+        }
 
         uint32_t requestConnectionType = request->connectionType & 0x0000ffff;
 
@@ -2895,6 +3014,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             networkMessage->needQuickAck = (request->requestFlags & RequestFlagNeedQuickAck) != 0;
 
             request->connectionToken = connection->getConnectionToken();
+            bool directSendAccepted = true;
             switch (requestConnectionType) {
                 case ConnectionTypeGeneric:
                     addMessageToDatacenter(requestDatacenter->getDatacenterId(), networkMessage, genericMessagesToDatacenters);
@@ -2908,19 +3028,32 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 case ConnectionTypeProxy: {
                     std::vector<std::unique_ptr<NetworkMessage>> array;
                     array.push_back(std::unique_ptr<NetworkMessage>(networkMessage));
-                    sendMessagesToConnection(array, connection, false);
+                    directSendAccepted = sendMessagesToConnection(array, connection, false, false);
                     break;
                 }
                 case ConnectionTypeDownload:
                 case ConnectionTypeUpload: {
                     std::vector<std::unique_ptr<NetworkMessage>> array;
                     array.push_back(std::unique_ptr<NetworkMessage>(networkMessage));
-                    sendMessagesToConnectionWithConfirmation(array, connection, false);
-                    request->onWriteToSocket();
+                    directSendAccepted = sendMessagesToConnectionWithConfirmation(array, connection, false, false);
+                    if (directSendAccepted) {
+                        request->onWriteToSocket();
+                    }
                     break;
                 }
                 default:
                     delete networkMessage;
+            }
+            if (!directSendAccepted) {
+                request->clear(false);
+                request->lastResendTime = 0;
+                request->isResending = true;
+                if (LOGS_ENABLED) {
+                    DEBUG_D("connection(%p) mtproxy_startup requeue_dead_connection token=%d reason=running_direct_send", connection, request->requestToken);
+                }
+                requestsQueue.push_back(std::move(*iter));
+                iter = runningRequests.erase(iter);
+                continue;
             }
         }
         iter++;
@@ -3060,6 +3193,10 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
         Connection *connection = requestDatacenter->getConnectionByType(request->connectionType, true, canUseUnboundKey);
 
         if (request->connectionType & ConnectionTypeGeneric && connection->getConnectionToken() == 0) {
+            iter++;
+            continue;
+        }
+        if (!connection->canSendRequestData("process_queued_request")) {
             iter++;
             continue;
         }
@@ -3775,6 +3912,12 @@ ConnectionState ConnectionsManager::getConnectionState() {
 
 void ConnectionsManager::setDelegate(ConnectiosManagerDelegate *connectiosManagerDelegate) {
     delegate = connectiosManagerDelegate;
+}
+
+void ConnectionsManager::setLivePingInterval(int32_t intervalMs) {
+    // Foreground "live ping" cadence override for the current-DC generic connection (0 = default 19s).
+    // Read by the select loop; a one-iteration (<=1s) delay applying it is acceptable.
+    livePingIntervalOverride = intervalMs > 0 ? intervalMs : 0;
 }
 
 void ConnectionsManager::setPushConnectionEnabled(bool value) {

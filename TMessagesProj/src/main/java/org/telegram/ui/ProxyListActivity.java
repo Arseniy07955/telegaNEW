@@ -492,6 +492,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     public void onFragmentDestroy() {
         super.onFragmentDestroy();
         stopProxySpeedSampler();
+        ConnectionsManager.getInstance(currentAccount).setLivePingInterval(0);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxyChangedByRotation);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxySettingsChanged);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxyCheckDone);
@@ -1206,10 +1207,14 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     // Reads the cumulative traffic counters and shows the delta as a throughput estimate.
     // Passive (no extra data is sent); only the currently connected proxy is measured.
     private static final long PROXY_SPEED_SAMPLE_INTERVAL_MS = 2000L;
+    // While the proxy list is in the foreground, ping the active DC more often so the live ping
+    // updates quickly; reverted to the default (~19s) cadence on pause.
+    private static final int LIVE_PING_FOREGROUND_INTERVAL_MS = 4000;
 
     private Runnable proxySpeedSampler;
     private long proxySpeedLastBytes;
     private long proxySpeedLastTime;
+    private SharedConfig.ProxyInfo proxySpeedActive;
 
     private long proxyTrafficBytes() {
         StatsController stats = StatsController.getInstance(currentAccount);
@@ -1246,6 +1251,18 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         SharedConfig.ProxyInfo active = isWssTransportSelected() ? SharedConfig.currentWssSocksProxy : SharedConfig.currentProxy;
         long now = SystemClock.elapsedRealtime();
         long bytes = proxyTrafficBytes();
+        if (active != proxySpeedActive) {
+            // Active proxy changed: rebase the counters so the previous proxy's traffic is not
+            // attributed to the new one as a spurious first-sample speed spike.
+            proxySpeedActive = active;
+            proxySpeedLastBytes = bytes;
+            proxySpeedLastTime = now;
+            if (active != null) {
+                active.downloadSpeed = 0;
+            }
+            updateCurrentProxyStatusCell();
+            return;
+        }
         long dt = now - proxySpeedLastTime;
         long deltaBytes = Math.max(0, bytes - proxySpeedLastBytes);
         proxySpeedLastBytes = bytes;
@@ -1272,9 +1289,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             active.downloadSpeed = previous <= 0 ? bytesPerSecond : (previous + bytesPerSecond) / 2;
         }
         active.speedUpdateTime = now;
-        if (active.downloadSpeed != previous) {
-            updateCurrentProxyStatusCell();
-        }
+        // Repaint every tick so the live ping (currentPingTimeLive) stays current, not only on speed change.
+        updateCurrentProxyStatusCell();
     }
 
     private void refreshProxyRow(SharedConfig.ProxyInfo info) {
@@ -1363,12 +1379,14 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         markConnectedCurrentProxyIfNeeded();
         updateCurrentProxyStatusCell();
         startProxySpeedSampler();
+        ConnectionsManager.getInstance(currentAccount).setLivePingInterval(LIVE_PING_FOREGROUND_INTERVAL_MS);
     }
 
     @Override
     public void onPause() {
         super.onPause();
         stopProxySpeedSampler();
+        ConnectionsManager.getInstance(currentAccount).setLivePingInterval(0);
     }
 
     @Override

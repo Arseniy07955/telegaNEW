@@ -58,6 +58,7 @@ public class ProxyCheckDiagnostics {
     public static final String CLIENT_HELLO_SENT_NO_SERVER_HELLO = "client_hello_sent_no_server_hello";
     public static final String TLS_ALERT_AFTER_CLIENT_HELLO = "tls_alert_after_client_hello";
     public static final String SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO = "short_tls_response_after_client_hello";
+    public static final String UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO = "unrecognized_response_after_client_hello";
     public static final String UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO = "unrecognized_tls_response_after_client_hello";
     public static final String SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch";
     public static final String BACKGROUND_HANDSHAKE_ABORTED = "background_handshake_aborted";
@@ -123,6 +124,7 @@ public class ProxyCheckDiagnostics {
             case CLIENT_HELLO_SENT_NO_SERVER_HELLO:
             case TLS_ALERT_AFTER_CLIENT_HELLO:
             case SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
+            case UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
             case SERVER_HELLO_HMAC_MISMATCH:
             case BACKGROUND_HANDSHAKE_ABORTED:
@@ -186,6 +188,20 @@ public class ProxyCheckDiagnostics {
                 && isFailure(proxyInfo.lastCheckDiagnostic);
     }
 
+    private static boolean isMtProxy(SharedConfig.ProxyInfo proxyInfo) {
+        return proxyInfo != null && !TextUtils.isEmpty(proxyInfo.secret);
+    }
+
+    private static boolean currentConnectionIsUsableForStatus(SharedConfig.ProxyInfo proxyInfo, int currentConnectionState) {
+        boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected
+                || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
+        if (!connected) {
+            return false;
+        }
+        return !isMtProxy(proxyInfo)
+                || (hasFreshLivePhase(proxyInfo) && isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic));
+    }
+
     public static boolean shouldAccelerateProxyRotation(String diagnostic) {
         return ProxyPhasePolicy.shouldAccelerateProxyRotation(diagnostic);
     }
@@ -226,7 +242,7 @@ public class ProxyCheckDiagnostics {
         if (hasFreshFailure(proxyInfo)) {
             return diagnosticTitle(proxyInfo.lastCheckDiagnostic);
         }
-        if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
+        if (currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)) {
             return title("ProxyWindowStatusReady", R.string.ProxyWindowStatusReady);
         }
         if (hasFreshLivePhase(proxyInfo)) {
@@ -242,29 +258,35 @@ public class ProxyCheckDiagnostics {
     }
 
     private static long connectedPingMs(SharedConfig.ProxyInfo proxyInfo) {
-        if (proxyInfo != null && proxyInfo.ping != 0) {
-            return proxyInfo.ping;
-        }
+        // Connected proxy: prefer the live RTT (currentPingTimeLive) so the number keeps updating;
+        // fall back to the last per-proxy check ping only when there is no live value yet.
         int live = ConnectionsManager.native_getCurrentPingTime(UserConfig.selectedAccount);
-        return live > 0 ? live : 0;
+        if (live > 0) {
+            return live;
+        }
+        return proxyInfo != null && proxyInfo.ping != 0 ? proxyInfo.ping : 0;
     }
 
     private static final long SPEED_STALE_MS = 15 * 1000L;
 
-    // Appends " · <flag> <owner>" and (for the active proxy) " · <speed>" to the base status line.
+    // Joins the base status, the geo "<flag> <owner>" and (for the active proxy) the speed with " · ".
     private static String appendProxyExtras(String base, SharedConfig.ProxyInfo proxyInfo, boolean connected) {
-        StringBuilder sb = new StringBuilder(base);
-        String geo = geoSuffix(proxyInfo);
-        if (!TextUtils.isEmpty(geo)) {
-            sb.append(" · ").append(geo);
-        }
+        StringBuilder sb = new StringBuilder(base == null ? "" : base);
+        appendSegment(sb, geoSuffix(proxyInfo));
         if (connected) {
-            String speed = speedSuffix(proxyInfo);
-            if (!TextUtils.isEmpty(speed)) {
-                sb.append(" · ").append(speed);
-            }
+            appendSegment(sb, speedSuffix(proxyInfo));
         }
         return sb.toString();
+    }
+
+    private static void appendSegment(StringBuilder sb, String segment) {
+        if (TextUtils.isEmpty(segment)) {
+            return;
+        }
+        if (sb.length() > 0) {
+            sb.append(" · ");
+        }
+        sb.append(segment);
     }
 
     // "<flag> <owner>", or just one of them, or "" when nothing is known yet.
@@ -302,7 +324,7 @@ public class ProxyCheckDiagnostics {
             if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
-            if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
+            if (currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)) {
                 long ping = connectedPingMs(proxyInfo);
                 String base = ping != 0
                         ? LocaleController.getString(R.string.Connected) + ", " + LocaleController.formatString("Ping", R.string.Ping, ping)
@@ -331,11 +353,14 @@ public class ProxyCheckDiagnostics {
         }
         if (proxyInfo.available && ProxyCheckScheduler.isFresh(proxyInfo)) {
             String base = proxyInfo.ping != 0
-                    ? LocaleController.getString(R.string.Available) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping)
-                    : LocaleController.getString(R.string.Available);
+                    ? LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping)
+                    : "";
             return appendProxyExtras(base, proxyInfo, false);
         }
-        return LocaleController.getString(R.string.ProxyStatusUnchecked);
+        // Unchecked: show owner/flag when known; fall back to the "Not checked" status only when there
+        // is nothing else to show, so a known-owner row stays clean without a redundant status word.
+        String passive = appendProxyExtras("", proxyInfo, false);
+        return TextUtils.isEmpty(passive) ? LocaleController.getString(R.string.ProxyStatusUnchecked) : passive;
     }
 
     public static String headerStatusText(SharedConfig.ProxyInfo proxyInfo, boolean proxyEnabled, int currentConnectionState) {
@@ -348,7 +373,7 @@ public class ProxyCheckDiagnostics {
         if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
-        if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
+        if (currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)) {
             long ping = connectedPingMs(proxyInfo);
             if (ping != 0) {
                 return LocaleController.getString(R.string.ProxyWindowStatusReady) + ", " + LocaleController.formatString("Ping", R.string.Ping, ping);
@@ -458,6 +483,7 @@ public class ProxyCheckDiagnostics {
                 return title("ProxyStatusTlsAlertAfterClientHello", R.string.ProxyStatusTlsAlertAfterClientHello);
             case SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
                 return title("ProxyStatusShortTlsResponseAfterClientHello", R.string.ProxyStatusShortTlsResponseAfterClientHello);
+            case UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
                 return title("ProxyStatusUnrecognizedTlsResponseAfterClientHello", R.string.ProxyStatusUnrecognizedTlsResponseAfterClientHello);
             case SERVER_HELLO_HMAC_MISMATCH:
@@ -485,7 +511,7 @@ public class ProxyCheckDiagnostics {
             if (hasFreshFailure(proxyInfo)) {
                 return Theme.key_text_RedRegular;
             }
-            if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
+            if (currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)) {
                 return Theme.key_windowBackgroundWhiteBlueText6;
             }
             if (hasFreshLivePhase(proxyInfo)) {
@@ -598,6 +624,7 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusTlsAlertAfterClientHello);
             case SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
                 return LocaleController.getString(R.string.ProxyStatusShortTlsResponseAfterClientHello);
+            case UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
                 return LocaleController.getString(R.string.ProxyStatusUnrecognizedTlsResponseAfterClientHello);
             case SERVER_HELLO_HMAC_MISMATCH:

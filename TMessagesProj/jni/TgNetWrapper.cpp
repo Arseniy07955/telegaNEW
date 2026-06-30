@@ -341,6 +341,10 @@ void setPushConnectionEnabled(JNIEnv *env, jclass c, jint instanceNum, jboolean 
     ConnectionsManager::getInstance(instanceNum).setPushConnectionEnabled(value);
 }
 
+void setLivePingInterval(JNIEnv *env, jclass c, jint instanceNum, jint intervalMs) {
+    ConnectionsManager::getInstance(instanceNum).setLivePingInterval(intervalMs);
+}
+
 void applyDnsConfig(JNIEnv *env, jclass c, jint instanceNum, jlong address, jstring phone, jint date) {
     const char *phoneStr = env->GetStringUTFChars(phone, 0);
 
@@ -654,6 +658,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_setIpStrategy", "(IB)V", (void *) setIpStrategy},
         {"native_setNetworkAvailable", "(IZIZ)V", (void *) setNetworkAvailable},
         {"native_setPushConnectionEnabled", "(IZ)V", (void *) setPushConnectionEnabled},
+        {"native_setLivePingInterval", "(II)V", (void *) setLivePingInterval},
         {"native_setJava", "(Z)V", (void *) setJava},
         {"native_applyDnsConfig", "(IJLjava/lang/String;I)V", (void *) applyDnsConfig},
         {"native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;Lorg/telegram/tgnet/RequestTimeDelegate;)J", (void *) checkProxy},

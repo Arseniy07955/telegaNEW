@@ -154,17 +154,19 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
         )
         rotated_away_bad.write_text(
             runtime_log_fixture(
-                "06-25 20:34:00.000 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
-                "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army cancelled=3",
+                "06-25 20:34:00.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army active_selected=1",
+                "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army proxy_check_cancelled=0 native_cancelled=3",
+                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
                 "06-25 20:34:01.050 proxy_control decision=visible_only source=native_stage account=0 phase=endpoint_cooldown endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
             ),
             encoding="utf-8",
         )
         rotated_away_good.write_text(
             runtime_log_fixture(
-                "06-25 20:34:00.000 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
-                "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army cancelled=3",
-                "06-25 20:34:00.020 proxy_control decision=ignored_rotated_away source=native_stage account=0 phase=ignored_cancelled_generation endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
+                "06-25 20:34:00.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army active_selected=1",
+                "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army proxy_check_cancelled=0 native_cancelled=3",
+                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=unsupported_for_current_client endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
+                "06-25 20:34:00.030 proxy_control decision=ignored_rotated_away source=native_stage account=0 phase=ignored_cancelled_generation endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
                 "06-25 20:34:01.050 proxy_control decision=ignored_rotated_away source=native_stage account=0 phase=endpoint_cooldown endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
             ),
             encoding="utf-8",

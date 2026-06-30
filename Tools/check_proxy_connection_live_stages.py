@@ -76,14 +76,14 @@ def main() -> None:
     status_idx = diagnostics.find("public static String statusText")
     status_live_idx = diagnostics.find("if (hasFreshLivePhase(proxyInfo))", status_idx)
     status_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", status_idx)
-    status_connected_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnected", status_idx)
+    status_connected_idx = diagnostics.find("currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)", status_idx)
     status_connecting_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy", status_idx)
     inactive_checking_idx = diagnostics.find("if (proxyInfo.checking)", status_connecting_idx)
     inactive_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", inactive_checking_idx)
     inactive_live_idx = diagnostics.find("hasFreshLivePhase(proxyInfo)", inactive_checking_idx)
     inactive_available_idx = diagnostics.find("if (proxyInfo.available && ProxyCheckScheduler.isFresh(proxyInfo))", inactive_checking_idx)
     header_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", header_idx)
-    header_connected_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnected", header_idx)
+    header_connected_idx = diagnostics.find("currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)", header_idx)
     header_connecting_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy", header_idx)
     require(
         status_idx >= 0
@@ -102,7 +102,7 @@ def main() -> None:
         and header_failure_idx >= 0
         and header_connected_idx >= 0
         and header_failure_idx < header_connected_idx,
-        "fresh terminal failures must override Connected, but connected/updating current proxy must outrank unresolved per-socket live telemetry",
+        "fresh terminal failures must override Connected, and MTProxy connected/updating status must be data-path gated before unresolved live telemetry",
     )
     require(
         status_failure_idx >= 0
@@ -125,7 +125,7 @@ def main() -> None:
     color_idx = diagnostics.find("public static int statusColorKey")
     color_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", color_idx)
     color_live_idx = diagnostics.find("hasFreshLivePhase(proxyInfo)", color_idx)
-    color_connected_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnected", color_idx)
+    color_connected_idx = diagnostics.find("currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState)", color_idx)
     color_inactive_start_idx = diagnostics.find("if (proxyInfo == null)", color_idx)
     color_inactive_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", color_inactive_start_idx)
     color_inactive_live_idx = diagnostics.find("hasFreshLivePhase(proxyInfo)", color_inactive_start_idx)
@@ -136,14 +136,14 @@ def main() -> None:
         and color_live_idx >= 0
         and color_connected_idx >= 0
         and color_failure_idx < color_connected_idx,
-        "current proxy terminal failures must color the row as failure before generic connected blue",
+        "current proxy terminal failures must color the row as failure before gated connected blue",
     )
     require(
         color_live_idx >= 0
         and color_connected_idx >= 0
         and color_connected_idx < color_live_idx
         and "isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic)" in diagnostics[color_live_idx:color_inactive_start_idx],
-        "connected/updating current proxy must choose row color before unresolved live socket telemetry",
+        "data-path-gated connected/updating current proxy must choose row color before unresolved live socket telemetry",
     )
     require(
         color_inactive_start_idx >= 0
@@ -184,8 +184,7 @@ def main() -> None:
         "case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_OK:" in usable_method
         and "case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:" in usable_method
         and "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:" in usable_method
-        and "return success(KeyScope.EXACT);" in usable_method
-        and "return success(KeyScope.NETWORK);" in usable_method,
+        and "return success(KeyScope.EXACT);" in usable_method,
         "server_hello_hmac_ok must remain a handshake live phase, not a data-path usable success",
     )
     require(
@@ -287,8 +286,8 @@ def main() -> None:
         "UI and Java lifecycle code must ignore proxy live stages from stale endpoint/secret keys",
     )
     require(
-        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey)" in text("connections_java"),
-        "proxy live stage notifications must carry endpoint key so UI and rotation can ignore stale endpoint events",
+        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName)" in text("connections_java"),
+        "proxy live stage notifications must carry endpoint key and origin so UI/rotation can isolate stale or non-active events",
     )
     require(
         "publishProxyConnectionStage(proxyCheckDiagnostic.c_str())" in text("socket"),
