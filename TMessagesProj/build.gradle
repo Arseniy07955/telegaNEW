@@ -268,6 +268,12 @@ chaquopy {
         pyc {
             src false                // ship readable .py so plugin tracebacks map to real lines
         }
+        pip {
+            // Common third-party libs community plugins expect at runtime. Chaquopy can only
+            // install these at BUILD time (there is no runtime pip), so they must be declared
+            // here once and shipped in the APK — mirrors what exteraGram bundles.
+            install "requests"       // th3_proxy_tools (country flags via ip-api, URL import) + many others
+        }
     }
 }
 

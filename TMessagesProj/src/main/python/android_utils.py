@@ -30,6 +30,15 @@ def get_string(key, res=0):
     return LocaleController.getString(str(key))
 
 
+def copy_to_clipboard(text):
+    """Copy text to the system clipboard. Returns True on success."""
+    try:
+        return bool(AndroidUtilities.addToClipboard(str(text)))
+    except Exception as e:
+        log(e)
+        return False
+
+
 class _Runnable(dynamic_proxy(Runnable)):
     def __init__(self, fn):
         super().__init__()
