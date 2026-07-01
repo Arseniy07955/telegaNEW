@@ -651,13 +651,13 @@ public class SharedConfig {
             // Auto-enable official Telegram WSS once on first run. Official
             // routes are native MTProto-over-WebSocket for DC2/DC4, not a
             // local SOCKS bridge and not a custom gateway.
-            if (!preferences.getBoolean("wss_default_applied", false)) {
-                if (wssTransportMode == TRANSPORT_LEGACY_PROXY) {
-                    wssTransportMode = TRANSPORT_WSS_OFFICIAL;
+            if (!preferences.getBoolean("wss_default_applied_v2", false)) {
+                if (wssTransportMode == TRANSPORT_WSS_OFFICIAL) {
+                    wssTransportMode = TRANSPORT_LEGACY_PROXY;
                 }
                 preferences.edit()
                         .putInt("wssTransportMode", wssTransportMode)
-                        .putBoolean("wss_default_applied", true)
+                        .putBoolean("wss_default_applied_v2", true)
                         .apply();
             }
             wssHost = preferences.getString("wssHost", "");
