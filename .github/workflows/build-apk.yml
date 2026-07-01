@@ -39,22 +39,22 @@ jobs:
           - flavor: Arm64
             flavor_dir: arm64
             abi: arm64-v8a
-            artifact: ZaStoGram-standalone-arm64-v8a
+            artifact: TelegaNEW-standalone-arm64-v8a
             ccache_key: ccache-arm64-v8a-standalone
           - flavor: Armv7
             flavor_dir: armv7
             abi: armeabi-v7a
-            artifact: ZaStoGram-standalone-armeabi-v7a
+            artifact: TelegaNEW-standalone-armeabi-v7a
             ccache_key: ccache-armeabi-v7a-standalone
           - flavor: X86
             flavor_dir: x86
             abi: x86
-            artifact: ZaStoGram-standalone-x86
+            artifact: TelegaNEW-standalone-x86
             ccache_key: ccache-x86-standalone
           - flavor: X64
             flavor_dir: x64
             abi: x86_64
-            artifact: ZaStoGram-standalone-x86_64
+            artifact: TelegaNEW-standalone-x86_64
             ccache_key: ccache-x86_64-standalone
     steps:
       - name: Checkout
@@ -112,12 +112,12 @@ jobs:
             echo "::warning::No TELEGRAM_API_ID / TELEGRAM_API_HASH secrets set — building with default APP_ID=4. Login may be limited; add your own from my.telegram.org."
           fi
 
-      - name: Enable network logs for MTProxy diagnostics
-        run: |
-          BV=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          sed -i 's/public static boolean LOGS_ENABLED = BuildConfig.DEBUG_VERSION;/public static boolean LOGS_ENABLED = true;/' "$BV"
-          sed -i 's/LOGS_ENABLED = DEBUG_VERSION || sharedPreferences.getBoolean("logsEnabled", DEBUG_VERSION);/LOGS_ENABLED = true;/' "$BV"
-          echo "::warning::Telegram network logs are enabled in this APK for MTProxy debugging. Disable before public release."
+#      - name: Enable network logs for MTProxy diagnostics
+#        run: |
+#          BV=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+#          sed -i 's/public static boolean LOGS_ENABLED = BuildConfig.DEBUG_VERSION;/public static boolean LOGS_ENABLED = true;/' "$BV"
+#          sed -i 's/LOGS_ENABLED = DEBUG_VERSION || sharedPreferences.getBoolean("logsEnabled", DEBUG_VERSION);/LOGS_ENABLED = true;/' "$BV"
+#          echo "::warning::Telegram network logs are enabled in this APK for MTProxy debugging. Disable before public release."
 
       - name: Set up signing keystore (your own key, from secrets)
         env:
@@ -213,7 +213,7 @@ jobs:
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: ZaStoGram-standalone-*
+          pattern: TelegaNEW-standalone-*
           path: dist-release
           merge-multiple: true
 
@@ -222,8 +222,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}"
-          TITLE="ZaStoGram APK #${{ github.run_number }}.${{ github.run_attempt }}"
+          TAG="teleganew-apk-${{ github.run_number }}-${{ github.run_attempt }}"
+          TITLE="TelegaNEW APK #${{ github.run_number }}.${{ github.run_attempt }}"
           shopt -s nullglob
           APKS=(dist-release/*.apk)
           if [ "${#APKS[@]}" -eq 0 ]; then

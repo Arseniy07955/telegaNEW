@@ -879,10 +879,10 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
                 break;
             case 24:
-                Browser.openUrl(getParentActivity(), "https://t.me/bypassblock");
+                Browser.openUrl(getParentActivity(), "https://t.me/senkapopkavpn");
                 break;
             case 25:
-                Browser.openUrl(getParentActivity(), "https://t.me/vpndiscordyooutube");
+                Browser.openUrl(getParentActivity(), "https://t.me/SenkapopkaVpnBot");
                 break;
             case 23: {
                 if (MessagesController.getInstance(currentAccount).isFrozen()) {

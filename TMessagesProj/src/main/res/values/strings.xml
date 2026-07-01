@@ -2406,7 +2406,7 @@
     <string name="DurovLalka">Дуров лалка</string>
     <string name="OurChannel">Наш канал</string>
     <string name="OurVpn">Наш VPN</string>
-    <string name="ZapretVpnSponsorSetting">Показывать спонсора прокси</string>
+    <string name="ZapretVpnSponsorSetting">Показывать спонсора</string>
     <string name="ZapretProxySponsorOn">Вкл</string>
     <string name="ZapretProxySponsorOff">Выкл</string>
     <string name="HideMainScreenStories">Скрывать сторисы на главном экране</string>
