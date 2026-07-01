@@ -35,6 +35,9 @@ USABLE_SUCCESS_PROXY_PHASES = {"first_tls_app_recv", "first_mtproxy_packet_recv"
 NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = {
     "recipe_failed",
     "handshake_profiles_exhausted",
+    "faketls_not_mtproxy_response",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
     "secret_parse_invalid_domain_control_char",
     "secret_parse_invalid_domain",
     "dns_blocked_zero_address",
@@ -44,17 +47,20 @@ NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = {
 }
 VISIBLE_SUCCESS_HOLD_MS = 45 * 1000
 DNS_VISIBLE_DELAY_MS = 800
+FRESH_FAILURE_HOLD_MS = 15 * 1000
 DNS_VISIBLE_TELEMETRY_PHASES = {"host_resolve_start", "dns_coalesce_wait"}
 LIVE_VISIBLE_OVERWRITE_PHASES = {
     "dns_cache_hit",
     "dns_cache_store",
     "dns_coalesce_wait",
     "mtproxy_probe_wait",
+    "phase_adaptive_recipe",
     "connect_start",
     "socket_connect_start",
     "tcp_connect_gate",
     "socket_connected",
     "client_hello_sent",
+    "admission_hold_after_client_hello_failure",
     "server_hello_hmac_ok",
     "on_connected",
     "first_tls_app_sent",
@@ -80,6 +86,9 @@ FRESH_USABLE_FAILURE_OVERWRITE_PHASES = {
     "unrecognized_response_after_client_hello",
     "unrecognized_tls_response_after_client_hello",
     "server_hello_hmac_mismatch",
+    "faketls_not_mtproxy_response",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
     "background_handshake_aborted",
     "handshake_profiles_exhausted",
     "unsupported_for_current_client",
@@ -107,6 +116,32 @@ TERMINAL_ONE_SHOT_PHASES = {
     "secret_parse_invalid_domain_control_char",
     "secret_parse_invalid_domain",
 }
+FAKETLS_EXACT_FAILURE_PHASES = {
+    "faketls_server_hello_wait_timeout",
+    "server_closed_after_client_hello",
+    "tls_alert_after_client_hello",
+    "short_tls_response_after_client_hello",
+    "unrecognized_response_after_client_hello",
+    "unrecognized_tls_response_after_client_hello",
+    "server_hello_hmac_mismatch",
+    "mtproxy_probe_wait_timeout",
+}
+FAKETLS_TERMINAL_BUDGET_PHASES = {
+    "faketls_not_mtproxy_response",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
+}
+FAKETLS_RETRY_LIVE_PHASES = {
+    "admission_hold_after_client_hello_failure",
+    "phase_adaptive_recipe",
+    "dns_cache_hit",
+    "connect_start",
+    "socket_connect_start",
+    "socket_connected",
+    "client_hello_sent",
+    "mtproxy_probe_wait",
+}
+FAKETLS_BUDGET_HOLD_MS = 30 * 1000
 PUNITIVE_ROTATION_PHASES = {
     "tcp_not_connected",
     "tcp_connection_refused",
@@ -114,6 +149,9 @@ PUNITIVE_ROTATION_PHASES = {
     "host_resolve_failed",
     "host_resolve_timeout",
     "tcp_connected_no_pong",
+    "faketls_not_mtproxy_response",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
     "handshake_profiles_exhausted",
     "mtproxy_packet_sent_no_response",
     "post_handshake_no_appdata",
@@ -136,6 +174,8 @@ STANDARD_HMAC_PARSER = "standard_hmac_parser"
 NO_BYTE_AFTER_CLIENT_HELLO_PHASES = {
     "true_client_hello_timeout",
     "faketls_server_hello_wait_timeout",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
     "server_closed_after_client_hello",
     "client_hello_sent_no_server_hello",
 }
@@ -484,6 +524,104 @@ def verify_dns_visible_debounce(lines: list[str]) -> list[str]:
         start_time, _, _, start_line = matching[-1]
         if start_time is not None and current_time is not None and current_time - start_time < DNS_VISIBLE_DELAY_MS:
             failures.append(f"visible_delayed_dns before {DNS_VISIBLE_DELAY_MS}ms debounce: {line} after {start_line}")
+    return failures
+
+
+def verify_probe_wait_timeout_replay(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    probe_wait_timeouts: list[tuple[int | None, str, str, str]] = []
+    for line in lines:
+        decision = proxy_control_decision(line)
+        if not decision:
+            continue
+        phase = line_field(line, "phase")
+        endpoint = line_field(line, "endpoint")
+        probe = line_field(line, "probe")
+        if phase == "mtproxy_probe_wait_timeout" and decision in {"visible_only", "backoff"}:
+            probe_wait_timeouts.append((line_time_ms(line), endpoint, probe, line))
+            continue
+        if decision != "visible_only" or phase != "mtproxy_probe_wait":
+            continue
+        current_time = line_time_ms(line)
+        for timeout_time, timeout_endpoint, timeout_probe, timeout_line in probe_wait_timeouts:
+            if endpoint and timeout_endpoint and not same_proxy_endpoint(timeout_endpoint, endpoint):
+                continue
+            if probe and timeout_probe and probe != timeout_probe:
+                continue
+            if timeout_time is not None and current_time is not None and current_time - timeout_time > FRESH_FAILURE_HOLD_MS:
+                continue
+            failures.append(
+                "mtproxy_probe_wait_timeout overwritten by visible mtproxy_probe_wait; "
+                f"use held_by_fresh_failure/telemetry or start a new owner attempt: {line} after {timeout_line}"
+            )
+            break
+    return failures
+
+
+def verify_faketls_exact_failure_stickiness(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    exact_failures: list[tuple[int | None, str, str, str]] = []
+    for line in lines:
+        decision = proxy_control_decision(line)
+        if not decision:
+            continue
+        phase = line_field(line, "phase") or line_field(line, "failed_phase")
+        endpoint = line_field(line, "endpoint")
+        probe = line_field(line, "probe")
+        current_time = line_time_ms(line)
+        if phase in FAKETLS_EXACT_FAILURE_PHASES | FAKETLS_TERMINAL_BUDGET_PHASES and decision in {"visible_only", "backoff"}:
+            exact_failures.append((current_time, endpoint, probe, line))
+            continue
+        if decision != "visible_only" or phase not in FAKETLS_RETRY_LIVE_PHASES:
+            continue
+        for failure_time, failure_endpoint, failure_probe, failure_line in exact_failures:
+            if endpoint and failure_endpoint and not same_proxy_endpoint(failure_endpoint, endpoint):
+                continue
+            if probe and failure_probe and probe != failure_probe:
+                continue
+            if failure_time is not None and current_time is not None and current_time - failure_time > FRESH_FAILURE_HOLD_MS:
+                continue
+            failures.append(
+                "exact FakeTLS failure overwritten by visible retry/live phase: "
+                f"{line} after {failure_line}"
+            )
+            break
+    return failures
+
+
+def verify_faketls_terminal_budget_replay(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    terminal_verdicts: list[tuple[int | None, str, str, str]] = []
+    for line in lines:
+        if "proxy_control decision=activation_generation" in line:
+            terminal_verdicts.clear()
+            continue
+        decision = proxy_control_decision(line)
+        phase = line_field(line, "phase") or line_field(line, "terminal_phase") or line_field(line, "failed_phase")
+        endpoint = line_field(line, "endpoint") or endpoint_from_key(line_field(line, "key"))
+        probe = line_field(line, "probe") or line_field(line, "recipe_key")
+        current_time = line_time_ms(line)
+        if phase in FAKETLS_TERMINAL_BUDGET_PHASES and (
+            decision in {"visible_only", "backoff", "held_by_failure_hysteresis", "rotation_trigger"}
+            or "faketls_budget_exhausted" in line
+            or "probe_faketls_budget_backoff" in line
+        ):
+            terminal_verdicts.append((current_time, endpoint, probe, line))
+            continue
+        if "client_hello_sent" not in line:
+            continue
+        for terminal_time, terminal_endpoint, terminal_probe, terminal_line in terminal_verdicts:
+            if endpoint and terminal_endpoint and not same_proxy_endpoint(terminal_endpoint, endpoint):
+                continue
+            if probe and terminal_probe and probe != terminal_probe:
+                continue
+            if terminal_time is not None and current_time is not None and current_time - terminal_time > FAKETLS_BUDGET_HOLD_MS:
+                continue
+            failures.append(
+                "FakeTLS terminal budget overwritten by client_hello_sent: "
+                f"{line} after {terminal_line}"
+            )
+            break
     return failures
 
 
@@ -854,6 +992,9 @@ def verify_lines(lines: list[str]) -> list[str]:
     failures.extend(verify_shadowed_socket_backoff(lines))
     failures.extend(verify_usable_hold_anchor(lines))
     failures.extend(verify_dns_visible_debounce(lines))
+    failures.extend(verify_probe_wait_timeout_replay(lines))
+    failures.extend(verify_faketls_exact_failure_stickiness(lines))
+    failures.extend(verify_faketls_terminal_budget_replay(lines))
     failures.extend(verify_rotation_hysteresis(lines))
     failures.extend(verify_dns_outage_rotation_hold(lines))
     failures.extend(verify_rotated_away_endpoint_hold(lines))

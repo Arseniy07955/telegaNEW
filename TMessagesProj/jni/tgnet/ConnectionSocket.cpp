@@ -1146,6 +1146,33 @@ static std::string mtProxyRecipeCacheKeyFor(const std::string &host, uint16_t po
     return key;
 }
 
+static uint64_t mtProxyFailureResponseSignature(size_t responseBytes, const ByteArray *buffer) {
+    if (responseBytes == 0 || buffer == nullptr) {
+        return 0;
+    }
+    size_t sampleBytes = responseBytes < 128 ? responseBytes : 128;
+    uint64_t hash = 1469598103934665603ULL;
+    uint64_t responseLength = (uint64_t) responseBytes;
+    for (int shift = 0; shift < 64; shift += 8) {
+        hash ^= (uint8_t) ((responseLength >> shift) & 0xffU);
+        hash *= 1099511628211ULL;
+    }
+    for (size_t i = 0; i < sampleBytes; i++) {
+        hash ^= buffer->bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash == 0 ? 1 : hash;
+}
+
+static std::string mtProxyNormalizeFakeTlsBudgetTerminalPhase(const std::string &phase) {
+    if (phase == MtProxyPhase::FaketlsNotMtproxyResponse
+            || phase == MtProxyPhase::FaketlsNoServerHelloTerminal
+            || phase == MtProxyPhase::FaketlsServerClosedTerminal) {
+        return phase;
+    }
+    return MtProxyPhase::FaketlsNotMtproxyResponse;
+}
+
 static TlsHello selectMtProxyTlsHello(int32_t profile) {
     switch (normalizeMtProxyTlsProfile(profile)) {
         case MT_PROXY_TLS_PROFILE_FIREFOX:
@@ -1769,6 +1796,7 @@ bool ConnectionSocket::mtProxyProbeBeginOrJoin(bool ipv6) {
     probeKey.endpointKey = currentMtProxyEndpointKey;
     probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
     probeKey.allowedSniVariants = currentAllowedSniVariants;
+    probeKey.activationGeneration = proxyActivationGeneration;
     MtProxyProbeCoordinator::Decision probeDecision = MtProxyProbeCoordinator::beginOrJoin(probeKey, mtProxyProbeOwnerToken, now);
     if (probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::ProfilesExhaustedBackoff) {
         proxyCheckDiagnostic = MtProxyPhase::HandshakeProfilesExhausted;
@@ -1777,6 +1805,17 @@ bool ConnectionSocket::mtProxyProbeBeginOrJoin(bool ipv6) {
         observation.reason = "probe_profiles_exhausted";
         publishMtProxySocketObservation(observation);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_profiles_exhausted key=%s endpoint=%s owner_generation=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), probeDecision.generation);
+        closeSocket(1, -1);
+        return true;
+    }
+    if (probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::HandshakeBudgetBackoff) {
+        const std::string terminalPhase = mtProxyNormalizeFakeTlsBudgetTerminalPhase(probeDecision.terminalPhase);
+        proxyCheckDiagnostic = terminalPhase;
+        MtProxySocketObservation observation;
+        observation.phase = terminalPhase.c_str();
+        observation.reason = "faketls_handshake_budget_backoff";
+        publishMtProxySocketObservation(observation);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_faketls_budget_backoff key=%s endpoint=%s phase=%s owner_generation=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), terminalPhase.c_str(), probeDecision.generation);
         closeSocket(1, -1);
         return true;
     }
@@ -1819,6 +1858,7 @@ void ConnectionSocket::acquireMtProxyProbeLease(uint64_t token) {
     mtProxyProbeLeaseEndpointKey = currentMtProxyEndpointKey;
     mtProxyProbeLeaseNetworkEndpointKey = currentMtProxyNetworkEndpointKey;
     mtProxyProbeLeaseAllowedSni = currentAllowedSniVariants;
+    mtProxyProbeLeaseActivationGeneration = proxyActivationGeneration;
 }
 
 void ConnectionSocket::releaseMtProxyProbeLease() {
@@ -1831,6 +1871,7 @@ void ConnectionSocket::releaseMtProxyProbeLease() {
         probeKey.endpointKey = mtProxyProbeLeaseEndpointKey;
         probeKey.networkEndpointKey = mtProxyProbeLeaseNetworkEndpointKey;
         probeKey.allowedSniVariants = mtProxyProbeLeaseAllowedSni;
+        probeKey.activationGeneration = mtProxyProbeLeaseActivationGeneration;
         MtProxyProbeCoordinator::cancelOwner(probeKey, mtProxyProbeOwnerToken);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_owner_release key=%s token=%llu", this, mtProxyProbeLeaseKey.c_str(), (unsigned long long) mtProxyProbeOwnerToken);
     }
@@ -1839,6 +1880,7 @@ void ConnectionSocket::releaseMtProxyProbeLease() {
     mtProxyProbeLeaseEndpointKey.clear();
     mtProxyProbeLeaseNetworkEndpointKey.clear();
     mtProxyProbeLeaseAllowedSni = 0;
+    mtProxyProbeLeaseActivationGeneration = 0;
 }
 
 void ConnectionSocket::mtProxyProbeHeartbeat() {
@@ -1850,6 +1892,7 @@ void ConnectionSocket::mtProxyProbeHeartbeat() {
     probeKey.endpointKey = currentMtProxyEndpointKey;
     probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
     probeKey.allowedSniVariants = currentAllowedSniVariants;
+    probeKey.activationGeneration = proxyActivationGeneration;
     MtProxyProbeCoordinator::touchOwner(probeKey, mtProxyProbeOwnerToken, ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis());
 }
 
@@ -1952,6 +1995,7 @@ void ConnectionSocket::recordMtProxyEndpointFailure(const char *diagnostic, cons
         probeKey.endpointKey = currentMtProxyEndpointKey;
         probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
         probeKey.allowedSniVariants = currentAllowedSniVariants;
+        probeKey.activationGeneration = proxyActivationGeneration;
         std::string failedRecipeId = currentMtProxyRecipeId();
         MtProxyAdaptivePolicy::RecipeCursor failedCursor;
         failedCursor.family = currentRecipeFamily;
@@ -1962,6 +2006,7 @@ void ConnectionSocket::recordMtProxyEndpointFailure(const char *diagnostic, cons
                 probeKey,
                 mtProxyProbeOwnerToken,
                 phase,
+                mtProxyFailureResponseSignature(failureResponseBytes, tempBuffer),
                 currentMtProxyRecipeUsesGrease(),
                 currentMtProxyRecipeIsGreaseProbe(),
                 mtProxyClassicFallbackAllowed(),
@@ -1969,9 +2014,9 @@ void ConnectionSocket::recordMtProxyEndpointFailure(const char *diagnostic, cons
         if (!failure.recorded) {
             return;
         }
-        std::string nextRecipeId = failure.recipeExhausted ? MtProxyPhase::HandshakeProfilesExhausted : mtProxyRecipeIdForCursor(failure.cursor);
-        bool fallbackAllowed = !failure.recipeExhausted || mtProxyClassicFallbackAllowed();
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup recipe_failed key=%s recipe_key=%s endpoint_key=%s phase=%s reason=%s evidence=%s response_bytes=%zu recipe=%s recipe_id=%s family=%s sni_variant=%s parser_variant=%s classic_variant=%s next=%s next_recipe=%s next_family=%s next_sni_variant=%s next_parser_variant=%s next_classic_variant=%s fallback_allowed=%d classic_fallback_allowed=%d exhausted=%d owner_generation=%u cursor_generation=%u", this, currentMtProxyEndpointKey.c_str(), currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), phase.c_str(), reason != nullptr ? reason : "unknown", failureEvidence, failureResponseBytes, failedRecipeId.c_str(), failedRecipeId.c_str(), MtProxyAdaptivePolicy::clientHelloFamilyName(failedCursor.family), MtProxyAdaptivePolicy::sniVariantName(failedCursor.sniVariant), MtProxyAdaptivePolicy::parserVariantName(failedCursor.parserVariant), MtProxyAdaptivePolicy::classicVariantName(failedCursor.classicVariant), nextRecipeId.c_str(), nextRecipeId.c_str(), MtProxyAdaptivePolicy::clientHelloFamilyName(failure.cursor.family), MtProxyAdaptivePolicy::sniVariantName(failure.cursor.sniVariant), MtProxyAdaptivePolicy::parserVariantName(failure.cursor.parserVariant), MtProxyAdaptivePolicy::classicVariantName(failure.cursor.classicVariant), fallbackAllowed ? 1 : 0, mtProxyClassicFallbackAllowed() ? 1 : 0, failure.recipeExhausted ? 1 : 0, failure.generation, failure.cursor.generation);
+        std::string nextRecipeId = failure.terminalBudgetExhausted ? failure.terminalPhase : (failure.recipeExhausted ? MtProxyPhase::HandshakeProfilesExhausted : mtProxyRecipeIdForCursor(failure.cursor));
+        bool fallbackAllowed = !failure.recipeExhausted && !failure.terminalBudgetExhausted ? true : mtProxyClassicFallbackAllowed();
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup recipe_failed key=%s recipe_key=%s endpoint_key=%s phase=%s reason=%s evidence=%s response_bytes=%zu response_signature=%llu recipe=%s recipe_id=%s family=%s sni_variant=%s parser_variant=%s classic_variant=%s next=%s next_recipe=%s next_family=%s next_sni_variant=%s next_parser_variant=%s next_classic_variant=%s fallback_allowed=%d classic_fallback_allowed=%d exhausted=%d terminal_budget=%d budget_attempts=%u budget_elapsed_ms=%ld owner_generation=%u cursor_generation=%u", this, currentMtProxyEndpointKey.c_str(), currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), phase.c_str(), reason != nullptr ? reason : "unknown", failureEvidence, failureResponseBytes, (unsigned long long) failure.responseSignature, failedRecipeId.c_str(), failedRecipeId.c_str(), MtProxyAdaptivePolicy::clientHelloFamilyName(failedCursor.family), MtProxyAdaptivePolicy::sniVariantName(failedCursor.sniVariant), MtProxyAdaptivePolicy::parserVariantName(failedCursor.parserVariant), MtProxyAdaptivePolicy::classicVariantName(failedCursor.classicVariant), nextRecipeId.c_str(), nextRecipeId.c_str(), MtProxyAdaptivePolicy::clientHelloFamilyName(failure.cursor.family), MtProxyAdaptivePolicy::sniVariantName(failure.cursor.sniVariant), MtProxyAdaptivePolicy::parserVariantName(failure.cursor.parserVariant), MtProxyAdaptivePolicy::classicVariantName(failure.cursor.classicVariant), fallbackAllowed ? 1 : 0, mtProxyClassicFallbackAllowed() ? 1 : 0, failure.recipeExhausted ? 1 : 0, failure.terminalBudgetExhausted ? 1 : 0, failure.budgetAttempts, (long) failure.budgetElapsedMs, failure.generation, failure.cursor.generation);
         MtProxySocketObservation recipeFailureObservation;
         recipeFailureObservation.phase = "recipe_failed";
         recipeFailureObservation.reason = reason != nullptr ? reason : "unknown";
@@ -1980,6 +2025,26 @@ void ConnectionSocket::recordMtProxyEndpointFailure(const char *diagnostic, cons
         recipeFailureObservation.networkEndpointKey = currentMtProxyNetworkEndpointKey;
         recipeFailureObservation.publishVisibleStage = false;
         publishMtProxySocketObservation(recipeFailureObservation);
+        if (failure.terminalBudgetExhausted) {
+            proxyCheckDiagnostic = mtProxyNormalizeFakeTlsBudgetTerminalPhase(failure.terminalPhase);
+            MtProxySocketObservation terminalObservation;
+            terminalObservation.phase = proxyCheckDiagnostic.c_str();
+            terminalObservation.reason = phase.c_str();
+            terminalObservation.endpointKey = currentMtProxyEndpointKey;
+            terminalObservation.probeKey = currentMtProxyProbeKey;
+            terminalObservation.networkEndpointKey = currentMtProxyNetworkEndpointKey;
+            publishMtProxySocketObservation(terminalObservation);
+            MtProxyEndpointPolicy::MtProxyEndpointContext context;
+            context.endpointKey = currentMtProxyEndpointKey;
+            context.recipeCacheKey = currentMtProxyRecipeCacheKey;
+            context.networkEndpointKey = currentMtProxyNetworkEndpointKey;
+            context.fakeTls = currentSecretIsFakeTls;
+            context.connectionPatternMode = connectionPatternMode;
+            context.priority = proxyHandshakeAdmissionPriority;
+            MtProxyEndpointPolicy::FailureResult terminalFailure = MtProxyEndpointPolicy::recordFailure(context, proxyCheckDiagnostic, now);
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup faketls_budget_exhausted key=%s recipe_key=%s failed_phase=%s terminal_phase=%s evidence=%s response_bytes=%zu response_signature=%llu attempts=%u elapsed_ms=%ld recorded=%d cooldown_ms=%ld generation=%u", this, currentMtProxyEndpointKey.c_str(), currentMtProxyProbeKey.c_str(), phase.c_str(), proxyCheckDiagnostic.c_str(), failureEvidence, failureResponseBytes, (unsigned long long) failure.responseSignature, failure.budgetAttempts, (long) failure.budgetElapsedMs, terminalFailure.recorded ? 1 : 0, (long) terminalFailure.cooldownMs, failure.generation);
+            return;
+        }
         if (failure.recipeExhausted) {
             proxyCheckDiagnostic = MtProxyPhase::HandshakeProfilesExhausted;
             MtProxySocketObservation exhaustedObservation;
@@ -2039,6 +2104,7 @@ void ConnectionSocket::recordMtProxyEndpointHandshakeOk(const char *reason) {
         probeKey.endpointKey = currentMtProxyEndpointKey;
         probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
         probeKey.allowedSniVariants = currentAllowedSniVariants;
+        probeKey.activationGeneration = proxyActivationGeneration;
         int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         MtProxyProbeCoordinator::completeSuccess(probeKey, mtProxyProbeOwnerToken, reason, currentMtProxyRecipeUsesGrease(), currentMtProxyCompatibilityRecipe(), now);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup working_recipe_cached key=%s endpoint=%s reason=%s recipe=%s recipe_id=%s", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), reason != nullptr ? reason : "unknown", currentMtProxyRecipeId().c_str(), currentMtProxyRecipeId().c_str());
@@ -2077,6 +2143,7 @@ void ConnectionSocket::recordMtProxyEndpointDataPathSuccess(const char *reason) 
         probeKey.endpointKey = currentMtProxyEndpointKey;
         probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
         probeKey.allowedSniVariants = currentAllowedSniVariants;
+        probeKey.activationGeneration = proxyActivationGeneration;
         MtProxyProbeCoordinator::completeSuccess(probeKey, mtProxyProbeOwnerToken, reason, currentMtProxyRecipeUsesGrease(), currentMtProxyCompatibilityRecipe(), now);
     }
     std::string workingRecipeId = currentMtProxyRecipeId();

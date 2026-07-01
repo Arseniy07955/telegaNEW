@@ -168,6 +168,7 @@ private:
     std::string mtProxyProbeLeaseEndpointKey;
     std::string mtProxyProbeLeaseNetworkEndpointKey;
     uint32_t mtProxyProbeLeaseAllowedSni = 0;
+    uint32_t mtProxyProbeLeaseActivationGeneration = 0;
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);
     bool scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6);

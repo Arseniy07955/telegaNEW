@@ -27,6 +27,8 @@ MtProxyFailureEvidenceKind mtProxyEvidenceForPhase(const std::string &phase, siz
         return MtProxyFailureEvidenceKind::TcpFailure;
     }
     if (phase == MtProxyPhase::FaketlsServerHelloWaitTimeout
+            || phase == MtProxyPhase::FaketlsNoServerHelloTerminal
+            || phase == MtProxyPhase::FaketlsServerClosedTerminal
             || phase == "true_client_hello_timeout"
             || phase == "client_hello_sent_no_server_hello") {
         return MtProxyFailureEvidenceKind::NoBytesAfterClientHello;
@@ -39,6 +41,7 @@ MtProxyFailureEvidenceKind mtProxyEvidenceForPhase(const std::string &phase, siz
     if (phase == MtProxyPhase::TlsAlertAfterClientHello
             || phase == MtProxyPhase::ShortTlsResponseAfterClientHello
             || phase == MtProxyPhase::UnrecognizedResponseAfterClientHello
+            || phase == MtProxyPhase::FaketlsNotMtproxyResponse
             || phase == "unrecognized_tls_response_after_client_hello") {
         return MtProxyFailureEvidenceKind::ServerBytesParserFailure;
     }

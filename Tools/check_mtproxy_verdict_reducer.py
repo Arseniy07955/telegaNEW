@@ -79,6 +79,9 @@ def main() -> int:
     values = read(VALUES)
     values_ru = read(VALUES_RU)
     reducer_body = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
+    shadow_idx = reducer_body.find("ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE.equals(normalizedPhase)")
+    shadow_end = reducer_body.find("boolean concretePhase", shadow_idx)
+    shadow_body = reducer_body[shadow_idx:shadow_end] if shadow_idx >= 0 and shadow_end >= 0 else ""
 
     for field in ("layer", "failureClass", "confidence", "action", "userTextKey", "endpointKey", "networkKey"):
         require(f"final String {field}" in verdict, f"ProxyEndpointVerdict must expose {field}", failures)
@@ -155,8 +158,17 @@ def main() -> int:
         "FAILURE_CLASS_FAKETLS_NO_SERVER_HELLO" in failure_text
         and "FAKETLS_SERVER_HELLO_WAIT_TIMEOUT" in failure_text
         and "SERVER_CLOSED_AFTER_CLIENT_HELLO" in failure_text
+        and "FAKETLS_NO_SERVER_HELLO_TERMINAL" in failure_text
+        and "FAKETLS_SERVER_CLOSED_TERMINAL" in failure_text
         and "return userTextKeyForPhase(phase)" in failure_text,
-        "faketls no-server-hello failureClass must preserve phase-specific UI keys for timeout and server-close phases",
+        "faketls no-server-hello failureClass must preserve phase-specific UI keys for timeout/server-close/terminal phases",
+        failures,
+    )
+    require(
+        "FAILURE_CLASS_FAKETLS_BAD_SERVER_FLIGHT" in failure_text
+        and "FAKETLS_NOT_MTPROXY_RESPONSE" in failure_text
+        and "return userTextKeyForPhase(phase)" in failure_text,
+        "faketls bad-server-flight failureClass must preserve the terminal not-MTProxy response UI key",
         failures,
     )
 
@@ -165,6 +177,9 @@ def main() -> int:
         "MTPROXY_PROBE_WAIT_TIMEOUT": "ProxyStatusMtproxyProbeWaitTimeout",
         "FAKETLS_SERVER_HELLO_WAIT_TIMEOUT": "ProxyStatusFaketlsServerHelloWaitTimeout",
         "SERVER_CLOSED_AFTER_CLIENT_HELLO": "ProxyStatusServerClosedAfterClientHello",
+        "FAKETLS_NOT_MTPROXY_RESPONSE": "ProxyStatusFaketlsNotMtproxyResponse",
+        "FAKETLS_NO_SERVER_HELLO_TERMINAL": "ProxyStatusFaketlsNoServerHelloTerminal",
+        "FAKETLS_SERVER_CLOSED_TERMINAL": "ProxyStatusFaketlsServerClosedTerminal",
         "BACKGROUND_HANDSHAKE_ABORTED": "ProxyStatusBackgroundHandshakeAborted",
         "TCP_CONNECTION_REFUSED": "ProxyStatusTcpConnectionRefused",
         "TCP_CONNECT_TIMEOUT": "ProxyStatusTcpConnectTimeout",
@@ -185,12 +200,15 @@ def main() -> int:
 
     keep_failure = method_body(diagnostics, "private static boolean shouldKeepFreshFailure")
     weak_method = method_body(diagnostics, "public static boolean isWeakRetryLivePhase")
+    breakthrough_method = method_body(diagnostics, "public static boolean isFreshFailureBreakthroughPhase")
     for constant in (
         "MTPROXY_PROBE_WAIT",
         "TCP_CONNECT_GATE",
         "DNS_CACHE_HIT",
         "ENDPOINT_COOLDOWN",
         "CONNECT_START",
+        "CLIENT_HELLO_SENT",
+        "ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE",
     ):
         require(
             f"case {constant}:" in weak_method or f"case ProxyCheckDiagnostics.{constant}:" in weak_method,
@@ -203,8 +221,23 @@ def main() -> int:
         failures,
     )
     require(
+        "isFreshFailureBreakthroughPhase(incomingDiagnostic)" in keep_failure,
+        "fresh failure hold must explicitly allow only real progress/success breakthrough phases",
+        failures,
+    )
+    for constant in ("SERVER_HELLO_HMAC_OK", "ON_CONNECTED", "FIRST_TLS_APP_RECV"):
+        require(
+            f"case {constant}:" in breakthrough_method
+            and f"case {constant}:" not in weak_method,
+            f"{constant} must break fresh failure hold without being weak retry/live telemetry",
+            failures,
+        )
+    require(
         "shouldKeepFreshFailure(SharedConfig.ProxyInfo proxyInfo, String incomingDiagnostic, int incomingActivationGeneration)" in diagnostics
-        and "incomingActivationGeneration == proxyInfo.lastCheckActivationGeneration" in diagnostics
+        and (
+            "incomingActivationGeneration == proxyInfo.lastCheckActivationGeneration" in diagnostics
+            or "incomingActivationGeneration != proxyInfo.lastCheckActivationGeneration" in diagnostics
+        )
         and "ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, event.phase, event.activationGeneration)" in visible,
         "fresh failure sticky hold must be bound to the visible failure activation generation",
         failures,
@@ -273,6 +306,12 @@ def main() -> int:
     stale_generation = reducer_body.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)")
     coalesce_probe = reducer_body.find("ProxyVisibleStateStore.shouldCoalesceProbeWait(currentProxy, event)")
     fresh_failure_hold = reducer_body.find("ProxyVisibleStateStore.shouldHoldVisiblePhaseByFreshFailure(currentProxy, event)")
+    require(
+        "ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)" in shadow_body
+        and shadow_body.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)") < shadow_body.find("ProxyHealthStore.rememberPostSuccessDataPathShadow"),
+        "shadowed_socket_failure must obey stale activation generation before consuming post-success shadow budget",
+        failures,
+    )
     require(
         stale_generation >= 0 and stale_generation < reducer_body.find("ProxyWarmupGate.onProxyLivePhase"),
         "reducer must ignore stale activation generations before live/failure state changes",
@@ -355,6 +394,7 @@ def main() -> int:
     require(
         "int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount)" in java_connections
         and "ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName" in java_connections
+        and "int activationGeneration = ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin)" in java_connections
         and "ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin)" in java_connections
         and "native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName)" in java_connections
         and "publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE)" in java_connections
@@ -429,7 +469,13 @@ def main() -> int:
     require("clearUsableSuccessHold" in health, "ProxyHealthStore must expose explicit activation usable-success clearing", failures)
     require("markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent.Origin origin)" in runtime, "runtime store must accept markConnectionStarting origin", failures)
     require("markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent.Origin origin)" in proxy_scheduler, "scheduler facade must accept markConnectionStarting origin", failures)
-    require("ProxyConnectionEvent.Origin.USER_SELECT" in proxy_list, "ProxyListActivity user selection must mark user_select activation", failures)
+    require(
+        "SharedConfig.currentProxy = info" in proxy_list
+        and "ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy, ProxyConnectionEvent.Origin.USER_SELECT)" in proxy_list
+        and "ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.USER_SELECT)" in proxy_list,
+        "ProxyListActivity saved-proxy tap must select the proxy with USER_SELECT generation/origin",
+        failures,
+    )
     require("ProxyConnectionEvent.Origin.SETTINGS_CHANGE" in proxy_settings, "ProxySettingsActivity apply must mark settings_change activation", failures)
     require("ProxyConnectionEvent.Origin.USER_SELECT" in android_utilities, "proxy link apply must mark user_select activation", failures)
     require("ProxyConnectionEvent.Origin.ROTATION_CANDIDATE" in read(MESSENGER / "ProxyRotationController.java"), "rotation controller must mark rotation_candidate activation", failures)

@@ -74,6 +74,33 @@ def verify_runtime_contract(failures: list[str]) -> None:
         failures,
     )
 
+    bad_probe_wait_timeout_overwrite = run_verifier(
+        base_log(
+            "06-30 14:00:20.000 proxy_control decision=visible_only source=native_stage origin=active_socket account=1 phase=mtproxy_probe_wait_timeout endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
+            "06-30 14:00:20.050 proxy_control decision=visible_only source=native_stage origin=active_socket account=1 phase=mtproxy_probe_wait endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
+        )
+    )
+    require(
+        bad_probe_wait_timeout_overwrite.returncode != 0
+        and "mtproxy_probe_wait_timeout overwritten by visible mtproxy_probe_wait" in bad_probe_wait_timeout_overwrite.stderr,
+        "runtime verifier must reject probe_wait_timeout being overwritten by a visible probe_wait replay",
+        failures,
+    )
+
+    good_probe_wait_retry = run_verifier(
+        base_log(
+            "06-30 14:00:21.000 proxy_control decision=visible_only source=native_stage origin=active_socket account=1 phase=mtproxy_probe_wait_timeout endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
+            "06-30 14:00:21.050 proxy_control decision=held_by_fresh_failure source=native_stage origin=active_socket account=1 phase=mtproxy_probe_wait endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru held_by=mtproxy_probe_wait_timeout",
+            "06-30 14:00:27.100 connection(0x2) mtproxy_startup probe_wait_timer_fire key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru",
+            "06-30 14:00:27.120 connection(0x2) mtproxy_startup probe_start key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru generation=2",
+        )
+    )
+    require(
+        good_probe_wait_retry.returncode == 0,
+        good_probe_wait_retry.stderr.strip() or "runtime verifier must accept held probe_wait_timeout followed by bounded new-owner retry",
+        failures,
+    )
+
     bad_eof_alias = run_verifier(
         base_log(
             "06-30 14:01:00.000 connection(0x1) mtproxy_startup client_hello_sent bytes=512 expected=512 domain_len=13",
@@ -125,11 +152,14 @@ def main() -> int:
 
     require("tgnet/MtProxyProbeCoordinator.cpp" in cmake, "CMake must compile MtProxyProbeCoordinator.cpp", failures)
     require("class MtProxyProbeCoordinator" in coordinator_h, "coordinator header must declare MtProxyProbeCoordinator", failures)
-    require("enum class DecisionKind" in coordinator_h and "StartOwner" in coordinator_h and "JoinExisting" in coordinator_h and "UseWorkingRecipe" in coordinator_h and "ProfilesExhaustedBackoff" in coordinator_h, "coordinator must expose owner/join/working/exhausted-backoff decisions", failures)
+    require("enum class DecisionKind" in coordinator_h and "StartOwner" in coordinator_h and "JoinExisting" in coordinator_h and "UseWorkingRecipe" in coordinator_h and "ProfilesExhaustedBackoff" in coordinator_h and "HandshakeBudgetBackoff" in coordinator_h, "coordinator must expose owner/join/working/exhausted-budget-backoff decisions", failures)
     require("struct ProbeKey" in coordinator_h and "secret_hash" in coordinator_cpp, "coordinator must key exact config by host:port + secret_hash + SNI", failures)
     require("beginOrJoin" in coordinator_h and "beginOrJoin" in coordinator_cpp, "coordinator must implement beginOrJoin", failures)
     require("state.status == ProbeStatus::WORKING_RECIPE_FOUND" in coordinator_cpp, "working recipe reuse must also cover the successful default level-0 recipe", failures)
     require("completeFailure" in coordinator_h and "completeSuccess" in coordinator_h and "completeProfilesExhausted" in coordinator_h, "coordinator must own recipe success/failure/exhaustion transitions", failures)
+    require("uint32_t activationGeneration" in coordinator_h and "ProbeKey" in coordinator_h, "coordinator ProbeKey must carry activationGeneration", failures)
+    require("FakeTlsHandshakeBudget" in coordinator_cpp and "responseSignature" in coordinator_h and "terminalBudgetExhausted" in coordinator_h, "coordinator must own endpoint/probe/generation FakeTLS budget verdicts", failures)
+    require("MT_PROXY_FAKETLS_BUDGET_HOLD_MS" in coordinator_cpp and "30 * 1000" in coordinator_cpp and "MT_PROXY_FAKETLS_BUDGET_MAX_OWNER_ATTEMPTS" in coordinator_cpp and "MT_PROXY_FAKETLS_BUDGET_REPEATED_SIGNATURE_LIMIT" in coordinator_cpp, "FakeTLS budget must cap owner attempts/signatures and hold terminal verdicts for 30 seconds", failures)
     require("MT_PROXY_PROBE_EXHAUSTED_HOLD_MS" in coordinator_cpp and "30 * 1000" in coordinator_cpp, "profile exhaustion must be a short recovery debounce, not a 15-minute unsupported quarantine", failures)
     require("ProbeStatus::PROFILES_EXHAUSTED" in coordinator_cpp and "ProbeStatus::UNSUPPORTED" not in coordinator_cpp, "coordinator must model recipe exhaustion as recovery state, not unsupported terminal state", failures)
     require("state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants)" in coordinator_cpp, "expired profile-exhaustion hold must reset the recipe cursor for a fresh recovery cycle", failures)
@@ -141,6 +171,7 @@ def main() -> int:
     require("currentMtProxyProbeKey" in socket_h + socket_cpp, "ConnectionSocket must store the active probe key separately from public endpoint key", failures)
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::JoinExisting" in socket_cpp, "joiners must enter probe wait instead of opening TCP", failures)
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::ProfilesExhaustedBackoff" in socket_cpp, "profile exhaustion backoff must stop before TCP/socket setup", failures)
+    require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::HandshakeBudgetBackoff" in socket_cpp and "terminalBudgetExhausted" in socket_cpp and "mtProxyFailureResponseSignature" in socket_cpp, "FakeTLS budget backoff must stop before TCP and terminal exhaustion must publish response-signature evidence", failures)
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::UseWorkingRecipe" in socket_cpp, "working recipe must be reused before running the ladder", failures)
     open_connection_start = socket_cpp.find("void ConnectionSocket::openConnection(std::string address")
     open_connection_end = socket_cpp.find("void ConnectionSocket::openConnectionInternal(bool ipv6)", open_connection_start)
@@ -171,9 +202,9 @@ def main() -> int:
     require("recipeLevelForEndpoint" not in socket_cpp and "recordFailure(context, phase" not in socket_cpp, "ConnectionSocket must not mutate recipe ladder through MtProxyEndpointPolicy", failures)
     require("failureNeedsRecipe" not in endpoint_policy, "endpoint cooldown policy must not own FakeTLS recipe progression", failures)
 
-    for phase in ("mtproxy_probe_wait", "server_closed_after_client_hello", "faketls_server_hello_wait_timeout", "unrecognized_response_after_client_hello"):
+    for phase in ("mtproxy_probe_wait", "server_closed_after_client_hello", "faketls_server_hello_wait_timeout", "unrecognized_response_after_client_hello", "faketls_not_mtproxy_response", "faketls_no_server_hello_terminal", "faketls_server_closed_terminal"):
         require(phase in diagnostics, f"ProxyCheckDiagnostics must expose {phase}", failures)
-        require(phase in phase_policy, f"ProxyPhasePolicy must classify {phase}", failures)
+        require(phase.upper() in phase_policy or phase in phase_policy, f"ProxyPhasePolicy must classify {phase}", failures)
         require(phase in phase_contract, f"phase contract must include {phase}", failures)
         require(phase in analyzer, f"analyzer must understand {phase}", failures)
     require("if (proxyAuthState == 11 && proxyHandshakeClientHelloSentTime != 0 && bytesRead == 0)" in socket_cpp and "server_closed_after_client_hello" in socket_cpp, "EOF after ClientHello with zero bytes must become server_closed_after_client_hello", failures)
@@ -219,6 +250,20 @@ def main() -> int:
     require(
         "state.cursor.generation != state.joinBudgetAnchorCursorGen" in begin_or_join_body,
         "join budget must be anchored to recipe-cursor progress, not bare generation",
+        failures,
+    )
+    require(
+        "ownerMakingProgress = (now - state.joinBudgetAnchorMs) < MT_PROXY_PROBE_JOIN_TOTAL_BUDGET_MS" in begin_or_join_body
+        and begin_or_join_body.find("DecisionKind::JoinExisting") < begin_or_join_body.find("enterProbing(state, now)")
+        and "enterProbing(state, now)" in begin_or_join_body
+        and "DecisionKind::StartOwner" in begin_or_join_body,
+        "a joiner whose probe-wait budget expires must leave mtproxy_probe_wait and start a new owner attempt",
+        failures,
+    )
+    require(
+        "MTPROXY_PROBE_WAIT_TIMEOUT" in phase_policy
+        and "return failure(KeyScope.EXACT, false, false)" in phase_policy[phase_policy.find("case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT_TIMEOUT:"):],
+        "mtproxy_probe_wait_timeout must remain a visible exact sticky failure, not a punitive rotation trigger",
         failures,
     )
     require("reapExpired" not in begin_or_join_body, "the reaper must run on the network-thread tick, not inside beginOrJoin", failures)

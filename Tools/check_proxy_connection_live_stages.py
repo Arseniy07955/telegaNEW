@@ -293,14 +293,17 @@ def main() -> None:
             "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, (String) args[1])" in text("rotation")
             or (
                 "String endpointKey = (String) args[1];" in text("rotation")
-                and "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, endpointKey)" in text("rotation")
+                and (
+                    "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, endpointKey)" in text("rotation")
+                    or "ProxyRuntimeStateStore.shouldScheduleFallback(account, event.phase, endpointKey)" in text("rotation")
+                )
             )
         )
         and "decision=ignored_stale_endpoint" in text("reducer"),
         "UI and Java lifecycle code must ignore proxy live stages from stale endpoint/secret keys",
     )
     require(
-        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName)" in text("connections_java"),
+        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in text("connections_java"),
         "proxy live stage notifications must carry endpoint key and origin so UI/rotation can isolate stale or non-active events",
     )
     require(

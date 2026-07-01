@@ -6,6 +6,7 @@
 #include "MtProxyProbeCoordinator.h"
 
 #include "MtProxyFailureEvidence.h"
+#include "MtProxyPhaseContract.h"
 #include "MtProxyRecoveryPolicy.h"
 
 #include <algorithm>
@@ -15,6 +16,10 @@
 
 // ProbeKey.key is the existing exact recipe key: host:port:secret_hash:SNI.
 static constexpr int64_t MT_PROXY_PROBE_EXHAUSTED_HOLD_MS = 30 * 1000;
+static constexpr int64_t MT_PROXY_FAKETLS_BUDGET_HOLD_MS = 30 * 1000;
+static constexpr int64_t MT_PROXY_FAKETLS_BUDGET_WINDOW_MS = 8000;
+static constexpr uint32_t MT_PROXY_FAKETLS_BUDGET_MAX_OWNER_ATTEMPTS = 3;
+static constexpr uint32_t MT_PROXY_FAKETLS_BUDGET_REPEATED_SIGNATURE_LIMIT = 2;
 static constexpr uint32_t MT_PROXY_PROBE_JOIN_WAIT_MS = 250;
 // A PROBING owner that neither completes nor advances its recipe within this window is treated
 // as wedged/leaked and reclaimed (read-side in beginOrJoin and by the select() reaper) so joiners
@@ -33,8 +38,23 @@ enum class ProbeStatus : uint8_t {
     PROBING,
     WORKING_RECIPE_FOUND,
     PROFILES_EXHAUSTED,
+    HANDSHAKE_BUDGET_BACKOFF,
     NETWORK_FAILED,
     QUARANTINED,
+};
+
+struct FakeTlsHandshakeBudget {
+    std::string endpointKey;
+    std::string probeKey;
+    uint32_t activationGeneration = 0;
+    std::string failureClass;
+    uint32_t ownerAttempts = 0;
+    int64_t firstFailureAtMs = 0;
+    int64_t lastFailureAtMs = 0;
+    uint64_t responseSignature = 0;
+    uint32_t repeatedSignatureCount = 0;
+    std::string terminalPhase;
+    int64_t terminalUntilMs = 0;
 };
 
 struct MtProxyProbeState {
@@ -55,6 +75,7 @@ struct MtProxyProbeState {
     std::string endpointKey;
     std::string networkEndpointKey;
     std::string lastRecipeDiagnostic;
+    FakeTlsHandshakeBudget fakeTlsHandshakeBudget;
 };
 
 static pthread_mutex_t mtProxyProbeCoordinatorMutex = PTHREAD_MUTEX_INITIALIZER;
@@ -63,6 +84,55 @@ static std::map<std::string, MtProxyProbeState> mtProxyProbeStates;
 // mtProxyProbeCoordinatorMutex). Replaces the ABA-prone raw `this` pointer so a recycled
 // ConnectionSocket address can never be mistaken for a stale entry's owner.
 static uint64_t mtProxyProbeOwnerTokenSeq = 1;
+
+static void clearFakeTlsHandshakeBudget(MtProxyProbeState &state) {
+    state.fakeTlsHandshakeBudget = FakeTlsHandshakeBudget();
+}
+
+static std::string fakeTlsBudgetFailureClassForPhase(const std::string &diagnostic, uint64_t responseSignature) {
+    if (diagnostic == MtProxyPhase::FaketlsServerHelloWaitTimeout
+            || diagnostic == "true_client_hello_timeout"
+            || diagnostic == "client_hello_sent_no_server_hello") {
+        return "no_server_hello";
+    }
+    if (diagnostic == MtProxyPhase::ServerClosedAfterClientHello) {
+        return responseSignature == 0 ? "server_closed_after_client_hello" : "bad_server_flight";
+    }
+    if (diagnostic == MtProxyPhase::ServerHelloHmacMismatch
+            || diagnostic == MtProxyPhase::TlsAlertAfterClientHello
+            || diagnostic == MtProxyPhase::ShortTlsResponseAfterClientHello
+            || diagnostic == MtProxyPhase::UnrecognizedResponseAfterClientHello
+            || diagnostic == "unrecognized_tls_response_after_client_hello") {
+        return "bad_server_flight";
+    }
+    return "";
+}
+
+static const char *fakeTlsTerminalPhaseForFailureClass(const std::string &failureClass) {
+    if (failureClass == "bad_server_flight") {
+        return MtProxyPhase::FaketlsNotMtproxyResponse;
+    }
+    if (failureClass == "no_server_hello") {
+        return MtProxyPhase::FaketlsNoServerHelloTerminal;
+    }
+    if (failureClass == "server_closed_after_client_hello") {
+        return MtProxyPhase::FaketlsServerClosedTerminal;
+    }
+    return nullptr;
+}
+
+static bool fakeTlsBudgetShouldBecomeTerminal(const FakeTlsHandshakeBudget &budget) {
+    int64_t elapsed = budget.firstFailureAtMs > 0 ? budget.lastFailureAtMs - budget.firstFailureAtMs : 0;
+    if (budget.ownerAttempts >= MT_PROXY_FAKETLS_BUDGET_MAX_OWNER_ATTEMPTS) {
+        return true;
+    }
+    if (elapsed >= MT_PROXY_FAKETLS_BUDGET_WINDOW_MS) {
+        return true;
+    }
+    return budget.failureClass == "bad_server_flight"
+            && budget.responseSignature != 0
+            && budget.repeatedSignatureCount >= MT_PROXY_FAKETLS_BUDGET_REPEATED_SIGNATURE_LIMIT;
+}
 
 static MtProxyProbeCoordinator::Decision decisionFromState(MtProxyProbeCoordinator::DecisionKind kind, const MtProxyProbeState &state) {
     MtProxyProbeCoordinator::Decision decision;
@@ -78,6 +148,7 @@ static MtProxyProbeCoordinator::Decision decisionFromState(MtProxyProbeCoordinat
     decision.greaseProbe.supported = state.greaseSupported;
     decision.greaseProbe.rejected = state.greaseRejected;
     decision.greaseProbe.useGrease = decision.greaseProbe.supported || decision.greaseProbe.probe;
+    decision.terminalPhase = state.fakeTlsHandshakeBudget.terminalPhase;
     return decision;
 }
 
@@ -102,11 +173,36 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
     state.endpointKey = probeKey.endpointKey;
     state.networkEndpointKey = probeKey.networkEndpointKey;
+    if (probeKey.activationGeneration != 0
+            && state.fakeTlsHandshakeBudget.activationGeneration != 0
+            && state.fakeTlsHandshakeBudget.activationGeneration != probeKey.activationGeneration) {
+        clearFakeTlsHandshakeBudget(state);
+        if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF) {
+            state.status = ProbeStatus::IDLE;
+            state.ownerToken = 0;
+        }
+    }
     if (probeKey.allowedSniVariants != 0) {
         state.allowedSniVariants = probeKey.allowedSniVariants;
     }
     if (state.allowedSniVariants == 0) {
         state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+    }
+    if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
+            && state.fakeTlsHandshakeBudget.terminalUntilMs > now) {
+        Decision decision = decisionFromState(DecisionKind::HandshakeBudgetBackoff, state);
+        pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
+        return decision;
+    }
+    if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
+            && state.fakeTlsHandshakeBudget.terminalUntilMs <= now) {
+        state.status = ProbeStatus::IDLE;
+        state.ownerToken = 0;
+        state.joinBudgetAnchorMs = 0;
+        state.joinBudgetAnchorCursorGen = 0;
+        state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
+        state.lastRecipeDiagnostic.clear();
+        clearFakeTlsHandshakeBudget(state);
     }
     if (state.status == ProbeStatus::PROFILES_EXHAUSTED && state.profilesExhaustedUntil > now) {
         Decision decision = decisionFromState(DecisionKind::ProfilesExhaustedBackoff, state);
@@ -119,6 +215,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
         state.profilesExhaustedUntil = 0;
         state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
         state.lastRecipeDiagnostic.clear();
+        clearFakeTlsHandshakeBudget(state);
     }
     if (state.status == ProbeStatus::WORKING_RECIPE_FOUND) {
         Decision decision = decisionFromState(DecisionKind::UseWorkingRecipe, state);
@@ -172,6 +269,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
 MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(const ProbeKey &probeKey,
                                                                                 uint64_t callerToken,
                                                                                 const std::string &diagnostic,
+                                                                                uint64_t responseSignature,
                                                                                 bool recipeUsesGrease,
                                                                                 bool recipeIsGreaseProbe,
                                                                                 bool classicFallbackAllowed,
@@ -184,7 +282,8 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
     // Reject a failure from a displaced/stale owner: a different live owner now holds the entry.
-    if (state.ownerToken != 0 && callerToken != 0 && state.ownerToken != callerToken) {
+    if ((state.ownerToken != 0 && callerToken != state.ownerToken)
+            || (state.ownerToken == 0 && callerToken != 0)) {
         result.generation = state.generation;
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return result;
@@ -198,6 +297,61 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
     }
     if (state.allowedSniVariants == 0) {
         state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+    }
+
+    std::string budgetFailureClass = fakeTlsBudgetFailureClassForPhase(diagnostic, responseSignature);
+    bool currentOwnerAttempt = state.ownerToken != 0 && callerToken == state.ownerToken;
+    if (currentOwnerAttempt && !budgetFailureClass.empty()) {
+        FakeTlsHandshakeBudget &budget = state.fakeTlsHandshakeBudget;
+        bool resetBudget = budget.activationGeneration != probeKey.activationGeneration
+                || budget.failureClass != budgetFailureClass
+                || budget.probeKey != probeKey.key;
+        if (resetBudget) {
+            clearFakeTlsHandshakeBudget(state);
+        }
+        budget.endpointKey = probeKey.endpointKey;
+        budget.probeKey = probeKey.key;
+        budget.activationGeneration = probeKey.activationGeneration;
+        budget.failureClass = budgetFailureClass;
+        if (budget.firstFailureAtMs == 0) {
+            budget.firstFailureAtMs = now;
+        }
+        budget.lastFailureAtMs = now;
+        budget.ownerAttempts++;
+        if (responseSignature != 0 && responseSignature == budget.responseSignature) {
+            budget.repeatedSignatureCount++;
+        } else {
+            budget.responseSignature = responseSignature;
+            budget.repeatedSignatureCount = responseSignature == 0 ? 0 : 1;
+        }
+        if (fakeTlsBudgetShouldBecomeTerminal(budget)) {
+            const char *terminalPhase = fakeTlsTerminalPhaseForFailureClass(budget.failureClass);
+            if (terminalPhase != nullptr) {
+                budget.terminalPhase = terminalPhase;
+                budget.terminalUntilMs = now + MT_PROXY_FAKETLS_BUDGET_HOLD_MS;
+                state.status = ProbeStatus::HANDSHAKE_BUDGET_BACKOFF;
+                state.ownerToken = 0;
+                state.joinBudgetAnchorMs = 0;
+                state.joinBudgetAnchorCursorGen = 0;
+                state.generation++;
+                state.lastRecipeDiagnostic = diagnostic;
+                result.recorded = true;
+                result.terminalBudgetExhausted = true;
+                result.generation = state.generation;
+                result.budgetAttempts = budget.ownerAttempts;
+                result.budgetElapsedMs = std::max<int64_t>(0, budget.lastFailureAtMs - budget.firstFailureAtMs);
+                result.responseSignature = budget.responseSignature;
+                result.cursor = state.cursor;
+                result.cachedCursor = state.workingCursor;
+                result.lastRecipeDiagnostic = state.lastRecipeDiagnostic;
+                result.terminalPhase = budget.terminalPhase;
+                pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
+                return result;
+            }
+        }
+        result.budgetAttempts = budget.ownerAttempts;
+        result.budgetElapsedMs = std::max<int64_t>(0, budget.lastFailureAtMs - budget.firstFailureAtMs);
+        result.responseSignature = budget.responseSignature;
     }
 
     if (recipeUsesGrease && recipeIsGreaseProbe) {
@@ -223,6 +377,7 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
         state.joinBudgetAnchorMs = 0;
         state.joinBudgetAnchorCursorGen = 0;
         state.generation++;
+        clearFakeTlsHandshakeBudget(state);
     }
     result.recorded = true;
     result.generation = state.generation;
@@ -278,6 +433,7 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
         state.joinBudgetAnchorMs = 0;
         state.joinBudgetAnchorCursorGen = 0;
         state.lastRecipeDiagnostic.clear();
+        clearFakeTlsHandshakeBudget(state);
     }
     if (recipeUsesGrease) {
         state.greaseProbePending = false;
@@ -286,6 +442,7 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
     } else if (strcmp(reason, "first_tls_app_recv") == 0 && !state.greaseSupported && !state.greaseRejected) {
         state.greaseProbePending = true;
     }
+    clearFakeTlsHandshakeBudget(state);
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 
@@ -305,6 +462,7 @@ void MtProxyProbeCoordinator::completeProfilesExhausted(const ProbeKey &probeKey
     state.joinBudgetAnchorCursorGen = 0;
     state.profilesExhaustedUntil = now + MT_PROXY_PROBE_EXHAUSTED_HOLD_MS;
     state.generation++;
+    clearFakeTlsHandshakeBudget(state);
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 
@@ -362,6 +520,14 @@ void MtProxyProbeCoordinator::reapExpired(int64_t now) {
             state.profilesExhaustedUntil = 0;
             state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
             state.lastRecipeDiagnostic.clear();
+        } else if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
+                && state.fakeTlsHandshakeBudget.terminalUntilMs != 0
+                && state.fakeTlsHandshakeBudget.terminalUntilMs <= now) {
+            state.status = ProbeStatus::IDLE;
+            state.ownerToken = 0;
+            state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
+            state.lastRecipeDiagnostic.clear();
+            clearFakeTlsHandshakeBudget(state);
         }
         // Bound map growth over a long session: erase a fully-dead entry that carries no useful
         // state. WORKING recipes, active profile-exhaustion holds, PROBING owners, and IDLE entries

@@ -1145,8 +1145,8 @@ public class ConnectionsManager extends BaseController {
                     FileLog.d("proxy_connection_stage account=" + currentAccount + " origin=" + event.origin.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration);
                 }
             }
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);
-            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration);
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration);
         });
     }
 

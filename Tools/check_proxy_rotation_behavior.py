@@ -526,6 +526,19 @@ def main() -> int:
         "fallback scheduling must log explicit proxy_rotation decisions and reject non-punitive or DNS-outage phases before hysteresis",
         failures,
     )
+    rotation_stage_idx = rotation.find("NotificationCenter.proxyConnectionStageChanged")
+    rotation_stage_branch = rotation[rotation_stage_idx:] if rotation_stage_idx >= 0 else ""
+    rotation_stage_branch = rotation_stage_branch[:rotation_stage_branch.find("private void scheduleSwitch")] if "private void scheduleSwitch" in rotation_stage_branch else rotation_stage_branch
+    require(
+        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in connections
+        and "args.length >= 4 && args[3] instanceof Integer" in rotation_stage_branch
+        and "ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, \"\", origin, activationGeneration)" in rotation_stage_branch
+        and "ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)" in rotation_stage_branch
+        and "decision=ignored_stale_generation" in rotation_stage_branch
+        and rotation_stage_branch.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)") < rotation_stage_branch.find("ProxyRuntimeStateStore.shouldScheduleFallback"),
+        "rotation controller must receive activationGeneration from proxyConnectionStageChanged and gate stale native stages before fallback scheduling",
+        failures,
+    )
     require(
         "DnsOutageState" in store
         and "recordDnsResolverProviderFailure" in store

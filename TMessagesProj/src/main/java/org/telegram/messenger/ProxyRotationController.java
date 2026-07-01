@@ -110,18 +110,26 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
             String origin = args.length >= 3 && args[2] instanceof String
                     ? (String) args[2]
                     : ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName;
-            if (!ProxyConnectionEvent.isActiveProxyOrigin(ProxyConnectionEvent.Origin.fromNative(origin))) {
-                log("ignore_non_active_origin origin=" + origin + " phase=" + ProxyCheckDiagnostics.normalize(diagnostic) + " endpoint=" + endpointKey);
+            int activationGeneration = args.length >= 4 && args[3] instanceof Integer
+                    ? (Integer) args[3]
+                    : 0;
+            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, "", origin, activationGeneration);
+            if (!ProxyConnectionEvent.isActiveProxyOrigin(event.origin)) {
+                log("ignore_non_active_origin origin=" + origin + " phase=" + event.phase + " endpoint=" + endpointKey);
                 return;
             }
-            if (ProxyPhasePolicy.isProxyUsableSuccessPhase(diagnostic)
+            if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
+                ProxyRuntimeStateStore.logRotation("decision=ignored_stale_generation phase=" + event.phase + " endpoint=" + endpointKey + " activation_generation=" + activationGeneration);
+                return;
+            }
+            if (ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)
                     && ProxyEndpointKey.matchesLiveStage(SharedConfig.currentProxy, endpointKey)
                     && ProxyRuntimeStateStore.isCurrentProxyUsable(SharedConfig.currentProxy)) {
                 cancelScheduledSwitch("usable_success");
-                log("cancel usable_success phase=" + ProxyCheckDiagnostics.normalize(diagnostic) + " endpoint=" + endpointKey + " hold_ms=" + ProxyRuntimeStateStore.usableSuccessRemainingMs(SharedConfig.currentProxy));
+                log("cancel usable_success phase=" + event.phase + " endpoint=" + endpointKey + " hold_ms=" + ProxyRuntimeStateStore.usableSuccessRemainingMs(SharedConfig.currentProxy));
                 return;
             }
-            if (!ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, endpointKey)) {
+            if (!ProxyRuntimeStateStore.shouldScheduleFallback(account, event.phase, endpointKey)) {
                 return;
             }
             int state = ConnectionsManager.getInstance(account).getConnectionState();
@@ -129,10 +137,10 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 return;
             }
             if (engine.hasScheduledAttempt()) {
-                log("schedule_after_stage skipped already_scheduled phase=" + ProxyCheckDiagnostics.normalize(diagnostic));
+                log("schedule_after_stage skipped already_scheduled phase=" + event.phase);
                 return;
             }
-            log("schedule_after_stage phase=" + ProxyCheckDiagnostics.normalize(diagnostic) + " delay_ms=" + TERMINAL_STAGE_SWITCH_DELAY_MS);
+            log("schedule_after_stage phase=" + event.phase + " delay_ms=" + TERMINAL_STAGE_SWITCH_DELAY_MS);
             scheduleSwitch(TERMINAL_STAGE_SWITCH_DELAY_MS, "terminal_stage");
         }
     }

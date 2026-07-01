@@ -15,6 +15,9 @@ final class ProxyEventReducer {
         String normalizedPhase = ProxyCheckDiagnostics.normalize(event.phase);
         ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForEvent(event);
         if (ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE.equals(normalizedPhase)) {
+            if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
+                return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_generation", event.phase, event.endpointKey, verdict);
+            }
             if (isActiveProxyEvent(event)
                     && currentProxy != null
                     && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {

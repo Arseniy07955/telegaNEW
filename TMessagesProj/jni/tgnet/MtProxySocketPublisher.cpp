@@ -29,6 +29,9 @@ bool mtProxySocketObservationIsHighRiskPhase(const char *phase) {
     }
     return strcmp(phase, "recipe_failed") == 0
            || strcmp(phase, MtProxyPhase::HandshakeProfilesExhausted) == 0
+           || strcmp(phase, MtProxyPhase::FaketlsNotMtproxyResponse) == 0
+           || strcmp(phase, MtProxyPhase::FaketlsNoServerHelloTerminal) == 0
+           || strcmp(phase, MtProxyPhase::FaketlsServerClosedTerminal) == 0
            || strcmp(phase, MtProxyPhase::SecretParseInvalidDomainControlChar) == 0
            || strcmp(phase, MtProxyPhase::SecretParseInvalidDomain) == 0
            || strcmp(phase, MtProxyPhase::DnsBlockedZeroAddress) == 0

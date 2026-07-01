@@ -173,6 +173,9 @@ static bool failureCanBeShadowedBySuccess(const std::string &diagnostic) {
             || diagnostic == "unrecognized_response_after_client_hello"
             || diagnostic == "unrecognized_tls_response_after_client_hello"
             || diagnostic == MtProxyPhase::ServerHelloHmacMismatch
+            || diagnostic == MtProxyPhase::FaketlsNotMtproxyResponse
+            || diagnostic == MtProxyPhase::FaketlsNoServerHelloTerminal
+            || diagnostic == MtProxyPhase::FaketlsServerClosedTerminal
             || diagnostic == MtProxyPhase::HandshakeProfilesExhausted
             || diagnostic == "mtproxy_packet_sent_no_response"
             || diagnostic == MtProxyPhase::PostHandshakeNoAppdata;
@@ -307,6 +310,9 @@ bool MtProxyEndpointPolicy::failureNeedsCooldown(const std::string &diagnostic) 
 	           || diagnostic == "tcp_connected_no_pong"
            || diagnostic == MtProxyPhase::SecretParseInvalidDomainControlChar
            || diagnostic == MtProxyPhase::SecretParseInvalidDomain
+           || diagnostic == MtProxyPhase::FaketlsNotMtproxyResponse
+           || diagnostic == MtProxyPhase::FaketlsNoServerHelloTerminal
+           || diagnostic == MtProxyPhase::FaketlsServerClosedTerminal
            || diagnostic == MtProxyPhase::HandshakeProfilesExhausted
            || diagnostic == "mtproxy_packet_sent_no_response"
            || diagnostic == MtProxyPhase::PostHandshakeNoAppdata

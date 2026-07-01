@@ -249,13 +249,13 @@ def main() -> int:
     )
     require(
         "event.origin.wireName" in java_connections
-        and "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName)" in java_connections,
+        and "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in java_connections,
         "ConnectionsManager must propagate proxy event origin through proxyConnectionStageChanged notifications",
         failures,
     )
     require(
         "ignore_non_active_origin" in rotation
-        and "ProxyConnectionEvent.isActiveProxyOrigin(ProxyConnectionEvent.Origin.fromNative(origin))" in rotation,
+        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in rotation,
         "ProxyRotationController must ignore proxyConnectionStageChanged events whose origin is not an active-socket cause",
         failures,
     )

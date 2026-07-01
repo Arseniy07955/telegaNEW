@@ -71,6 +71,9 @@ static bool mtProxyDiagnosticNeedsReconnectBackoff(const char *diagnostic) {
            strcmp(diagnostic, "tcp_connected_no_pong") == 0 ||
            strcmp(diagnostic, MtProxyPhase::SecretParseInvalidDomainControlChar) == 0 ||
            strcmp(diagnostic, MtProxyPhase::SecretParseInvalidDomain) == 0 ||
+           strcmp(diagnostic, MtProxyPhase::FaketlsNotMtproxyResponse) == 0 ||
+           strcmp(diagnostic, MtProxyPhase::FaketlsNoServerHelloTerminal) == 0 ||
+           strcmp(diagnostic, MtProxyPhase::FaketlsServerClosedTerminal) == 0 ||
            strcmp(diagnostic, MtProxyPhase::HandshakeProfilesExhausted) == 0 ||
            strcmp(diagnostic, "mtproxy_packet_sent_no_response") == 0 ||
            strcmp(diagnostic, MtProxyPhase::PostHandshakeNoAppdata) == 0 ||

@@ -236,6 +236,10 @@
     <string name="ProxyStatusShortTlsResponseAfterClientHello">Server sent a short TLS response after ClientHello</string>
     <string name="ProxyStatusUnrecognizedTlsResponseAfterClientHello">Server sent an unsupported TLS response after ClientHello</string>
     <string name="ProxyStatusServerHelloHmacMismatch">ServerHello failed MTProxy HMAC check</string>
+    <string name="ProxyStatusFaketlsHandshakeFailedShort">Server is reachable over TCP, but the MTProxy/FakeTLS handshake failed.</string>
+    <string name="ProxyStatusFaketlsNotMtproxyResponse">TCP opened, but the server returned an invalid FakeTLS/MTProxy response. This is probably not a working MTProxy endpoint, the secret/SNI is wrong, or the server returns ordinary HTTPS.</string>
+    <string name="ProxyStatusFaketlsNoServerHelloTerminal">TCP opened, but the server did not answer the FakeTLS ClientHello. The proxy service is unavailable or traffic is being filtered after ClientHello.</string>
+    <string name="ProxyStatusFaketlsServerClosedTerminal">TCP opened, but the server closed the connection after FakeTLS ClientHello. The server may reject this profile/SNI/secret, or filtering may close the connection.</string>
     <string name="ProxyStatusBackgroundHandshakeAborted">Handshake stopped while app was in background</string>
     <string name="ProxyStatusHandshakeProfilesExhausted">MTProxy handshake profiles exhausted; retrying with backoff</string>
     <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy packet sent, no server response</string>

@@ -17,6 +17,7 @@ public:
         JoinExisting,
         UseWorkingRecipe,
         ProfilesExhaustedBackoff,
+        HandshakeBudgetBackoff,
     };
 
     struct ProbeKey {
@@ -24,6 +25,7 @@ public:
         std::string endpointKey;
         std::string networkEndpointKey;
         uint32_t allowedSniVariants = 0;
+        uint32_t activationGeneration = 0;
     };
 
     struct GreaseProbeResult {
@@ -42,22 +44,29 @@ public:
         MtProxyAdaptivePolicy::RecipeCursor workingCursor;
         MtProxyAdaptivePolicy::CompatibilityRecipe workingRecipe;
         std::string lastRecipeDiagnostic;
+        std::string terminalPhase;
         GreaseProbeResult greaseProbe;
     };
 
     struct FailureResult {
         bool recorded = false;
         bool recipeExhausted = false;
+        bool terminalBudgetExhausted = false;
         uint32_t generation = 0;
+        uint32_t budgetAttempts = 0;
+        int64_t budgetElapsedMs = 0;
+        uint64_t responseSignature = 0;
         MtProxyAdaptivePolicy::RecipeCursor cursor;
         MtProxyAdaptivePolicy::RecipeCursor cachedCursor;
         std::string lastRecipeDiagnostic;
+        std::string terminalPhase;
     };
 
     static Decision beginOrJoin(const ProbeKey &probeKey, uint64_t callerToken, int64_t now);
     static FailureResult completeFailure(const ProbeKey &probeKey,
                                          uint64_t callerToken,
                                          const std::string &diagnostic,
+                                         uint64_t responseSignature,
                                          bool recipeUsesGrease,
                                          bool recipeIsGreaseProbe,
                                          bool classicFallbackAllowed,
