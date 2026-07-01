@@ -325,6 +325,10 @@
     <string name="ProxyStatusShortTlsResponseAfterClientHello">Сервер прислал короткий TLS-ответ после ClientHello</string>
     <string name="ProxyStatusUnrecognizedTlsResponseAfterClientHello">Сервер прислал неподдерживаемый TLS-ответ после ClientHello</string>
     <string name="ProxyStatusServerHelloHmacMismatch">ServerHello не прошёл HMAC-проверку MTProxy</string>
+    <string name="ProxyStatusFaketlsHandshakeFailedShort">Сервер доступен по TCP, но MTProxy/FakeTLS рукопожатие не прошло.</string>
+    <string name="ProxyStatusFaketlsNotMtproxyResponse">TCP открыт, но сервер вернул некорректный FakeTLS/MTProxy ответ. Вероятно, это не рабочий MTProxy endpoint, неверный секрет/SNI или сервер отдаёт обычный HTTPS.</string>
+    <string name="ProxyStatusFaketlsNoServerHelloTerminal">TCP открыт, но сервер не ответил на FakeTLS ClientHello. Прокси-сервис недоступен или соединение режется после ClientHello.</string>
+    <string name="ProxyStatusFaketlsServerClosedTerminal">TCP открыт, но сервер закрыл соединение после FakeTLS ClientHello. Вероятно, сервер отвергает профиль/SNI/секрет или соединение закрывается фильтром.</string>
     <string name="ProxyStatusBackgroundHandshakeAborted">Рукопожатие остановилось в фоне</string>
     <string name="ProxyStatusHandshakeProfilesExhausted">Профили MTProxy handshake исчерпаны; повторяем с задержкой</string>
     <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy-пакет отправлен, ответа сервера нет</string>

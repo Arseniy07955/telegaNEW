@@ -158,8 +158,17 @@ def main() -> int:
         "FAILURE_CLASS_FAKETLS_NO_SERVER_HELLO" in failure_text
         and "FAKETLS_SERVER_HELLO_WAIT_TIMEOUT" in failure_text
         and "SERVER_CLOSED_AFTER_CLIENT_HELLO" in failure_text
+        and "FAKETLS_NO_SERVER_HELLO_TERMINAL" in failure_text
+        and "FAKETLS_SERVER_CLOSED_TERMINAL" in failure_text
         and "return userTextKeyForPhase(phase)" in failure_text,
-        "faketls no-server-hello failureClass must preserve phase-specific UI keys for timeout and server-close phases",
+        "faketls no-server-hello failureClass must preserve phase-specific UI keys for timeout/server-close/terminal phases",
+        failures,
+    )
+    require(
+        "FAILURE_CLASS_FAKETLS_BAD_SERVER_FLIGHT" in failure_text
+        and "FAKETLS_NOT_MTPROXY_RESPONSE" in failure_text
+        and "return userTextKeyForPhase(phase)" in failure_text,
+        "faketls bad-server-flight failureClass must preserve the terminal not-MTProxy response UI key",
         failures,
     )
 
@@ -168,6 +177,9 @@ def main() -> int:
         "MTPROXY_PROBE_WAIT_TIMEOUT": "ProxyStatusMtproxyProbeWaitTimeout",
         "FAKETLS_SERVER_HELLO_WAIT_TIMEOUT": "ProxyStatusFaketlsServerHelloWaitTimeout",
         "SERVER_CLOSED_AFTER_CLIENT_HELLO": "ProxyStatusServerClosedAfterClientHello",
+        "FAKETLS_NOT_MTPROXY_RESPONSE": "ProxyStatusFaketlsNotMtproxyResponse",
+        "FAKETLS_NO_SERVER_HELLO_TERMINAL": "ProxyStatusFaketlsNoServerHelloTerminal",
+        "FAKETLS_SERVER_CLOSED_TERMINAL": "ProxyStatusFaketlsServerClosedTerminal",
         "BACKGROUND_HANDSHAKE_ABORTED": "ProxyStatusBackgroundHandshakeAborted",
         "TCP_CONNECTION_REFUSED": "ProxyStatusTcpConnectionRefused",
         "TCP_CONNECT_TIMEOUT": "ProxyStatusTcpConnectTimeout",
@@ -188,12 +200,15 @@ def main() -> int:
 
     keep_failure = method_body(diagnostics, "private static boolean shouldKeepFreshFailure")
     weak_method = method_body(diagnostics, "public static boolean isWeakRetryLivePhase")
+    breakthrough_method = method_body(diagnostics, "public static boolean isFreshFailureBreakthroughPhase")
     for constant in (
         "MTPROXY_PROBE_WAIT",
         "TCP_CONNECT_GATE",
         "DNS_CACHE_HIT",
         "ENDPOINT_COOLDOWN",
         "CONNECT_START",
+        "CLIENT_HELLO_SENT",
+        "ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE",
     ):
         require(
             f"case {constant}:" in weak_method or f"case ProxyCheckDiagnostics.{constant}:" in weak_method,
@@ -206,8 +221,23 @@ def main() -> int:
         failures,
     )
     require(
+        "isFreshFailureBreakthroughPhase(incomingDiagnostic)" in keep_failure,
+        "fresh failure hold must explicitly allow only real progress/success breakthrough phases",
+        failures,
+    )
+    for constant in ("SERVER_HELLO_HMAC_OK", "ON_CONNECTED", "FIRST_TLS_APP_RECV"):
+        require(
+            f"case {constant}:" in breakthrough_method
+            and f"case {constant}:" not in weak_method,
+            f"{constant} must break fresh failure hold without being weak retry/live telemetry",
+            failures,
+        )
+    require(
         "shouldKeepFreshFailure(SharedConfig.ProxyInfo proxyInfo, String incomingDiagnostic, int incomingActivationGeneration)" in diagnostics
-        and "incomingActivationGeneration == proxyInfo.lastCheckActivationGeneration" in diagnostics
+        and (
+            "incomingActivationGeneration == proxyInfo.lastCheckActivationGeneration" in diagnostics
+            or "incomingActivationGeneration != proxyInfo.lastCheckActivationGeneration" in diagnostics
+        )
         and "ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, event.phase, event.activationGeneration)" in visible,
         "fresh failure sticky hold must be bound to the visible failure activation generation",
         failures,

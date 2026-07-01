@@ -35,7 +35,10 @@ MtProxyRecoveryAction mtProxyRecoveryActionForEvidence(MtProxyFailureEvidenceKin
 }
 
 MtProxyRecoveryAction mtProxyRecoveryActionForPhase(const std::string &phase, size_t responseBytes) {
-    if (phase == MtProxyPhase::HandshakeProfilesExhausted) {
+    if (phase == MtProxyPhase::HandshakeProfilesExhausted
+            || phase == MtProxyPhase::FaketlsNotMtproxyResponse
+            || phase == MtProxyPhase::FaketlsNoServerHelloTerminal
+            || phase == MtProxyPhase::FaketlsServerClosedTerminal) {
         return mtProxyRecoveryAction(MtProxyRecoveryActionKind::ProfilesExhaustedBackoff, true, true, false);
     }
     return mtProxyRecoveryActionForEvidence(mtProxyEvidenceForPhase(phase, responseBytes));

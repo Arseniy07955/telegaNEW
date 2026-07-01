@@ -45,6 +45,9 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
             case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
             case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
             case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
@@ -132,9 +135,12 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.TRUE_CLIENT_HELLO_TIMEOUT:
             case ProxyCheckDiagnostics.FAKETLS_SERVER_HELLO_WAIT_TIMEOUT:
             case ProxyCheckDiagnostics.SERVER_CLOSED_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
             case ProxyCheckDiagnostics.CLIENT_HELLO_SENT_NO_SERVER_HELLO:
                 return ProxyEndpointVerdict.FAILURE_CLASS_FAKETLS_NO_SERVER_HELLO;
 
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
             case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
             case ProxyCheckDiagnostics.TLS_ALERT_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
@@ -232,7 +238,7 @@ public final class ProxyPhasePolicy {
     private static PhaseInfo classify(String phase) {
         // Coordinator-owned exact phases: mtproxy_probe_wait, mtproxy_probe_wait_timeout,
         // faketls_server_hello_wait_timeout, server_closed_after_client_hello,
-        // unrecognized_response_after_client_hello.
+        // unrecognized_response_after_client_hello, and bounded FakeTLS terminals.
         switch (ProxyCheckDiagnostics.normalize(phase)) {
             case ProxyCheckDiagnostics.OK:
             case ProxyCheckDiagnostics.CHECKING:
@@ -313,6 +319,9 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED:
                 return failure(KeyScope.EXACT, false, false);
 
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
             case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
                 return failure(KeyScope.EXACT, true, true);
 
@@ -406,6 +415,9 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
             case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
             case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
                 return ProxyEndpointVerdict.LAYER_FAKETLS_HANDSHAKE;
 
@@ -449,6 +461,9 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
             case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
             case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
                 return ProxyEndpointVerdict.CONFIDENCE_HIGH;
             default:
                 return info.kind == Kind.FAILURE ? ProxyEndpointVerdict.CONFIDENCE_MEDIUM : ProxyEndpointVerdict.CONFIDENCE_HIGH;
@@ -505,12 +520,17 @@ public final class ProxyPhasePolicy {
         if (ProxyEndpointVerdict.FAILURE_CLASS_FAKETLS_NO_SERVER_HELLO.equals(failureClass)) {
             String normalized = ProxyCheckDiagnostics.normalize(phase);
             if (ProxyCheckDiagnostics.FAKETLS_SERVER_HELLO_WAIT_TIMEOUT.equals(normalized)
-                    || ProxyCheckDiagnostics.SERVER_CLOSED_AFTER_CLIENT_HELLO.equals(normalized)) {
+                    || ProxyCheckDiagnostics.SERVER_CLOSED_AFTER_CLIENT_HELLO.equals(normalized)
+                    || ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL.equals(normalized)
+                    || ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL.equals(normalized)) {
                 return userTextKeyForPhase(phase);
             }
             return "ProxyStatusClientHelloNoServerHello";
         }
         if (ProxyEndpointVerdict.FAILURE_CLASS_FAKETLS_BAD_SERVER_FLIGHT.equals(failureClass)) {
+            if (ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE.equals(ProxyCheckDiagnostics.normalize(phase))) {
+                return userTextKeyForPhase(phase);
+            }
             return "ProxyStatusUnrecognizedTlsResponseAfterClientHello";
         }
         if (ProxyEndpointVerdict.FAILURE_CLASS_SECRET_INVALID.equals(failureClass)) {
@@ -633,6 +653,12 @@ public final class ProxyPhasePolicy {
                 return "ProxyStatusUnrecognizedTlsResponseAfterClientHello";
             case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
                 return "ProxyStatusServerHelloHmacMismatch";
+            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
+                return "ProxyStatusFaketlsNotMtproxyResponse";
+            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
+                return "ProxyStatusFaketlsNoServerHelloTerminal";
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
+                return "ProxyStatusFaketlsServerClosedTerminal";
             case ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED:
                 return "ProxyStatusBackgroundHandshakeAborted";
             case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:

@@ -73,6 +73,9 @@ def main() -> int:
     publisher_phase_tokens = {
         "recipe_failed": '"recipe_failed"',
         "handshake_profiles_exhausted": "MtProxyPhase::HandshakeProfilesExhausted",
+        "faketls_not_mtproxy_response": "MtProxyPhase::FaketlsNotMtproxyResponse",
+        "faketls_no_server_hello_terminal": "MtProxyPhase::FaketlsNoServerHelloTerminal",
+        "faketls_server_closed_terminal": "MtProxyPhase::FaketlsServerClosedTerminal",
         "secret_parse_invalid_domain_control_char": "MtProxyPhase::SecretParseInvalidDomainControlChar",
         "secret_parse_invalid_domain": "MtProxyPhase::SecretParseInvalidDomain",
         "dns_blocked_zero_address": "MtProxyPhase::DnsBlockedZeroAddress",

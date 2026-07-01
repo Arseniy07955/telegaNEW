@@ -95,6 +95,9 @@ FAKETLS_FAILURE_VERDICTS = {
     "unrecognized_response_after_client_hello",
     "unrecognized_tls_response_after_client_hello",
     "server_hello_hmac_mismatch",
+    "faketls_not_mtproxy_response",
+    "faketls_no_server_hello_terminal",
+    "faketls_server_closed_terminal",
     "background_handshake_aborted",
     "handshake_profiles_exhausted",
     # unsupported_for_current_client is kept as a legacy alias for old captures.
@@ -330,6 +333,8 @@ class Attempt:
             line_phase = line_field(text, "failed_phase")
         elif event_marker_matches(text, "recipe_failed") or event_marker_matches(text, "close_diagnostic"):
             line_phase = line_field(text, "phase")
+        elif event_marker_matches(text, "faketls_budget_exhausted") or event_marker_matches(text, "probe_faketls_budget_backoff"):
+            line_phase = line_field(text, "terminal_phase") or line_field(text, "phase")
         if line_phase:
             self.failure_phase = line_phase
             if not self.failure_evidence:
@@ -404,6 +409,11 @@ class Attempt:
             "short_tls_response_after_client_hello": "short_tls_response_after_client_hello",
             "unrecognized_response_after_client_hello": "unrecognized_response_after_client_hello",
             "unrecognized_tls_response_after_client_hello": "unrecognized_tls_response_after_client_hello",
+            "faketls_budget_exhausted": "faketls_budget_exhausted",
+            "probe_faketls_budget_backoff": "faketls_budget_exhausted",
+            "faketls_not_mtproxy_response": "faketls_not_mtproxy_response",
+            "faketls_no_server_hello_terminal": "faketls_no_server_hello_terminal",
+            "faketls_server_closed_terminal": "faketls_server_closed_terminal",
             "post_client_hello_response_failed": "post_client_hello_response_failed",
             "handshake_profiles_exhausted": "handshake_profiles_exhausted",
             "unsupported_for_current_client": "unsupported_for_current_client",
@@ -560,6 +570,12 @@ class Attempt:
         if not has("server_hello_hmac_ok"):
             if has("background_handshake_aborted"):
                 return "background_handshake_aborted"
+            if has("faketls_not_mtproxy_response"):
+                return "faketls_not_mtproxy_response"
+            if has("faketls_no_server_hello_terminal"):
+                return "faketls_no_server_hello_terminal"
+            if has("faketls_server_closed_terminal"):
+                return "faketls_server_closed_terminal"
             if has("handshake_profiles_exhausted"):
                 return "handshake_profiles_exhausted"
             if has("unsupported_for_current_client"):
@@ -1222,8 +1238,11 @@ def print_layer_recommendations(attempts: list[Attempt], all_lines: list[str]) -
         f"short_tls_response_after_client_hello={faketls_verdicts['short_tls_response_after_client_hello']} "
         f"unrecognized_tls_response_after_client_hello={faketls_verdicts['unrecognized_tls_response_after_client_hello']} "
         f"server_hello_hmac_mismatch={faketls_verdicts['server_hello_hmac_mismatch']} "
+        f"tcp_open_no_server_hello_terminal={faketls_verdicts['faketls_no_server_hello_terminal']} "
+        f"tcp_open_server_closed_terminal={faketls_verdicts['faketls_server_closed_terminal']} "
+        f"tcp_open_bad_mtproxy_response={faketls_verdicts['faketls_not_mtproxy_response']} "
         f"handshake_profiles_exhausted={faketls_verdicts['handshake_profiles_exhausted']} "
-        "action=compatibility_recipe_ladder"
+        "action=bounded_faketls_budget_then_endpoint_backoff"
     )
     print(
         "  "
@@ -1405,6 +1424,9 @@ def print_faketls_reliability_summary(attempts: list[Attempt]) -> None:
             f"tls_alert={verdicts['tls_alert_after_client_hello']} "
             f"short_tls={verdicts['short_tls_response_after_client_hello']} "
             f"unrecognized_tls={verdicts['unrecognized_tls_response_after_client_hello']} "
+            f"no_server_hello_terminal={verdicts['faketls_no_server_hello_terminal']} "
+            f"server_closed_terminal={verdicts['faketls_server_closed_terminal']} "
+            f"bad_mtproxy_response={verdicts['faketls_not_mtproxy_response']} "
             f"post_handshake={verdicts['post_handshake_no_appdata']} "
             f"early_drop={verdicts['dropped_early_after_appdata']} "
             f"tls_frames={sum(item.completed_tls_frames() for item in items)} "
@@ -1475,10 +1497,14 @@ def print_faketls_failure_timeline(attempts: list[Attempt]) -> None:
         in {
             "true_client_hello_timeout",
             "client_hello_sent_no_server_hello",
+            "faketls_no_server_hello_terminal",
+            "server_closed_after_client_hello",
+            "faketls_server_closed_terminal",
             "tls_alert_after_client_hello",
             "short_tls_response_after_client_hello",
             "unrecognized_tls_response_after_client_hello",
             "server_hello_hmac_mismatch",
+            "faketls_not_mtproxy_response",
             "handshake_profiles_exhausted",
             "post_handshake_no_appdata",
         }
@@ -1609,7 +1635,9 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                 "ok_percent": ok_percent(verdicts["ok"], len(items)),
                 "pre_server_hello": (
                     verdicts["faketls_server_hello_wait_timeout"]
+                    + verdicts["faketls_no_server_hello_terminal"]
                     + verdicts["server_closed_after_client_hello"]
+                    + verdicts["faketls_server_closed_terminal"]
                     + verdicts["true_client_hello_timeout"]
                     + verdicts["client_hello_sent_no_server_hello"]
                 ),
@@ -1620,10 +1648,13 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                 "tls_alert_after_client_hello": verdicts["tls_alert_after_client_hello"],
                 "short_tls_response_after_client_hello": verdicts["short_tls_response_after_client_hello"],
                 "unrecognized_tls_response_after_client_hello": verdicts["unrecognized_tls_response_after_client_hello"],
+                "faketls_no_server_hello_terminal": verdicts["faketls_no_server_hello_terminal"],
+                "faketls_server_closed_terminal": verdicts["faketls_server_closed_terminal"],
+                "faketls_not_mtproxy_response": verdicts["faketls_not_mtproxy_response"],
                 "post_handshake": verdicts["post_handshake_no_appdata"],
                 "early_drop": verdicts["dropped_early_after_appdata"],
                 "tls_frames_completed": sum(item.completed_tls_frames() for item in items),
-                "hmac_fail": verdicts["server_hello_hmac_mismatch"],
+                "hmac_fail": verdicts["server_hello_hmac_mismatch"] + verdicts["faketls_not_mtproxy_response"],
                 "hmac_min_ms": percentile(hmac_values, 0),
                 "hmac_p50_ms": percentile(hmac_values, 50),
                 "hmac_max_ms": percentile(hmac_values, 100),
@@ -1940,6 +1971,9 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- tls_alert_after_client_hello: TCP and ClientHello completed; probable TLS alert / non-ServerHello record after ClientHello. Inspect mtproxy_tls_after_client_hello hex/record_len/alert fields before blaming the proxy.")
     print("- short_tls_response_after_client_hello: bytes arrived after ClientHello, but not enough for a parseable ServerHello flight.")
     print("- unrecognized_tls_response_after_client_hello: bytes arrived after ClientHello, but the FakeTLS parser did not recognize the server response.")
+    print("- faketls_no_server_hello_terminal: TCP opened and ClientHello was sent repeatedly, but no FakeTLS ServerHello arrived before the endpoint budget closed.")
+    print("- faketls_server_closed_terminal: TCP opened and ClientHello was sent repeatedly, but the peer closed after ClientHello with no response bytes.")
+    print("- faketls_not_mtproxy_response: TCP opened, but repeated server bytes did not validate as a MTProxy/FakeTLS ServerHello; suspect wrong secret/SNI, ordinary HTTPS, WAF, or non-MTProxy endpoint.")
     print("- handshake_profiles_exhausted: every allowed FakeTLS handshake recipe failed; treat as recovery/backoff, not proof that the proxy is unsupported.")
     print("- unsupported_for_current_client: legacy alias from older captures; read it as handshake_profiles_exhausted.")
     print("- server_hello_hmac_mismatch: likely ClientHello/profile/server response mismatch, not plain packet loss.")

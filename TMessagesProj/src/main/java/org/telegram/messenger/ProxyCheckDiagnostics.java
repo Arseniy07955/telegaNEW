@@ -63,6 +63,9 @@ public class ProxyCheckDiagnostics {
     public static final String UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO = "unrecognized_response_after_client_hello";
     public static final String UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO = "unrecognized_tls_response_after_client_hello";
     public static final String SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch";
+    public static final String FAKETLS_NOT_MTPROXY_RESPONSE = "faketls_not_mtproxy_response";
+    public static final String FAKETLS_NO_SERVER_HELLO_TERMINAL = "faketls_no_server_hello_terminal";
+    public static final String FAKETLS_SERVER_CLOSED_TERMINAL = "faketls_server_closed_terminal";
     public static final String BACKGROUND_HANDSHAKE_ABORTED = "background_handshake_aborted";
     public static final String HANDSHAKE_PROFILES_EXHAUSTED = "handshake_profiles_exhausted";
     public static final String UNSUPPORTED_FOR_CURRENT_CLIENT = "unsupported_for_current_client";
@@ -135,6 +138,9 @@ public class ProxyCheckDiagnostics {
             case UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
             case UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
             case SERVER_HELLO_HMAC_MISMATCH:
+            case FAKETLS_NOT_MTPROXY_RESPONSE:
+            case FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case FAKETLS_SERVER_CLOSED_TERMINAL:
             case BACKGROUND_HANDSHAKE_ABORTED:
             case HANDSHAKE_PROFILES_EXHAUSTED:
             case MTPROXY_PACKET_SENT_NO_RESPONSE:
@@ -174,6 +180,19 @@ public class ProxyCheckDiagnostics {
             case CONNECT_START:
             case SOCKET_CONNECT_START:
             case SOCKET_CONNECTED:
+            case CLIENT_HELLO_SENT:
+            case ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    public static boolean isFreshFailureBreakthroughPhase(String diagnostic) {
+        switch (normalize(diagnostic)) {
+            case SERVER_HELLO_HMAC_OK:
+            case ON_CONNECTED:
+            case FIRST_TLS_APP_RECV:
                 return true;
             default:
                 return false;
@@ -232,12 +251,19 @@ public class ProxyCheckDiagnostics {
     }
 
     private static boolean shouldKeepFreshFailure(SharedConfig.ProxyInfo proxyInfo, String incomingDiagnostic, int incomingActivationGeneration, boolean requireActivationGenerationMatch) {
-        return proxyInfo != null
-                && proxyInfo.lastCheckDiagnosticTime != 0
-                && android.os.SystemClock.elapsedRealtime() - proxyInfo.lastCheckDiagnosticTime < FAILURE_HOLD_EARLY_RETRY_MS
-                && isFailure(proxyInfo.lastCheckDiagnostic)
-                && isWeakRetryLivePhase(incomingDiagnostic)
-                && (!requireActivationGenerationMatch || incomingActivationGeneration == proxyInfo.lastCheckActivationGeneration);
+        if (proxyInfo == null
+                || proxyInfo.lastCheckDiagnosticTime <= 0
+                || android.os.SystemClock.elapsedRealtime() - proxyInfo.lastCheckDiagnosticTime >= FAILURE_HOLD_EARLY_RETRY_MS
+                || !isFailure(proxyInfo.lastCheckDiagnostic)) {
+            return false;
+        }
+        if (isFreshFailureBreakthroughPhase(incomingDiagnostic)) {
+            return false;
+        }
+        if (requireActivationGenerationMatch && incomingActivationGeneration != proxyInfo.lastCheckActivationGeneration) {
+            return false;
+        }
+        return isWeakRetryLivePhase(incomingDiagnostic);
     }
 
     static long freshFailureHoldEarlyRetryMs() {
@@ -423,10 +449,16 @@ public class ProxyCheckDiagnostics {
     }
 
     public static String shortDiagnosticText(String diagnostic) {
+        if (isFakeTlsTerminalHandshakeFailure(diagnostic)) {
+            return LocaleController.getString(R.string.ProxyStatusFaketlsHandshakeFailedShort);
+        }
         return diagnosticText(diagnostic);
     }
 
     private static HeaderStatusTitle diagnosticTitle(String diagnostic) {
+        if (isFakeTlsTerminalHandshakeFailure(diagnostic)) {
+            return title("ProxyStatusFaketlsHandshakeFailedShort", R.string.ProxyStatusFaketlsHandshakeFailedShort);
+        }
         ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForPhase(diagnostic, 0);
         if (verdict != null) {
             return title(verdict.userTextKey, diagnosticResourceId(verdict.userTextKey));
@@ -534,6 +566,12 @@ public class ProxyCheckDiagnostics {
                 return title("ProxyStatusUnrecognizedTlsResponseAfterClientHello", R.string.ProxyStatusUnrecognizedTlsResponseAfterClientHello);
             case SERVER_HELLO_HMAC_MISMATCH:
                 return title("ProxyStatusServerHelloHmacMismatch", R.string.ProxyStatusServerHelloHmacMismatch);
+            case FAKETLS_NOT_MTPROXY_RESPONSE:
+                return title("ProxyStatusFaketlsNotMtproxyResponse", R.string.ProxyStatusFaketlsNotMtproxyResponse);
+            case FAKETLS_NO_SERVER_HELLO_TERMINAL:
+                return title("ProxyStatusFaketlsNoServerHelloTerminal", R.string.ProxyStatusFaketlsNoServerHelloTerminal);
+            case FAKETLS_SERVER_CLOSED_TERMINAL:
+                return title("ProxyStatusFaketlsServerClosedTerminal", R.string.ProxyStatusFaketlsServerClosedTerminal);
             case BACKGROUND_HANDSHAKE_ABORTED:
                 return title("ProxyStatusBackgroundHandshakeAborted", R.string.ProxyStatusBackgroundHandshakeAborted);
             case HANDSHAKE_PROFILES_EXHAUSTED:
@@ -693,6 +731,12 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusUnrecognizedTlsResponseAfterClientHello);
             case SERVER_HELLO_HMAC_MISMATCH:
                 return LocaleController.getString(R.string.ProxyStatusServerHelloHmacMismatch);
+            case FAKETLS_NOT_MTPROXY_RESPONSE:
+                return LocaleController.getString(R.string.ProxyStatusFaketlsNotMtproxyResponse);
+            case FAKETLS_NO_SERVER_HELLO_TERMINAL:
+                return LocaleController.getString(R.string.ProxyStatusFaketlsNoServerHelloTerminal);
+            case FAKETLS_SERVER_CLOSED_TERMINAL:
+                return LocaleController.getString(R.string.ProxyStatusFaketlsServerClosedTerminal);
             case BACKGROUND_HANDSHAKE_ABORTED:
                 return LocaleController.getString(R.string.ProxyStatusBackgroundHandshakeAborted);
             case HANDSHAKE_PROFILES_EXHAUSTED:
@@ -818,6 +862,14 @@ public class ProxyCheckDiagnostics {
                 return R.string.ProxyStatusUnrecognizedTlsResponseAfterClientHello;
             case "ProxyStatusServerHelloHmacMismatch":
                 return R.string.ProxyStatusServerHelloHmacMismatch;
+            case "ProxyStatusFaketlsHandshakeFailedShort":
+                return R.string.ProxyStatusFaketlsHandshakeFailedShort;
+            case "ProxyStatusFaketlsNotMtproxyResponse":
+                return R.string.ProxyStatusFaketlsNotMtproxyResponse;
+            case "ProxyStatusFaketlsNoServerHelloTerminal":
+                return R.string.ProxyStatusFaketlsNoServerHelloTerminal;
+            case "ProxyStatusFaketlsServerClosedTerminal":
+                return R.string.ProxyStatusFaketlsServerClosedTerminal;
             case "ProxyStatusBackgroundHandshakeAborted":
                 return R.string.ProxyStatusBackgroundHandshakeAborted;
             case "ProxyStatusHandshakeProfilesExhausted":
@@ -835,6 +887,17 @@ public class ProxyCheckDiagnostics {
             case "ProxyStatusUnknownFail":
             default:
                 return R.string.ProxyStatusUnknownFail;
+        }
+    }
+
+    private static boolean isFakeTlsTerminalHandshakeFailure(String diagnostic) {
+        switch (normalize(diagnostic)) {
+            case FAKETLS_NOT_MTPROXY_RESPONSE:
+            case FAKETLS_NO_SERVER_HELLO_TERMINAL:
+            case FAKETLS_SERVER_CLOSED_TERMINAL:
+                return true;
+            default:
+                return false;
         }
     }
 }
