@@ -1678,60 +1678,37 @@ public class SharedConfig {
             ProxyInfo info = currentWssSocksProxy = new ProxyInfo(wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword, "");
             proxyList.add(0, info);
         }
-        ensureDefaultProxyEntry(preferences);
         ensureZaStoDefaultProxies(preferences);
     }
 
     private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v1", false)) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v2", false)) {
             return;
         }
         ProxyInfo info1 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee1ccac066cf8e32478e0a5bf03061746e6e736b2e63646e2e636174706177732e7275");
         ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd1ccac066cf8e32478e0a5bf03061746e");
         ProxyInfo info3 = new ProxyInfo("144.31.15.132", 443, "", "", "ee1ccac066cf8e32478e0a5bf03061746e6e736b2e63646e2e636174706177732e7275");
 
-        proxyList.add(0, info3);
-        proxyList.add(0, info2);
         proxyList.add(0, info1);
+        proxyList.add(0, info2);
+        proxyList.add(0, info3);
 
-        currentProxy = info1;
+        currentProxy = info3;
 
         preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v1", true)
+                .putBoolean("proxies_za_sto_applied_v2", true)
                 .putBoolean("proxy_enabled", true)
-                .putString("proxy_ip", info1.address)
-                .putInt("proxy_port", info1.port)
-                .putString("proxy_user", info1.username)
-                .putString("proxy_pass", info1.password)
-                .putString("proxy_secret", info1.secret)
+                .putString("proxy_ip", info3.address)
+                .putInt("proxy_port", info3.port)
+                .putString("proxy_user", info3.username)
+                .putString("proxy_pass", info3.password)
+                .putString("proxy_secret", info3.secret)
                 .apply();
 
         saveProxyList();
     }
 
-    // Seeds a removable default SOCKS5 entry (127.0.0.1:1353) into the proxy
-    // list once, mirroring tdesktop's ensureDefaultProxy. It is NOT selected
-    // or forced - just a convenience row the user can use (if a local bypass
-    // tool listens on 1353) or delete. WSS stays opt-in and is untouched here.
-    private static void ensureDefaultProxyEntry(SharedPreferences preferences) {
-        if (preferences.getBoolean("default_proxy_added", false)) {
-            return;
-        }
-        for (ProxyInfo existing : proxyList) {
-            if (existing != null
-                    && "127.0.0.1".equals(existing.address)
-                    && existing.port == 1353
-                    && TextUtils.isEmpty(existing.secret)
-                    && existing.transportMode == TRANSPORT_LEGACY_PROXY) {
-                preferences.edit().putBoolean("default_proxy_added", true).apply();
-                return;
-            }
-        }
-        ProxyInfo info = new ProxyInfo("127.0.0.1", 1353, "", "", "");
-        proxyList.add(0, info);
-        saveProxyList();
-        preferences.edit().putBoolean("default_proxy_added", true).apply();
-    }
+
 
     public static void saveProxyList() {
         // ZaStoGram: ручной порядок — сохраняем как есть, без авто-сортировки по пингу
