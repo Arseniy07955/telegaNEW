@@ -1,4 +1,4 @@
-name: Build ZaStoGram APK
+name: Build APK
 
 # Сборка устанавливаемого APK прямо в облаке GitHub — локально ничего ставить не нужно.
 #

@@ -1,4 +1,5 @@
-# ZaStoGram — Telegram для Android с усиленной маскировкой MTProxy
+# telegaNEW (ZaStoGram) — Telegram для Android с усиленной маскировкой MTProxy
+# я сюда просто добавил прокси сразу ну и вот все типа 
 
 <img width="1916" height="821" alt="image" src="https://github.com/user-attachments/assets/0850c5cd-6d7f-4304-9347-2cc54d5ba416" />
 
