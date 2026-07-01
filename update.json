@@ -1,5 +1,5 @@
 {
-  "version_code": 6917,
+  "version_code": 6918,
   "version_name": "12.8.2",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork%2FTelegaNEW-standalone-arm64-v8a.apk",
   "changelog": "• Обновлено название приложения на telegaNEW\n• Новые прокси по умолчанию\n• Добавлена система автообновлений из S3\n• Отключено логирование по умолчанию"
