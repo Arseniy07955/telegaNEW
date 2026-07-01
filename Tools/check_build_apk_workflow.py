@@ -119,6 +119,16 @@ def check_gradle(gradle_text: str) -> list[str]:
     if "!names.any { standaloneBuildFlavors.contains(it) }" not in gradle_text:
         errors.append("variantFilter must allow ABI standalone flavors through names.any")
 
+    build_types = find_named_block(gradle_text, "buildTypes")
+    standalone_build_type = find_named_block(build_types, "standalone") if build_types else None
+    if standalone_build_type is None:
+        errors.append("Standalone app Gradle file must define the standalone build type")
+    else:
+        if "minifyEnabled true" not in standalone_build_type:
+            errors.append("Standalone app build type must keep app-level R8 minify enabled for release APKs")
+        if "../TMessagesProj/proguard-rules.pro" not in standalone_build_type:
+            errors.append("Standalone app R8 must keep TMessagesProj proguard rules when library R8 is disabled")
+
     return errors
 
 
@@ -143,6 +153,16 @@ def check_library_gradle(gradle_text: str) -> list[str]:
     all_abi_filter = 'abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"'
     if all_abi_filter in gradle_text:
         errors.append("Library Gradle file must not force all native ABIs for every matrix job")
+
+    build_types = find_named_block(gradle_text, "buildTypes")
+    standalone_build_type = find_named_block(build_types, "standalone") if build_types else None
+    if standalone_build_type is None:
+        errors.append("Library Gradle file must define the standalone build type")
+    else:
+        if "minifyEnabled false" not in standalone_build_type:
+            errors.append("Library standalone build type must skip intermediate R8; the app module owns final minify")
+        if "minifyEnabled true" in standalone_build_type:
+            errors.append("Library standalone build type must not run intermediate R8 before app-level R8")
 
     return errors
 

@@ -227,7 +227,9 @@ android {
 
         standalone {
             jniDebuggable false
-            minifyEnabled true
+            // The standalone app module runs final R8 with this module's proguard rules.
+            // Running R8 here first only makes CI do an extra minify pass before the APK pass.
+            minifyEnabled false
             multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), '../TMessagesProj/proguard-rules.pro'
             ndk.debugSymbolLevel = 'FULL'
