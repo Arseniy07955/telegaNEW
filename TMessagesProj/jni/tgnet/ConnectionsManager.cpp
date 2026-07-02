@@ -36,7 +36,7 @@
 #include "ProxyCheckInfo.h"
 #include "Handshake.h"
 #include "WssTransport.h"
-#include "MtProxyProbeCoordinator.h"
+#include "mtproxy/MtProxyProbeCoordinator.h"
 
 #ifdef ANDROID
 #include <jni.h>

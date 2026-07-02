@@ -36,10 +36,10 @@ def main() -> int:
     connection_h = read("TMessagesProj/jni/tgnet/Connection.h")
     manager = read("TMessagesProj/jni/tgnet/ConnectionsManager.cpp")
     manager_h = read("TMessagesProj/jni/tgnet/ConnectionsManager.h")
-    endpoint_policy = read("TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp")
-    shaper = read("TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp")
-    recovery_policy = read("TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp")
-    adaptive_policy = read("TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp")
+    endpoint_policy = read("TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp")
+    shaper = read("TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp")
+    recovery_policy = read("TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp")
+    adaptive_policy = read("TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp")
     phase_policy = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java")
     runtime_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java")
     visible_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java")
@@ -62,13 +62,11 @@ def main() -> int:
         "native endpoint policy must not route DD first-packet no-response to the host:port network key",
         failures,
     )
+    from mtproxy_phase_contract import java_policy
     require(
-        "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:" in phase_policy
-        and "return live(KeyScope.EXACT);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:", "case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:")
-        and "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:" in phase_policy
-        and "return success(KeyScope.EXACT);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:", "case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:")
-        and "case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:" in phase_policy
-        and "return failure(KeyScope.EXACT, true, true);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:", "case ProxyCheckDiagnostics.UNKNOWN_FAIL:"),
+        java_policy("first_mtproxy_packet_sent") == ("live", "exact", False, False)
+        and java_policy("first_mtproxy_packet_recv") == ("success", "exact", False, False)
+        and java_policy("mtproxy_packet_sent_no_response") == ("failure", "exact", True, True),
         "Java phase policy must classify DD sent/recv/no-response as exact data-path phases",
         failures,
     )

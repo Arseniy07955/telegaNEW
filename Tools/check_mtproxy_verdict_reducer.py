@@ -71,7 +71,7 @@ def main() -> int:
     android_utilities = read(MESSENGER / "AndroidUtilities.java")
     connection_socket_h = read(TGNET / "ConnectionSocket.h")
     connection_socket_cpp = read(TGNET / "ConnectionSocket.cpp")
-    startup_timeline = read(TGNET / "MtProxyStartupTimeline.cpp")
+    startup_timeline = read(TGNET.parent / "mtproxy/MtProxyStartupTimeline.cpp")
     manager_h = read(TGNET / "ConnectionsManager.h")
     manager_cpp = read(TGNET / "ConnectionsManager.cpp")
     defines_h = read(TGNET / "Defines.h")
@@ -251,7 +251,11 @@ def main() -> int:
         "visible diagnostic state must record the activationGeneration from native socket verdict events",
         failures,
     )
-    policy_punitive = method_body(phase_policy, "public static boolean isPunitiveFailure")
+    # isPunitiveFailure delegates to the generated ProxyPhaseClassification.
+    policy_punitive = method_body(
+        read(MESSENGER / "ProxyPhaseClassification.java"),
+        "public static boolean needsReconnectBackoff",
+    )
     policy_failure_class = method_body(phase_policy, "public static String failureClassForPhase")
     policy_classify = method_body(phase_policy, "private static PhaseInfo classify")
     required_failure_classes = {
@@ -271,10 +275,11 @@ def main() -> int:
             f"{constant} must map to {failure_class}",
             failures,
         )
+    from mtproxy_phase_contract import java_policy
     for constant in ("TCP_CONNECTION_REFUSED", "TCP_CONNECT_TIMEOUT"):
         require(
-            f"case ProxyCheckDiagnostics.{constant}:" in policy_punitive
-            and f"case ProxyCheckDiagnostics.{constant}:" in policy_classify
+            f'case "{constant.lower()}":' in policy_punitive
+            and java_policy(constant.lower()) == ("failure", "network", True, True)
             and f"case ProxyCheckDiagnostics.{constant}:" in policy_failure_class,
             f"{constant} must be a punitive network TCP failure with exact failureClass",
             failures,
@@ -389,8 +394,8 @@ def main() -> int:
         failures,
     )
     require("proxyActivationGeneration" in connection_socket_h and "proxyActivationOrigin" in connection_socket_h, "ConnectionSocket must store captured activation generation and origin", failures)
-    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration)" in defines_h, "native delegate must pass activationGeneration", failures)
-    require("CallStaticVoidMethod" in wrapper and "activationGeneration" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V" in wrapper, "JNI stage wrapper must forward activationGeneration to Java", failures)
+    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines_h, "native delegate must pass activationGeneration and the retry-authority hold", failures)
+    require("CallStaticVoidMethod" in wrapper and "activationGeneration" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper, "JNI stage wrapper must forward activationGeneration and the native hold to Java", failures)
     require(
         "int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount)" in java_connections
         and "ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName" in java_connections
@@ -418,12 +423,13 @@ def main() -> int:
         "startup timeline must expose real TCP connect timeout as tcp_connect_timeout",
         failures,
     )
+    terminal_module_cpp = read(TGNET.parent / "mtproxy/MtProxyTerminalDiagnostic.cpp")
     require(
-        "error == ECONNREFUSED" in connection_socket_cpp
-        and "MtProxyPhase::TcpConnectionRefused" in connection_socket_cpp
-        and "error == ETIMEDOUT" in connection_socket_cpp
-        and "MtProxyPhase::TcpConnectTimeout" in connection_socket_cpp
-        and "reason == 2" in connection_socket_cpp,
+        "input.socketError == ECONNREFUSED" in terminal_module_cpp
+        and "TcpConnectionRefused" in terminal_module_cpp
+        and "input.socketError == ETIMEDOUT" in terminal_module_cpp
+        and "TcpConnectTimeout" in terminal_module_cpp
+        and "input.closeReason == 2" in terminal_module_cpp,
         "native terminal diagnostic must split ECONNREFUSED and TCP timeout before generic tcp_not_connected",
         failures,
     )
@@ -435,7 +441,7 @@ def main() -> int:
         failures,
     )
 
-    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration)")
+    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration, final int suggestedHoldMs)")
     require(
         "ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event)" in java_stage
         and "if (!shouldNotifyProxyConnectionStage(decision))" in java_stage
@@ -482,9 +488,9 @@ def main() -> int:
 
     require(
         "POST_SUCCESS_DATA_PATH_SHADOWS = 1" in health
-        and "POST_SUCCESS_DATA_PATH_SHADOWS = 1" in connection_socket_cpp + manager_cpp + read(TGNET / "MtProxyEndpointPolicy.cpp")
+        and "POST_SUCCESS_DATA_PATH_SHADOWS = 1" in connection_socket_cpp + manager_cpp + read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.cpp")
         and "postSuccessDataPathShadowCount >= POST_SUCCESS_DATA_PATH_SHADOWS" in health
-        and "postSuccessDataPathShadowCount >= MT_PROXY_ENDPOINT_POST_SUCCESS_DATA_PATH_SHADOWS" in read(TGNET / "MtProxyEndpointPolicy.cpp"),
+        and "postSuccessDataPathShadowCount >= MT_PROXY_ENDPOINT_POST_SUCCESS_DATA_PATH_SHADOWS" in read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.cpp"),
         "post-success data-path shadow budget must stay bounded to one in Java and native",
         failures,
     )

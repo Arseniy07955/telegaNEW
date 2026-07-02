@@ -14,8 +14,8 @@
 #include <memory>
 #include <string>
 #include "ConnectionSocketStateMachine.h"
-#include "MtProxyAdaptivePolicy.h"
-#include "MtProxyOptions.h"
+#include "mtproxy/MtProxyAdaptivePolicy.h"
+#include "mtproxy/MtProxyOptions.h"
 
 class NativeByteBuffer;
 class ConnectionsManager;
@@ -45,6 +45,11 @@ public:
     const char *getProxyCheckDiagnostic();
     bool isProxyCloseDiagnosticSuppressed();
     bool isClosingOrClosedForWrites() const;
+    // Remaining coordinator terminal hold (budget backoff / profiles exhausted)
+    // captured on the pre-TCP close path; consumed once by the Connection layer
+    // so the reconnect timer waits out the coordinator's clock instead of a
+    // shorter re-derived backoff. Returns 0 when no hold was suggested.
+    uint32_t consumeSuggestedReconnectHoldMs();
 
 protected:
     int32_t instanceNum;
@@ -78,6 +83,7 @@ private:
     bool wssUsedRelayFallback = false;
     bool suppressNextProxyCloseDiagnostic = false;
     uint32_t proxyActivationGeneration = 0;
+    uint32_t proxySuggestedReconnectHoldMs = 0;
     std::string proxyActivationOrigin = "active_socket";
 
     int32_t checkSocketError(int32_t *error);

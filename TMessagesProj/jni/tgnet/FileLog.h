@@ -30,6 +30,7 @@ private:
     FILE *logFile = nullptr;
     std::string logPath;
     size_t logBytesWritten = 0;
+    int64_t lastFlushMs = 0;
     pthread_mutex_t mutex;
 };
 

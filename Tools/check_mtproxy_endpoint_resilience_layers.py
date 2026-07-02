@@ -10,10 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = {
     "socket": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp",
-    "endpoint_policy": ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp",
-    "probe_coordinator": ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.cpp",
-    "recovery_policy": ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp",
-    "data_path_shaper": ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp",
+    "endpoint_policy": ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp",
+    "probe_coordinator": ROOT / "TMessagesProj/jni/mtproxy/MtProxyProbeCoordinator.cpp",
+    "recovery_policy": ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp",
+    "data_path_shaper": ROOT / "TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp",
     "socket_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h",
     "machine_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h",
     "connection": ROOT / "TMessagesProj/jni/tgnet/Connection.cpp",
@@ -22,7 +22,7 @@ FILES = {
     "values": ROOT / "TMessagesProj/src/main/res/values/strings.xml",
     "values_ru": ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml",
     "analyzer": ROOT / "Tools/analyze_mtproxy_markers.py",
-    "native_phase_contract": ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h",
+    "native_phase_contract": ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h",
 }
 
 REQUIRED_PHASES = sorted(java_visible_live_phases() & native_phase_names())
@@ -570,7 +570,7 @@ def main():
         and invalid_reason_guard < first_reset,
         "endpoint data-path success helper must reject non-appdata reasons before clearing endpoint cooldown/backoff",
     )
-    adaptive_policy = (ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp").read_text(encoding="utf-8", errors="replace")
+    adaptive_policy = (ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp").read_text(encoding="utf-8", errors="replace")
     require(
         "RecipeCursor" in adaptive_policy
         and "buildRecipeCursorLadder" in adaptive_policy

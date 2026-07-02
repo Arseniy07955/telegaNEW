@@ -401,12 +401,22 @@ def main() -> int:
         "ProxyPhasePolicy must explicitly split punitive failures from local/live non-punitive telemetry",
         failures,
     )
-    punitive_body = method_body(policy, "public static boolean isPunitiveFailure")
+    # isPunitiveFailure delegates to the generated ProxyPhaseClassification
+    # (reconnect_backoff=True in Tools/mtproxy_phase_contract.py); assert the
+    # delegation plus the generated set contents.
+    classification = read(MESSENGER / "ProxyPhaseClassification.java")
+    punitive_body = method_body(classification, "public static boolean needsReconnectBackoff")
+    require(
+        "ProxyPhaseClassification.needsReconnectBackoff(ProxyCheckDiagnostics.normalize(phase))"
+        in method_body(policy, "public static boolean isPunitiveFailure"),
+        "ProxyPhasePolicy.isPunitiveFailure must delegate to the generated phase classification",
+        failures,
+    )
     one_shot_terminal_body = method_body(policy, "public static boolean isOneShotTerminal")
     terminal_exact_body = method_body(policy, "private static boolean isTerminalExactConfigPhase")
     failure_class_body = method_body(policy, "public static String failureClassForPhase")
     require(
-        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in punitive_body
+        '"handshake_profiles_exhausted":' in punitive_body
         and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in one_shot_terminal_body,
         "handshake_profiles_exhausted must rotate through punitive hysteresis, not one-shot terminal handling",
         failures,
@@ -437,13 +447,13 @@ def main() -> int:
     for phase in NON_PUNITIVE_ROTATION_PHASES:
         require(
             phase.upper() in policy
-            and f"case ProxyCheckDiagnostics.{phase.upper()}:" not in method_body(policy, "public static boolean isPunitiveFailure"),
+            and f'case "{phase}":' not in punitive_body,
             f"{phase} must not be treated as a punitive rotation failure",
             failures,
         )
     for phase in PUNITIVE_ROTATION_PHASES:
         require(
-            f"case ProxyCheckDiagnostics.{phase.upper()}:" in method_body(policy, "public static boolean isPunitiveFailure"),
+            f'case "{phase}":' in punitive_body,
             f"{phase} must be treated as a punitive rotation failure",
             failures,
         )
@@ -626,9 +636,9 @@ def main() -> int:
         failures,
     )
     require(
-        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in punitive_body
+        '"handshake_profiles_exhausted":' in punitive_body
         and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in one_shot_terminal_body
-        and "ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp)" in on_native_stage
+        and "ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs)" in on_native_stage
         and "decision=held_by_failure_hysteresis" in on_native_stage
         and "decision=backoff" in on_native_stage
         and "failure_class=" in on_native_stage

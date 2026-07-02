@@ -20,9 +20,11 @@ MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 PROXY_CHECK = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
-NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
-HANDSHAKE_SCHEDULER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.h"
-HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
+NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
+NATIVE_PHASE_CLASSIFICATION = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h"
+RETRY_AUTHORITY_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRetryAuthority.cpp"
+HANDSHAKE_SCHEDULER_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.h"
+HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.cpp"
 
 
 def text(path: Path) -> str:
@@ -222,13 +224,15 @@ def main() -> None:
         and "if (!request.suppressQueuedGrant && mtProxyHandshakeSchedulerUsesAdmission(mode))" in handshake_scheduler_cpp,
         "admission release must be idempotent so post-handshake close/suspend cannot dequeue a second queued request",
     )
-    reconnect_backoff = connection_cpp[
-        connection_cpp.find("static bool mtProxyDiagnosticNeedsReconnectBackoff"):
-        connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs")
+    classification = text(NATIVE_PHASE_CLASSIFICATION)
+    backoff_start = classification.find("inline bool needsReconnectBackoff")
+    reconnect_backoff = classification[
+        backoff_start:classification.find("\n}", backoff_start)
     ]
     expected_reconnect_backoff = reconnect_backoff_phases()
     require(
         "mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
+        and "MtProxyPhase::needsReconnectBackoff(diagnostic)" in connection_cpp
         and all(has_phase(reconnect_backoff, phase, phase_constants) for phase in expected_reconnect_backoff)
         and "mtproxy_startup reconnect_backoff" in connection_cpp
         and "mtproxy_startup reconnect_hold" in connection_cpp
@@ -237,19 +241,34 @@ def main() -> None:
         and "reconnect_backoff_suppressed" in connection_cpp
         and "mtProxyReconnectBackoffMs" in connection_h
         and "mtProxyReconnectHoldUntil" in connection_h,
-        "Connection layer must back off real MTProxy failures but not suppressed idle/post-appdata closes",
+        "Connection layer must back off real MTProxy failures via the generated phase classification",
     )
     require(
         "network_block_suspected" not in reconnect_backoff,
         "network_block_suspected is a Java scheduler display/escalation phase and must not be a native reconnect diagnostic",
     )
-    reconnect_base = connection_cpp[
-        connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs"):
-        connection_cpp.find("static uint32_t mtProxyReconnectBackoffMaxMs")
+    retry_authority_cpp = text(RETRY_AUTHORITY_CPP)
+    require(
+        "MtProxyRetry::nextReconnectHold(holdInput)" in connection_cpp
+        and "holdDecision.nextBackoffMs" in connection_cpp
+        and "mtProxyTrafficClassFor(connectionType)" in connection_cpp,
+        "Connection must delegate reconnect hold computation to MtProxyRetryAuthority (single hold owner)",
+    )
+    require(
+        "mtProxyNextReconnectBackoffMs" not in connection_cpp
+        and "mtProxyReconnectBackoffBaseMs" not in connection_cpp
+        and "mtProxyReconnectBackoffMaxMs" not in connection_cpp
+        and "mtProxyHandshakeSchedulerRetryDelay" not in socket_cpp
+        and "MtProxyRetry::endpointCooldownWaitMs" in socket_cpp,
+        "retry-hold computation must not re-grow outside MtProxyRetryAuthority: no local backoff math in Connection, no direct scheduler-delay merge in ConnectionSocket",
+    )
+    reconnect_base = retry_authority_cpp[
+        retry_authority_cpp.find("uint32_t backoffBaseMs"):
+        retry_authority_cpp.find("uint32_t backoffMaxMs")
     ]
-    reconnect_max = connection_cpp[
-        connection_cpp.find("static uint32_t mtProxyReconnectBackoffMaxMs"):
-        connection_cpp.find("static uint32_t mtProxyReconnectJitterMs")
+    reconnect_max = retry_authority_cpp[
+        retry_authority_cpp.find("uint32_t backoffMaxMs"):
+        retry_authority_cpp.find("static uint32_t reconnectJitterMs")
     ]
     require(
         "return 1800;" in reconnect_base

@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <sstream>
 #include "Defines.h"
-#include "MtProxyOptions.h"
+#include "mtproxy/MtProxyOptions.h"
 
 #ifdef ANDROID
 #include <jni.h>

@@ -436,12 +436,12 @@ class Delegate : public ConnectiosManagerDelegate {
         jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onConnectionStateChanged, state, instanceNum);
     }
 
-    void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration) {
+    void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs) {
         jstring diagnosticString = jniEnv[instanceNum]->NewStringUTF(diagnostic.c_str());
         jstring endpointKeyString = jniEnv[instanceNum]->NewStringUTF(endpointKey.c_str());
         jstring probeKeyString = jniEnv[instanceNum]->NewStringUTF(probeKey.c_str());
         jstring originString = jniEnv[instanceNum]->NewStringUTF(origin.c_str());
-        jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onProxyConnectionStageChanged, instanceNum, diagnosticString, endpointKeyString, probeKeyString, originString, activationGeneration);
+        jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onProxyConnectionStageChanged, instanceNum, diagnosticString, endpointKeyString, probeKeyString, originString, activationGeneration, suggestedReconnectHoldMs);
         if (diagnosticString != nullptr) {
             jniEnv[instanceNum]->DeleteLocalRef(diagnosticString);
         }
@@ -801,7 +801,7 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     if (jclass_ConnectionsManager_onConnectionStateChanged == 0) {
         return JNI_FALSE;
     }
-    jclass_ConnectionsManager_onProxyConnectionStageChanged = env->GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
+    jclass_ConnectionsManager_onProxyConnectionStageChanged = env->GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V");
     if (jclass_ConnectionsManager_onProxyConnectionStageChanged == 0) {
         return JNI_FALSE;
     }

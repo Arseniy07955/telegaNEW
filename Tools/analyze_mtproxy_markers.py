@@ -61,7 +61,10 @@ SCHEDULER_APPLIED_RE = re.compile(
 )
 SCHEDULER_PHASE_RE = re.compile(r"(?<![A-Za-z0-9_])phase=([^ ]+)")
 SCHEDULER_DIAGNOSTIC_RE = re.compile(r"(?<![A-Za-z0-9_])diagnostic=([^ ]+)")
-TIME_RE = re.compile(r"^[0-9]{2}-[0-9]{2} ([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})")
+# Accepts logcat ("07-01 20:59:30.000") and the native _net log without zero
+# padding ("7-2 11:48:40.760"); the strict two-digit form made every
+# time-based summary silently no-op on native logs.
+TIME_RE = re.compile(r"^[0-9]{1,2}-[0-9]{1,2} ([0-9]{1,2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})")
 FIELD_RE_TEMPLATE = r"(?<![A-Za-z0-9_]){}=([^ ]+)"
 
 FAKETLS_FAILURE_VERDICTS = {
@@ -443,6 +446,7 @@ class Attempt:
             "ignored_cancelled_generation": "ignored_cancelled_generation",
             "endpoint_attempt_cancelled": "ignored_cancelled_generation",
             "endpoint_failure_skipped_local": "endpoint_failure_skipped_local",
+            "silent_after_client_hello": "silent_after_client_hello",
             "endpoint_failure": "endpoint_failure",
             "endpoint_handshake_ok": "endpoint_handshake_ok",
             "endpoint_data_path_success": "endpoint_data_path_success",
@@ -674,7 +678,7 @@ def log_time_label(text: str) -> str:
     match = TIME_RE.match(text)
     if not match:
         return ""
-    return text[:18]
+    return text[:match.end()]
 
 
 def endpoint_from_admission_key(proxy_key: str) -> str:
@@ -1878,6 +1882,95 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
             writer.writerow(row)
 
 
+ANOMALY_RECONNECT_STORM_PER_SECOND = 10
+ANOMALY_LOG_FLOOD_THRESHOLD = 500
+PRE_IO_TERMINAL_DECISION_MARKERS = (
+    "probe_faketls_budget_backoff",
+    "probe_profiles_exhausted",
+)
+
+
+def print_anomaly_summary(all_lines: list[str]) -> None:
+    """Loud summary of pathological patterns the flat counters hide:
+    reconnect storms (one connection re-dialing many times per second),
+    pre-I/O terminal verdicts clobbered to connection_not_started at close
+    (the backoff-disabling bug class), and log floods."""
+    dial_times: defaultdict[str, list[float]] = defaultdict(list)
+    events: defaultdict[str, list[tuple[float, str]]] = defaultdict(list)
+    flood: Counter[str] = Counter()
+    for text in all_lines:
+        seconds = log_time_seconds(text)
+        connection = CONNECTION_RE.search(text)
+        pointer = connection.group(1) if connection else ""
+        if pointer and is_proxy_connect(text) and seconds > 0:
+            dial_times[pointer].append(seconds)
+        if pointer:
+            if any(marker in text for marker in PRE_IO_TERMINAL_DECISION_MARKERS):
+                events[pointer].append((seconds, "terminal"))
+            elif is_proxy_connect(text):
+                events[pointer].append((seconds, "connect"))
+            elif " close_diagnostic phase=connection_not_started" in text:
+                events[pointer].append((seconds, "clobbered_close"))
+        signature = TIME_RE.sub("", text)
+        signature = CONNECTION_RE.sub("connection(", signature)
+        flood[signature.strip()] += 1
+
+    anomalies: list[str] = []
+
+    for pointer, times in dial_times.items():
+        times.sort()
+        peak = 0
+        peak_at = 0.0
+        start = 0
+        for index, moment in enumerate(times):
+            while moment - times[start] > 1.0:
+                start += 1
+            window = index - start + 1
+            if window > peak:
+                peak = window
+                peak_at = moment
+        if peak > ANOMALY_RECONNECT_STORM_PER_SECOND:
+            anomalies.append(
+                f"reconnect_storm connection={pointer} peak={peak}/s "
+                f"around t+{peak_at:.3f}s total_dials={len(times)}"
+            )
+
+    clobbered = 0
+    clobber_example = ""
+    for pointer, pointer_events in events.items():
+        pointer_events.sort(key=lambda item: item[0])
+        pending_terminal = False
+        for _, kind in pointer_events:
+            if kind == "terminal":
+                pending_terminal = True
+            elif kind == "connect":
+                pending_terminal = False
+            elif kind == "clobbered_close" and pending_terminal:
+                pending_terminal = False
+                clobbered += 1
+                if not clobber_example:
+                    clobber_example = pointer
+    if clobbered:
+        anomalies.append(
+            f"pre_io_terminal_clobber count={clobbered} example_connection={clobber_example} "
+            "(terminal verdict re-derived to connection_not_started at close -> no cooldown, "
+            "no reconnect backoff; see deriveMtProxyTerminalDiagnostic preserve list)"
+        )
+
+    for signature, count in flood.most_common(3):
+        if count < ANOMALY_LOG_FLOOD_THRESHOLD:
+            break
+        anomalies.append(f"log_flood count={count} marker=\"{signature[:120]}\"")
+
+    print()
+    print("Anomalies:")
+    if anomalies:
+        for anomaly in anomalies:
+            print(f"  {anomaly}")
+    else:
+        print("  none detected")
+
+
 def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("MTProxy FakeTLS diagnostic summary")
     print("===================================")
@@ -1909,6 +2002,7 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     all_lines = list(global_lines)
     for attempt in attempts:
         all_lines.extend(attempt.lines)
+    print_anomaly_summary(all_lines)
     print_runtime_proof_summary(attempts, all_lines)
     print_layer_recommendations(attempts, all_lines)
     print_java_live_stage_summary(all_lines)
@@ -1957,6 +2051,7 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- recipe_failed: current FakeTLS recipe failed and the next attempt should move along the recipe ladder, not mark the endpoint bad yet.")
     print("- shadowed_by_usable_success: a late sibling startup failure was ignored because this endpoint recently delivered app-data.")
     print("- shadowed_socket_failure: native suppressed a sibling socket failure because the endpoint recently delivered app-data.")
+    print("- silent_after_client_hello: zero bytes after ClientHello; treated as a transient transport failure (endpoint cooldown paces the retry with the same recipe), not recipe evidence.")
     print("- ignored_cancelled_generation: late native callbacks were ignored after terminal endpoint cancellation advanced the generation.")
     print("- reconnect_backoff_suppressed: native closed a socket without adding endpoint reconnect backoff.")
     print("- telemetry_only: Java kept per-connection DNS telemetry out of the visible proxy status.")

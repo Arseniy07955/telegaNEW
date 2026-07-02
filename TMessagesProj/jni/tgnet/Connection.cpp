@@ -20,8 +20,9 @@
 #include "Datacenter.h"
 #include "NativeByteBuffer.h"
 #include "ByteArray.h"
-#include "MtProxyHandshakeScheduler.h"
-#include "MtProxyPhaseContract.h"
+#include "mtproxy/MtProxyHandshakeScheduler.h"
+#include "mtproxy/MtProxyPhaseContract.h"
+#include "mtproxy/MtProxyRetryAuthority.h"
 
 thread_local static uint32_t lastConnectionToken = 1;
 
@@ -60,74 +61,29 @@ static MtProxyRequestClass mtProxyRequestClassForConnectionType(ConnectionType t
 }
 
 static bool mtProxyDiagnosticNeedsReconnectBackoff(const char *diagnostic) {
-    if (diagnostic == nullptr) {
-        return false;
-    }
-    return strcmp(diagnostic, MtProxyPhase::HostResolveFailed) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::HostResolveTimeout) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::TcpNotConnected) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::TcpConnectionRefused) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::TcpConnectTimeout) == 0 ||
-           strcmp(diagnostic, "tcp_connected_no_pong") == 0 ||
-           strcmp(diagnostic, MtProxyPhase::SecretParseInvalidDomainControlChar) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::SecretParseInvalidDomain) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::FaketlsNotMtproxyResponse) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::FaketlsNoServerHelloTerminal) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::FaketlsServerClosedTerminal) == 0 ||
-           strcmp(diagnostic, MtProxyPhase::HandshakeProfilesExhausted) == 0 ||
-           strcmp(diagnostic, "mtproxy_packet_sent_no_response") == 0 ||
-           strcmp(diagnostic, MtProxyPhase::PostHandshakeNoAppdata) == 0 ||
-           strcmp(diagnostic, "dropped_early_after_appdata") == 0;
+    // The phase set is generated from Tools/mtproxy_phase_contract.py
+    // (reconnect_backoff=True) into MtProxyPhaseClassification.h.
+    return MtProxyPhase::needsReconnectBackoff(diagnostic);
 }
 
-static uint32_t mtProxyReconnectBackoffBaseMs(ConnectionType type) {
+static MtProxyRetry::TrafficClass mtProxyTrafficClassFor(ConnectionType type) {
+    // Backoff base/max per class live in mtproxy/MtProxyRetryAuthority.cpp,
+    // the single owner of retry-hold computation.
     switch ((int32_t) type & 0x0000ffff) {
         case ConnectionTypeGeneric:
         case ConnectionTypeTemp:
-            return 1800;
+            return MtProxyRetry::TrafficClass::Generic;
         case ConnectionTypeGenericMedia:
+            return MtProxyRetry::TrafficClass::GenericMedia;
         case ConnectionTypePush:
-            return 2500;
+            return MtProxyRetry::TrafficClass::Push;
         case ConnectionTypeDownload:
+            return MtProxyRetry::TrafficClass::Download;
         case ConnectionTypeUpload:
-            return 3500;
+            return MtProxyRetry::TrafficClass::Upload;
         default:
-            return 2500;
+            return MtProxyRetry::TrafficClass::Other;
     }
-}
-
-static uint32_t mtProxyReconnectBackoffMaxMs(ConnectionType type) {
-    switch ((int32_t) type & 0x0000ffff) {
-        case ConnectionTypeGeneric:
-        case ConnectionTypeTemp:
-            return 8000;
-        case ConnectionTypeGenericMedia:
-        case ConnectionTypePush:
-            return 12000;
-        case ConnectionTypeDownload:
-        case ConnectionTypeUpload:
-            return 16000;
-        default:
-            return 12000;
-    }
-}
-
-static uint32_t mtProxyReconnectJitterMs(uint32_t limit) {
-    if (limit == 0) {
-        return 0;
-    }
-    uint32_t value = 0;
-    RAND_bytes(reinterpret_cast<uint8_t *>(&value), sizeof(value));
-    return value % (limit + 1);
-}
-
-static uint32_t mtProxyNextReconnectBackoffMs(ConnectionType type, uint32_t previousDelayMs) {
-    uint32_t base = mtProxyReconnectBackoffBaseMs(type);
-    uint32_t maxDelay = mtProxyReconnectBackoffMaxMs(type);
-    uint32_t delay = previousDelayMs == 0 ? base : std::min(previousDelayMs * 2, maxDelay);
-    delay = std::max(delay, base);
-    delay = std::min(delay, maxDelay);
-    return delay + mtProxyReconnectJitterMs(std::min(delay / 4, 2000U));
 }
 
 std::string Connection::proxyConnectionStageOrigin() {
@@ -839,12 +795,19 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
 
     const char *mtProxyReconnectDiagnostic = getProxyCheckDiagnostic();
     uint32_t mtProxyReconnectDelay = 0;
+    uint32_t mtProxySuggestedHoldMs = consumeSuggestedReconnectHoldMs();
     if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
-        mtProxyReconnectDelay = mtProxyNextReconnectBackoffMs(connectionType, mtProxyReconnectBackoffMs);
-        mtProxyReconnectBackoffMs = mtProxyReconnectDelay;
+        MtProxyRetry::ReconnectHoldInput holdInput;
+        holdInput.diagnostic = mtProxyReconnectDiagnostic;
+        holdInput.trafficClass = mtProxyTrafficClassFor(connectionType);
+        holdInput.previousBackoffMs = mtProxyReconnectBackoffMs;
+        holdInput.coordinatorHoldMs = mtProxySuggestedHoldMs;
+        MtProxyRetry::ReconnectHoldDecision holdDecision = MtProxyRetry::nextReconnectHold(holdInput);
+        mtProxyReconnectBackoffMs = holdDecision.nextBackoffMs;
+        mtProxyReconnectDelay = holdDecision.delayMs;
         mtProxyReconnectHoldUntil = now + mtProxyReconnectDelay;
-        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff phase=%s delay_ms=%u failed=%u", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic, mtProxyReconnectDelay, failedConnectionCount + 1);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff phase=%s delay_ms=%u coordinator_hold_ms=%u failed=%u", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic, mtProxyReconnectDelay, mtProxySuggestedHoldMs, failedConnectionCount + 1);
     } else if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff_suppressed phase=%s", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic);
     }

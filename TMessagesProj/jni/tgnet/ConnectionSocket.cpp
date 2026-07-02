@@ -37,18 +37,20 @@
 #include "Timer.h"
 #include "BuffersStorage.h"
 #include "Connection.h"
-#include "MtProxyAdaptivePolicy.h"
-#include "MtProxyDataPathShaper.h"
-#include "MtProxyEndpointPolicy.h"
-#include "MtProxyFailureEvidence.h"
-#include "MtProxyHandshakePlan.h"
-#include "MtProxyHandshakeScheduler.h"
-#include "MtProxyPhaseContract.h"
-#include "MtProxyProbeCoordinator.h"
-#include "MtProxyRecoveryPolicy.h"
-#include "MtProxySecretDomain.h"
-#include "MtProxyServerFlightParser.h"
-#include "MtProxySocketPublisher.h"
+#include "mtproxy/MtProxyAdaptivePolicy.h"
+#include "mtproxy/MtProxyDataPathShaper.h"
+#include "mtproxy/MtProxyEndpointPolicy.h"
+#include "mtproxy/MtProxyFailureEvidence.h"
+#include "mtproxy/MtProxyHandshakePlan.h"
+#include "mtproxy/MtProxyHandshakeScheduler.h"
+#include "mtproxy/MtProxyPhaseContract.h"
+#include "mtproxy/MtProxyProbeCoordinator.h"
+#include "mtproxy/MtProxyRecoveryPolicy.h"
+#include "mtproxy/MtProxyRetryAuthority.h"
+#include "mtproxy/MtProxySecretDomain.h"
+#include "mtproxy/MtProxyServerFlightParser.h"
+#include "mtproxy/MtProxySocketPublisher.h"
+#include "mtproxy/MtProxyTerminalDiagnostic.h"
 #include <random>
 #include <pthread.h>
 
@@ -1774,10 +1776,13 @@ bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6) 
         return false;
     }
 
-    uint32_t delay = mtProxyHandshakeSchedulerRetryDelay(now, cooldownResult.cooldownUntil, proxyHandshakeAdmissionPriority, connectionPatternMode);
-    if (cooldownResult.remainingMs > 0 && (int64_t) delay < cooldownResult.remainingMs) {
-        delay = (uint32_t) cooldownResult.remainingMs;
-    }
+    MtProxyRetry::EndpointCooldownWaitInput cooldownWaitInput;
+    cooldownWaitInput.now = now;
+    cooldownWaitInput.cooldownUntil = cooldownResult.cooldownUntil;
+    cooldownWaitInput.cooldownRemainingMs = cooldownResult.remainingMs;
+    cooldownWaitInput.priority = proxyHandshakeAdmissionPriority;
+    cooldownWaitInput.connectionPatternMode = connectionPatternMode;
+    uint32_t delay = MtProxyRetry::endpointCooldownWaitMs(cooldownWaitInput);
     publishProxyConnectionStage("endpoint_cooldown");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup endpoint_cooldown key=%s connection_pattern=%s priority=%d delay=%u cooldown_ms=%ld", this, cooldownResult.key.c_str(), mtProxyConnectionPatternModeName(connectionPatternMode), proxyHandshakeAdmissionPriority, delay, (long) cooldownResult.remainingMs);
     setTransportState(TransportState::WaitingGate, "endpoint_cooldown");
@@ -1800,22 +1805,24 @@ bool ConnectionSocket::mtProxyProbeBeginOrJoin(bool ipv6) {
     MtProxyProbeCoordinator::Decision probeDecision = MtProxyProbeCoordinator::beginOrJoin(probeKey, mtProxyProbeOwnerToken, now);
     if (probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::ProfilesExhaustedBackoff) {
         proxyCheckDiagnostic = MtProxyPhase::HandshakeProfilesExhausted;
+        proxySuggestedReconnectHoldMs = probeDecision.waitMs;
         MtProxySocketObservation observation;
         observation.phase = MtProxyPhase::HandshakeProfilesExhausted;
         observation.reason = "probe_profiles_exhausted";
         publishMtProxySocketObservation(observation);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_profiles_exhausted key=%s endpoint=%s owner_generation=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), probeDecision.generation);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_profiles_exhausted key=%s endpoint=%s owner_generation=%u hold_ms=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), probeDecision.generation, probeDecision.waitMs);
         closeSocket(1, -1);
         return true;
     }
     if (probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::HandshakeBudgetBackoff) {
         const std::string terminalPhase = mtProxyNormalizeFakeTlsBudgetTerminalPhase(probeDecision.terminalPhase);
         proxyCheckDiagnostic = terminalPhase;
+        proxySuggestedReconnectHoldMs = probeDecision.waitMs;
         MtProxySocketObservation observation;
         observation.phase = terminalPhase.c_str();
         observation.reason = "faketls_handshake_budget_backoff";
         publishMtProxySocketObservation(observation);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_faketls_budget_backoff key=%s endpoint=%s phase=%s owner_generation=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), terminalPhase.c_str(), probeDecision.generation);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_faketls_budget_backoff key=%s endpoint=%s phase=%s owner_generation=%u hold_ms=%u", this, currentMtProxyProbeKey.c_str(), currentMtProxyEndpointKey.c_str(), terminalPhase.c_str(), probeDecision.generation, probeDecision.waitMs);
         closeSocket(1, -1);
         return true;
     }
@@ -1986,9 +1993,20 @@ void ConnectionSocket::recordMtProxyEndpointFailure(const char *diagnostic, cons
     MtProxyDataPathFailureAction dataPathFailureAction = mtProxyDataPathFailureActionForPhase(phase, evidenceKind);
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
+    // Zero bytes after ClientHello = the proxy is silent/unreachable at the TLS layer. That is
+    // transport-grade evidence (like tcp_not_connected), not recipe evidence: endpoint cooldown
+    // paces the retry with the SAME recipe, and the ladder/budget must not advance toward a
+    // terminal "unsupported" verdict. Recipe progression stays reserved for responses with actual
+    // bytes (active interference or a real compatibility problem).
+    bool silentAfterClientHello = failureResponseBytes == 0
+            && evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello;
     bool recipeFailure = currentSecretIsFakeTls
+            && !silentAfterClientHello
             && MtProxyProbeCoordinator::failureNeedsRecipe(phase)
             && mtProxyRecoveryActionAdvancesRecipe(recoveryAction);
+    if (silentAfterClientHello && LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_startup silent_after_client_hello phase=%s endpoint=%s recipe_held", this, phase.c_str(), currentMtProxyEndpointKey.c_str());
+    }
     if (recipeFailure) {
         MtProxyProbeCoordinator::ProbeKey probeKey;
         probeKey.key = currentMtProxyProbeKey;
@@ -2396,6 +2414,12 @@ const char *ConnectionSocket::getProxyCheckDiagnostic() {
 
 bool ConnectionSocket::isProxyCloseDiagnosticSuppressed() {
     return proxyCloseDiagnosticSuppressed;
+}
+
+uint32_t ConnectionSocket::consumeSuggestedReconnectHoldMs() {
+    uint32_t hold = proxySuggestedReconnectHoldMs;
+    proxySuggestedReconnectHoldMs = 0;
+    return hold;
 }
 
 bool ConnectionSocket::isClosingOrClosedForWrites() const {
@@ -2922,49 +2946,27 @@ std::string ConnectionSocket::deriveMtProxyTerminalDiagnostic(int32_t reason, in
     if (!isCurrentMtProxyConnection() || reason == 0) {
         return proxyCheckDiagnostic;
     }
-    // Diagnostics decided pre-I/O (before the socket connects) must survive the close path.
-    // deriveMtProxyTerminalDiagnostic would otherwise re-derive them from the startup timeline as
-    // "connection_not_started" (startupActive is true because the socket never connected), which is on
-    // the local-scheduler-timeout skip list -> records neither an endpoint cooldown nor a reconnect
-    // hold. handshake_profiles_exhausted can be decided by mtProxyProbeBeginOrJoin before a socket is
-    // opened, so preserving it lets endpoint cooldown + reconnect backoff engage instead of a hot loop.
-    if (proxyCheckDiagnostic == MtProxyPhase::SecretParseInvalidDomainControlChar
-            || proxyCheckDiagnostic == MtProxyPhase::SecretParseInvalidDomain
-            || proxyCheckDiagnostic == "dns_negative_cache_hit"
-            || proxyCheckDiagnostic == "dns_blocked_zero_address"
-            || proxyCheckDiagnostic == MtProxyPhase::HandshakeProfilesExhausted) {
-        return proxyCheckDiagnostic;
-    }
-    bool startupActive = startupTimeline.hasLocalWait()
-            || startupTimeline.dnsResolveAttemptStarted()
-            || startupTimeline.tcpConnectAttemptStarted()
-            || !mtproxySocketConnectedLogged;
-    if (startupActive) {
-        const char *timelineDiagnostic = startupTimeline.terminalDiagnostic(mtproxySocketConnectedLogged);
-        if (!mtproxySocketConnectedLogged && startupTimeline.tcpConnectAttemptStarted()) {
-            if (error == ECONNREFUSED) {
-                return MtProxyPhase::TcpConnectionRefused;
-            }
-            if (error == ETIMEDOUT || reason == 2 || proxyCheckDiagnostic == MtProxyPhase::TcpConnectTimeout) {
-                return MtProxyPhase::TcpConnectTimeout;
-            }
-        }
+    // Pre-I/O terminal verdicts (handshake_profiles_exhausted, the FakeTLS
+    // terminal budget phases, DNS/secret verdicts) must survive the close
+    // path; the decision itself lives in the module so it is host-compiled.
+    // See MtProxyPhase::deriveTerminalDiagnostic + isPreIoTerminalVerdict.
+    MtProxyPhase::TerminalDiagnosticInput terminalInput;
+    terminalInput.currentDiagnostic = proxyCheckDiagnostic.c_str();
+    terminalInput.timeline = &startupTimeline;
+    terminalInput.socketConnectedLogged = mtproxySocketConnectedLogged;
+    terminalInput.closeReason = reason;
+    terminalInput.socketError = error;
+    MtProxyPhase::TerminalDiagnosticResult terminalResult = MtProxyPhase::deriveTerminalDiagnostic(terminalInput);
+    if (terminalResult.timelineDerived) {
         classifyMtProxyPreTcpTimeoutDiagnostic("derive_terminal");
-        return timelineDiagnostic;
     }
-    return proxyCheckDiagnostic.empty() ? std::string("unknown_fail") : proxyCheckDiagnostic;
+    return terminalResult.diagnostic;
 }
 
 bool ConnectionSocket::mtProxyDiagnosticIsLocalSchedulerTimeout(const char *diagnostic) {
-    if (diagnostic == nullptr) {
-        return false;
-    }
-    return strcmp(diagnostic, "connection_not_started") == 0
-           || strcmp(diagnostic, "admission_timeout") == 0
-           || strcmp(diagnostic, "tcp_connect_gate_timeout") == 0
-           || strcmp(diagnostic, "endpoint_cooldown_timeout") == 0
-           || strcmp(diagnostic, "dns_coalesce_timeout") == 0
-           || strcmp(diagnostic, "background_handshake_aborted") == 0;
+    // The phase set is generated from Tools/mtproxy_phase_contract.py
+    // (local_scheduler_timeout=True) into MtProxyPhaseClassification.h.
+    return MtProxyPhase::isLocalSchedulerTimeout(diagnostic);
 }
 
 void ConnectionSocket::setMtProxySocketConnectedLogged(bool logged, const char *reason) {
@@ -3511,6 +3513,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentMtProxyDnsCacheKey = "";
     currentMtProxyAdmissionKey = "";
     proxyCheckDiagnostic = "connection_not_started";
+    proxySuggestedReconnectHoldMs = 0;
     proxyHandshakeAdmissionKey = "";
     setProxyHandshakeAdmissionState(-1, 0, -1, -1, "openConnection");
     setProxyEndpointBackoffReady(false, "openConnection");
@@ -4132,13 +4135,28 @@ void ConnectionSocket::publishProxyConnectionStage(const char *diagnostic) {
     if (endpointKey.empty()) {
         return;
     }
+    // Raise the unified reconnect hold before the event leaves native: for
+    // cooldown-carrying failures the endpoint cooldown becomes part of the
+    // suggested hold, so (a) Connection's reconnect timer waits it out via
+    // consumeSuggestedReconnectHoldMs (retrying earlier is denied pre-TCP
+    // anyway) and (b) the Java layer receives THE hold with the event and
+    // never re-derives it from its own clock.
+    if (MtProxyEndpointPolicy::failureNeedsCooldown(diagnostic)) {
+        int64_t cooldownHoldMs = MtProxyEndpointPolicy::cooldownMs(
+                diagnostic,
+                normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode),
+                proxyHandshakeAdmissionPriority);
+        if (cooldownHoldMs > (int64_t) proxySuggestedReconnectHoldMs) {
+            proxySuggestedReconnectHoldMs = (uint32_t) cooldownHoldMs;
+        }
+    }
     ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
     if (manager.delegate != nullptr) {
         std::string origin = proxyConnectionStageOrigin();
         if (origin == "active_socket" && !proxyActivationOrigin.empty()) {
             origin = proxyActivationOrigin;
         }
-        manager.delegate->onProxyConnectionStageChanged(instanceNum, diagnostic, endpointKey, currentMtProxyProbeKey, origin, (int32_t) proxyActivationGeneration);
+        manager.delegate->onProxyConnectionStageChanged(instanceNum, diagnostic, endpointKey, currentMtProxyProbeKey, origin, (int32_t) proxyActivationGeneration, (int32_t) proxySuggestedReconnectHoldMs);
     }
 }
 
@@ -4290,17 +4308,33 @@ void ConnectionSocket::closeMtProxyPostClientHelloResponse(const char *diagnosti
     closeSocket(1, error);
 }
 
+// closeSocket is an ordered pipeline; the step order below is load-bearing and
+// machine-checked by Tools/check_mtproxy_transport_state.py. Key constraints:
+// the diagnostic must be fully resolved (step 3) before anything is logged or
+// published (steps 4-5); the endpoint failure must be recorded (step 5) while
+// the probe lease/owner token is still live (released in step 6); and
+// onDisconnected must be the very last statement (step 8) because the
+// Connection layer reads the resolved diagnostic and the suggested reconnect
+// hold from this object.
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
+    // [close-step 1/8] Reentry guard: a socket is closed exactly once.
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     if (socketCloseNotified) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup close_ignored_already_closed reason=%s error=%s phase=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, mtProxyDisconnectReasonName(reason), mtProxySocketErrorName(error), proxyCheckDiagnostic.c_str(), transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
         return;
     }
+    // [close-step 2/8] Transport gate: mark dead-for-writes and enter Closing
+    // before any diagnostic work so concurrent write paths stop immediately.
     markConnectionDeadForWrites("closeSocket");
     logTransportSnapshot("close_start", "closeSocket");
     checkCloseSocketAction("closeSocket");
     setTransportState(TransportState::Closing, "closeSocket");
     setSocketCloseNotified(true, "closeSocket");
+    // [close-step 3/8] Diagnostic resolution: capture forced suppression,
+    // reclassify early app-data drops, derive the terminal diagnostic
+    // (pre-I/O terminal verdicts survive via MtProxyPhase::isPreIoTerminalVerdict),
+    // and decide shadow-by-fresh-success suppression. proxyCheckDiagnostic is
+    // final after this step; later steps only read it.
     bool forcedSuppressProxyCloseDiagnostic = suppressNextProxyCloseDiagnostic;
     suppressNextProxyCloseDiagnostic = false;
     proxyCloseDiagnosticSuppressed = forcedSuppressProxyCloseDiagnostic;
@@ -4345,6 +4379,8 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
             suppressProxyCloseDiagnostic = true;
         }
     }
+    // [close-step 4/8] Observability: the mtproxy_disconnect snapshot and the
+    // suppressed/rotate branch log the RESOLVED diagnostic from step 3.
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d is_wss=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d first_plain_sent=%d first_plain_recv=%d tls_frames_completed=%u", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, currentTransportWss ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0, mtproxyFirstPlainDataSentLogged ? 1 : 0, mtproxyFirstPlainDataReceivedLogged ? 1 : 0, mtproxyTlsFrameCompletedCount);
     if (suppressProxyCloseDiagnostic) {
         proxyCloseDiagnosticSuppressed = true;
@@ -4357,6 +4393,10 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     } else {
         rotateMtProxyTlsProfileOnFailureIfNeeded(reason, error);
     }
+    // [close-step 5/8] Verdict publication: release the TCP connect gate, then
+    // publish close_diagnostic and record the endpoint failure. This MUST run
+    // before the probe lease release in step 6 so the coordinator still sees a
+    // live owner token when the failure is recorded (HANG-7).
     releaseMtProxyEndpointTcpConnect("closeSocket");
     if (!suppressProxyCloseDiagnostic && reason != 0 && isCurrentMtProxyConnection() && !terminalDiagnostic.empty()) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup close_diagnostic phase=%s", this, terminalDiagnostic.c_str());
@@ -4371,10 +4411,13 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
             recordMtProxyEndpointFailure(terminalDiagnostic.c_str(), "closeSocket");
         }
     }
+    // [close-step 6/8] Resource release: probe lease (after the failure was
+    // recorded), admission slot, and manager detach.
     releaseMtProxyProbeLease();
     releaseProxyHandshakeAdmission(false, "closeSocket");
     cancelProxyHandshakeAdmission();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);
+    // [close-step 7/8] OS teardown: epoll deregistration and native socket close.
     if (socketFd >= 0) {
         if (epollRegistered) {
             if (canUnregisterEpollSocket()) {
@@ -4389,6 +4432,9 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
         }
         setSocketFd(-1, "close_native_socket");
     }
+    // [close-step 8/8] State reset to Idle, then notify the Connection layer.
+    // onDisconnected must stay the LAST statement: it reads the resolved
+    // diagnostic and consumeSuggestedReconnectHoldMs() from this object.
     setWaitingForHostResolve("", "closeSocket_cleanup");
     setMtProxyTcpConnectAttemptStarted(false, "closeSocket_cleanup");
     setMtProxyDnsResolveAttemptStarted(false, "closeSocket_cleanup");

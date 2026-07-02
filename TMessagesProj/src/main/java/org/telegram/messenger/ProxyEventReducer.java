@@ -150,7 +150,7 @@ final class ProxyEventReducer {
         if (ProxyPhasePolicy.isPunitiveFailure(verdict.phase)) {
             ProxyWarmupGate.onProxyFailure(event.endpointKey, event.phase, event.timestamp);
         }
-        ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp);
+        ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs);
         ProxyRuntimeStateStore.logControl("decision=backoff phase=" + verdict.phase + " layer=" + verdict.layer + " failure_class=" + verdict.failureClass + " confidence=" + verdict.confidence + " action=" + verdict.action + " sticky_until_ms=" + verdict.stickyUntilMs + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " failures=" + failure.consecutiveFailures + " rotation_failures=" + failure.rotationFailures + " rotation_allowed=" + failure.rotationAllowed);
         if (verdict.canRotate && failure.rotationAllowed) {
             ProxyRuntimeStateStore.logControl("decision=rotation_trigger phase=" + verdict.phase + " failures=" + failure.rotationFailures + " failure_class=" + failureClass + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " probe=" + event.probeKey);

@@ -8,8 +8,8 @@ SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.cpp"
 MACHINE_HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
-TIMELINE = ROOT / "TMessagesProj/jni/tgnet/MtProxyStartupTimeline.cpp"
-TIMELINE_HEADER = ROOT / "TMessagesProj/jni/tgnet/MtProxyStartupTimeline.h"
+TIMELINE = ROOT / "TMessagesProj/jni/mtproxy/MtProxyStartupTimeline.cpp"
+TIMELINE_HEADER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyStartupTimeline.h"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 
@@ -62,7 +62,7 @@ def main() -> int:
     require("bool registered" in machine_header, "ConnectionSocketStateMachine must track successful epoll registration explicitly", failures)
     require("bool adjustWriteAfterPreTcpGate" in machine_header, "ConnectionSocketStateMachine must track writes queued before live epoll", failures)
     require("MtProxyStartupTimeline startupTimeline" in machine_header, "ConnectionSocketStateMachine must own a single typed MTProxy startup timeline", failures)
-    require('#include "MtProxyStartupTimeline.h"' in machine_header, "ConnectionSocketStateMachine must include the typed MTProxy startup timeline helper", failures)
+    require('#include "mtproxy/MtProxyStartupTimeline.h"' in machine_header, "ConnectionSocketStateMachine must include the typed MTProxy startup timeline helper", failures)
     require("bool tcpConnectAttemptStarted" not in machine_header, "real TCP timing must move out of DiagnosticsSubstate into MtProxyStartupTimeline", failures)
     require("int64_t tcpConnectStartTimeMs" not in machine_header, "raw TCP start timestamp must not live beside diagnostics after timeline extraction", failures)
     require("int64_t tcpConnectDeadlineMs" not in machine_header, "raw TCP deadline must not live beside diagnostics after timeline extraction", failures)
@@ -74,7 +74,7 @@ def main() -> int:
     require("#define tcpConnectStartTimeMs" not in socket, "ConnectionSocket must not alias a raw TCP start timestamp after timeline extraction", failures)
     require("std::string currentMtProxyAdmissionKey" in machine_header, "ConnectionSocketStateMachine must keep canonical FakeTLS admission identity separate from the mutable lease key", failures)
     require('std::string proxyCheckDiagnostic = "connection_not_started"' in machine_header, "ConnectionSocketStateMachine diagnostic default must not be tcp_not_connected before socket_connect_start", failures)
-    require("tgnet/MtProxyStartupTimeline.cpp" in cmake, "tgnet CMake target must compile MtProxyStartupTimeline.cpp", failures)
+    require("mtproxy/MtProxyStartupTimeline.cpp" in cmake, "mtproxy_core CMake target must compile MtProxyStartupTimeline.cpp", failures)
     for token in (
         "enum class MtProxyStartupPhase",
         "AdmissionQueue",
@@ -656,10 +656,51 @@ def main() -> int:
         failures,
     )
     terminal_body = method_body(socket, "std::string ConnectionSocket::deriveMtProxyTerminalDiagnostic", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    terminal_module = (ROOT / "TMessagesProj/jni/mtproxy/MtProxyTerminalDiagnostic.cpp").read_text(encoding="utf-8")
     require(
-        "startupTimeline.terminalDiagnostic" in terminal_body
-        and '"tcp_not_connected"' not in terminal_body,
-        "closeSocket must derive terminal diagnostics from real DNS/TCP milestones owned by MtProxyStartupTimeline",
+        "MtProxyPhase::deriveTerminalDiagnostic(terminalInput)" in terminal_body
+        and "input.timeline->terminalDiagnostic" in terminal_module
+        and '"tcp_not_connected"' not in terminal_body
+        and '"tcp_not_connected"' not in terminal_module,
+        "closeSocket must derive terminal diagnostics via the module engine from real DNS/TCP milestones owned by MtProxyStartupTimeline",
+        failures,
+    )
+    require(
+        "isPreIoTerminalVerdict(current.c_str())" in terminal_module,
+        "MtProxyPhase::deriveTerminalDiagnostic must preserve pre-I/O terminal verdicts via the shared "
+        "isPreIoTerminalVerdict contract helper, not a local string list",
+        failures,
+    )
+    close_pipeline = method_body(socket, "void ConnectionSocket::closeSocket", "void ConnectionSocket::onEvent")
+    close_anchor_chains = (
+        [f"[close-step {step}/8]" for step in range(1, 9)],
+        # Semantic order constraints the steps encode: resolve the diagnostic
+        # before logging/publishing, record the endpoint failure before the
+        # probe lease release, detach before teardown, notify last.
+        [
+            "std::string terminalDiagnostic = deriveMtProxyTerminalDiagnostic(reason, error);",
+            "mtproxy_disconnect reason=",
+            "close_diagnostic phase=",
+            "releaseMtProxyProbeLease();",
+            "detachConnection(this);",
+            'setTransportState(TransportState::Idle, "closeSocket_cleanup");',
+            "onDisconnected(reason, error);",
+        ],
+    )
+    for chain in close_anchor_chains:
+        positions = [close_pipeline.find(anchor) for anchor in chain]
+        require(
+            all(position >= 0 for position in positions)
+            and positions == sorted(positions),
+            "closeSocket must keep its documented 8-step pipeline order: resolve diagnostic before "
+            "logging/publishing, record the endpoint failure before releasing the probe lease, and "
+            "call onDisconnected last",
+            failures,
+        )
+    require(
+        close_pipeline.rstrip().endswith("onDisconnected(reason, error);\n}"),
+        "onDisconnected must be the final statement of closeSocket (the Connection layer reads "
+        "the resolved diagnostic and the suggested reconnect hold from this object)",
         failures,
     )
     check_timeout_body = method_body(socket, "bool ConnectionSocket::checkTimeout", "bool ConnectionSocket::hasTlsHashMismatch")
@@ -680,14 +721,20 @@ def main() -> int:
         failures,
     )
     local_phase_body = method_body(socket, "bool ConnectionSocket::mtProxyDiagnosticIsLocalSchedulerTimeout", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    classification = (ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h").read_text(encoding="utf-8")
+    local_generated_start = classification.find("inline bool isLocalSchedulerTimeout")
+    local_generated = classification[local_generated_start:classification.find("\n}", local_generated_start)]
     require(
-        '"connection_not_started"' in local_phase_body
-        and '"admission_timeout"' in local_phase_body
-        and '"tcp_connect_gate_timeout"' in local_phase_body
-        and '"endpoint_cooldown_timeout"' in local_phase_body
-        and '"dns_coalesce_timeout"' in local_phase_body
-        and '"tcp_not_connected"' not in local_phase_body,
-        "native local scheduler timeout helper must exclude real TCP failures",
+        "MtProxyPhase::isLocalSchedulerTimeout(diagnostic)" in local_phase_body
+        and local_generated_start >= 0
+        and '"connection_not_started"' in local_generated
+        and '"admission_timeout"' in local_generated
+        and '"tcp_connect_gate_timeout"' in local_generated
+        and '"endpoint_cooldown_timeout"' in local_generated
+        and '"dns_coalesce_timeout"' in local_generated
+        and '"tcp_not_connected"' not in local_generated
+        and '"mtproxy_probe_wait_timeout"' not in local_generated,
+        "native local scheduler timeout helper must delegate to the generated classification, which excludes real TCP failures and probe-wait timeouts",
         failures,
     )
     queue_write_body = method_body(socket, "void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend", "void ConnectionSocket::adjustWriteOp")

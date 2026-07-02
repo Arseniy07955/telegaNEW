@@ -27,18 +27,18 @@ def block(source: str, start: str, end: str) -> str:
 
 def main() -> int:
     failures: list[str] = []
-    adaptive_h = read(TGNET / "MtProxyAdaptivePolicy.h")
-    adaptive_cpp = read(TGNET / "MtProxyAdaptivePolicy.cpp")
-    coordinator_h = read(TGNET / "MtProxyProbeCoordinator.h")
-    coordinator_cpp = read(TGNET / "MtProxyProbeCoordinator.cpp")
-    recovery_h = read(TGNET / "MtProxyRecoveryPolicy.h") if (TGNET / "MtProxyRecoveryPolicy.h").exists() else ""
-    recovery_cpp = read(TGNET / "MtProxyRecoveryPolicy.cpp") if (TGNET / "MtProxyRecoveryPolicy.cpp").exists() else ""
+    adaptive_h = read(TGNET.parent / "mtproxy/MtProxyAdaptivePolicy.h")
+    adaptive_cpp = read(TGNET.parent / "mtproxy/MtProxyAdaptivePolicy.cpp")
+    coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
+    coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
+    recovery_h = read(TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.h") if (TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.h").exists() else ""
+    recovery_cpp = read(TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.cpp") if (TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.cpp").exists() else ""
     socket = read(TGNET / "ConnectionSocket.cpp")
-    secret_domain_cpp = read(TGNET / "MtProxySecretDomain.cpp")
-    server_flight_parser = read(TGNET / "MtProxyServerFlightParser.cpp")
-    server_flight_parser_h = read(TGNET / "MtProxyServerFlightParser.h")
+    secret_domain_cpp = read(TGNET.parent / "mtproxy/MtProxySecretDomain.cpp")
+    server_flight_parser = read(TGNET.parent / "mtproxy/MtProxyServerFlightParser.cpp")
+    server_flight_parser_h = read(TGNET.parent / "mtproxy/MtProxyServerFlightParser.h")
     state_machine = read(TGNET / "ConnectionSocketStateMachine.h")
-    options_h = read(TGNET / "MtProxyOptions.h")
+    options_h = read(TGNET.parent / "mtproxy/MtProxyOptions.h")
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
     reducer = read(MESSENGER / "ProxyEventReducer.java")
@@ -190,13 +190,13 @@ def main() -> int:
         failures,
     )
 
-    classify_policy = block(phase_policy, "private static PhaseInfo classify", "private static PhaseInfo live")
-    exhausted_policy = block(classify_policy, "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:", "case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:")
+    from mtproxy_phase_contract import java_policy
     require(
-        "return failure(KeyScope.EXACT, true, true)" in exhausted_policy
+        java_policy("handshake_profiles_exhausted") == ("failure", "exact", True, True)
+        and "ProxyPhaseClassification.isKnownJavaPhase" in phase_policy
         and "terminalExactConfig" in phase_policy
         and "terminalExactConfigVerdict" in runtime + reducer
-        and "terminalExactFailure()" not in exhausted_policy,
+        and "HANDSHAKE_PROFILES_EXHAUSTED" not in block(phase_policy, "private static boolean isTerminalExactConfigPhase", "private static String layerForPhase"),
         "handshake_profiles_exhausted must use normal recovery backoff/rotation hysteresis, not terminal exact config",
         failures,
     )

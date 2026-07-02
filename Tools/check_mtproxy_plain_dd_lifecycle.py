@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
+CLASSIFICATION_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
@@ -31,12 +32,15 @@ def main() -> None:
     strings_ru = STRINGS_RU.read_text(encoding="utf-8")
     analyzer = ANALYZER.read_text(encoding="utf-8")
 
+    classification_h = CLASSIFICATION_H.read_text(encoding="utf-8")
+    backoff_body = slice_between(classification_h, "inline bool needsReconnectBackoff", "inline bool isObservationFacadePhase")
     require(
-        'strcmp(diagnostic, "mtproxy_packet_sent_no_response") == 0' in connection_cpp,
+        "MtProxyPhase::needsReconnectBackoff(diagnostic)" in connection_cpp
+        and 'strcmp(phase, "mtproxy_packet_sent_no_response") == 0' in backoff_body,
         "dd/plain MTProxy no-response failures must use reconnect backoff",
     )
     require(
-        'strcmp(diagnostic, "tcp_connected_no_pong") == 0' in connection_cpp,
+        'strcmp(phase, "tcp_connected_no_pong") == 0' in backoff_body,
         "post-TCP MTProxy no-response failures must use reconnect backoff",
     )
 

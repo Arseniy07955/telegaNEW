@@ -36,26 +36,10 @@ public final class ProxyPhasePolicy {
     }
 
     public static boolean isPunitiveFailure(String phase) {
-        switch (ProxyCheckDiagnostics.normalize(phase)) {
-            case ProxyCheckDiagnostics.TCP_NOT_CONNECTED:
-            case ProxyCheckDiagnostics.TCP_CONNECTION_REFUSED:
-            case ProxyCheckDiagnostics.TCP_CONNECT_TIMEOUT:
-            case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
-            case ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT:
-            case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
-            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
-            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
-            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
-            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
-            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
-            case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
-            case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
-            case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
-            case ProxyCheckDiagnostics.DROPPED_EARLY_AFTER_APPDATA:
-                return true;
-            default:
-                return false;
-        }
+        // The phase set is generated from Tools/mtproxy_phase_contract.py
+        // (reconnect_backoff=True) into ProxyPhaseClassification.java, matching
+        // the native reconnect backoff classification exactly.
+        return ProxyPhaseClassification.needsReconnectBackoff(ProxyCheckDiagnostics.normalize(phase));
     }
 
     public static boolean isLocalOrLiveNonPunitive(String phase) {
@@ -236,111 +220,38 @@ public final class ProxyPhasePolicy {
     }
 
     private static PhaseInfo classify(String phase) {
-        // Coordinator-owned exact phases: mtproxy_probe_wait, mtproxy_probe_wait_timeout,
-        // faketls_server_hello_wait_timeout, server_closed_after_client_hello,
-        // unrecognized_response_after_client_hello, and bounded FakeTLS terminals.
-        switch (ProxyCheckDiagnostics.normalize(phase)) {
-            case ProxyCheckDiagnostics.OK:
-            case ProxyCheckDiagnostics.CHECKING:
-            case ProxyCheckDiagnostics.CANCELLED:
-            case ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE:
-            case ProxyCheckDiagnostics.IGNORED_CANCELLED_GENERATION:
-                return NEUTRAL_NONE;
+        // The classification table is generated from Tools/mtproxy_phase_contract.py
+        // into ProxyPhaseClassification.java (kind/java_key_scope/java_backoff/
+        // rotation fields). This method only maps the generated table onto
+        // PhaseInfo; it makes no phase-level decisions of its own.
+        String normalized = ProxyCheckDiagnostics.normalize(phase);
+        if (!ProxyPhaseClassification.isKnownJavaPhase(normalized)) {
+            // Historical default: an unknown phase is a backoff-eligible exact
+            // failure (pace retries, do not rotate, cannot attribute).
+            return failure(KeyScope.EXACT, true, false);
+        }
+        int kind = ProxyPhaseClassification.phaseKind(normalized);
+        if (kind == ProxyPhaseClassification.KIND_NEUTRAL) {
+            return NEUTRAL_NONE;
+        }
+        KeyScope scope = keyScopeFromClassification(ProxyPhaseClassification.phaseKeyScope(normalized));
+        if (kind == ProxyPhaseClassification.KIND_LIVE) {
+            return live(scope);
+        }
+        if (kind == ProxyPhaseClassification.KIND_SUCCESS) {
+            return success(scope);
+        }
+        return failure(scope, ProxyPhaseClassification.javaBackoff(normalized), ProxyPhaseClassification.javaRotate(normalized));
+    }
 
-            case ProxyCheckDiagnostics.ADMISSION_QUEUE:
-            case ProxyCheckDiagnostics.ENDPOINT_COOLDOWN:
-            case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT:
-            case ProxyCheckDiagnostics.PHASE_ADAPTIVE_RECIPE:
-            case ProxyCheckDiagnostics.SECRET_DOMAIN_SANITIZED:
-            case ProxyCheckDiagnostics.CONNECT_START:
-            case ProxyCheckDiagnostics.CLIENT_HELLO_SENT:
-            case ProxyCheckDiagnostics.ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
-            case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_OK:
-            case ProxyCheckDiagnostics.ON_CONNECTED:
-            case ProxyCheckDiagnostics.FIRST_TLS_APP_SENT:
-                return live(KeyScope.EXACT);
-
-            case ProxyCheckDiagnostics.TCP_CONNECT_GATE:
-            case ProxyCheckDiagnostics.DNS_COALESCE_WAIT:
-            case ProxyCheckDiagnostics.DNS_CACHE_HIT:
-            case ProxyCheckDiagnostics.DNS_CACHE_STORE:
-            case ProxyCheckDiagnostics.HOST_RESOLVE_START:
-            case ProxyCheckDiagnostics.SOCKET_CONNECT_START:
-            case ProxyCheckDiagnostics.SOCKET_CONNECTED:
-            case ProxyCheckDiagnostics.WAITING_TCP:
-                return live(KeyScope.NETWORK);
-
-            case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:
-                return live(KeyScope.EXACT);
-
-            case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:
-                return success(KeyScope.EXACT);
-
-            case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:
-                return success(KeyScope.EXACT);
-
-            case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:
-                return failure(KeyScope.NONE, false, false);
-
-            case ProxyCheckDiagnostics.ADMISSION_TIMEOUT:
-            case ProxyCheckDiagnostics.ENDPOINT_COOLDOWN_TIMEOUT:
-            case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT_TIMEOUT:
-                return failure(KeyScope.EXACT, false, false);
-
-            case ProxyCheckDiagnostics.TCP_CONNECT_GATE_TIMEOUT:
-            case ProxyCheckDiagnostics.DNS_COALESCE_TIMEOUT:
-            case ProxyCheckDiagnostics.DNS_NEGATIVE_CACHE_HIT:
-            case ProxyCheckDiagnostics.DNS_BLOCKED_ZERO_ADDRESS:
-                return failure(KeyScope.NETWORK, false, false);
-
-            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
-            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
-                return failure(KeyScope.EXACT, true, true);
-
-            case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
-            case ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT:
-            case ProxyCheckDiagnostics.TCP_NOT_CONNECTED:
-            case ProxyCheckDiagnostics.TCP_CONNECTION_REFUSED:
-            case ProxyCheckDiagnostics.TCP_CONNECT_TIMEOUT:
-            case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
-            case ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED:
-            case ProxyCheckDiagnostics.DROPPED_EARLY_AFTER_APPDATA:
-                return failure(KeyScope.NETWORK, true, true);
-
-            case ProxyCheckDiagnostics.TRUE_CLIENT_HELLO_TIMEOUT:
-            case ProxyCheckDiagnostics.FAKETLS_SERVER_HELLO_WAIT_TIMEOUT:
-            case ProxyCheckDiagnostics.SERVER_CLOSED_AFTER_CLIENT_HELLO:
-            case ProxyCheckDiagnostics.CLIENT_HELLO_SENT_NO_SERVER_HELLO:
-            case ProxyCheckDiagnostics.TLS_ALERT_AFTER_CLIENT_HELLO:
-            case ProxyCheckDiagnostics.SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
-            case ProxyCheckDiagnostics.UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
-            case ProxyCheckDiagnostics.UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
-            case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
-            case ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED:
-                return failure(KeyScope.EXACT, false, false);
-
-            case ProxyCheckDiagnostics.FAKETLS_NOT_MTPROXY_RESPONSE:
-            case ProxyCheckDiagnostics.FAKETLS_NO_SERVER_HELLO_TERMINAL:
-            case ProxyCheckDiagnostics.FAKETLS_SERVER_CLOSED_TERMINAL:
-            case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
-                return failure(KeyScope.EXACT, true, true);
-
-            case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
-            case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
-            case ProxyCheckDiagnostics.CONNECTING_TIMEOUT:
-                return failure(KeyScope.EXACT, true, true);
-
-            case ProxyCheckDiagnostics.UNKNOWN_FAIL:
-                return failure(KeyScope.EXACT, true, false);
-
-            case ProxyCheckDiagnostics.START_FAILED:
-                return failure(KeyScope.NONE, false, false);
-
-            case ProxyCheckDiagnostics.DROPPED_AFTER_APPDATA:
-                return failure(KeyScope.EXACT, false, false);
-
+    private static KeyScope keyScopeFromClassification(int scope) {
+        switch (scope) {
+            case ProxyPhaseClassification.SCOPE_NONE:
+                return KeyScope.NONE;
+            case ProxyPhaseClassification.SCOPE_NETWORK:
+                return KeyScope.NETWORK;
             default:
-                return failure(KeyScope.EXACT, true, false);
+                return KeyScope.EXACT;
         }
     }
 

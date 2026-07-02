@@ -1128,8 +1128,15 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration) {
+        onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, 0);
+    }
+
+    // Native callback (TgNetWrapper): suggestedHoldMs is the native retry
+    // authority's clock (endpoint cooldown / probe coordinator hold) riding
+    // along with the event, so the Java layer never re-derives hold windows.
+    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration, final int suggestedHoldMs) {
         AndroidUtilities.runOnUIThread(() -> {
-            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration);
+            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
             ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event);
             String normalizedDiagnostic = event.phase;
             if (!shouldNotifyProxyConnectionStage(decision)) {

@@ -557,11 +557,20 @@ public class FileLog {
         });
     }
 
+    private static long lastStreamFlushMs;
+
     private static synchronized void writeLogLineLocked(String level, String message) throws IOException {
         String line = getInstance().dateFormat.format(System.currentTimeMillis()) + " " + level + "/tmessages: " + sanitizeLogMessage(message);
         getInstance().streamWriter.write(line);
         getInstance().streamWriter.write('\n');
-        getInstance().streamWriter.flush();
+        // Per-line flush turns a log burst into one syscall per line and dominated the 30.06
+        // firehose. Errors still hit disk immediately (crash evidence); debug/warning lines ride
+        // the writer buffer and flush at most once per second, so a hard kill loses <=1s of tail.
+        long now = System.currentTimeMillis();
+        if ("E".equals(level) || now - lastStreamFlushMs >= 1000) {
+            getInstance().streamWriter.flush();
+            lastStreamFlushMs = now;
+        }
     }
 
     public static void e(final String message, final Throwable exception) {

@@ -7,12 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
-ENDPOINT_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.h"
-ENDPOINT_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
-ADAPTIVE_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.h"
-ADAPTIVE_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
-HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.h"
-HANDSHAKE_PLAN_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
+ENDPOINT_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.h"
+ENDPOINT_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp"
+ADAPTIVE_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.h"
+ADAPTIVE_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp"
+HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.h"
+HANDSHAKE_PLAN_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.cpp"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
 
@@ -49,7 +49,7 @@ def main() -> int:
         (HANDSHAKE_PLAN_CPP, "MtProxyHandshakePlan.cpp"),
     ):
         require(path.exists(), f"{label} must exist", failures)
-        require(f"tgnet/{label.replace('.h', '.cpp')}" in cmake or label.endswith(".h"), f"{label} implementation must be compiled by tgnet CMake target", failures)
+        require(f"mtproxy/{label.replace('.h', '.cpp')}" in cmake or label.endswith(".h"), f"{label} implementation must be compiled by the mtproxy_core CMake target", failures)
 
     for symbol in (
         "class MtProxyEndpointPolicy",
@@ -113,8 +113,8 @@ def main() -> int:
     ):
         require(call in socket_cpp, f"ConnectionSocket.cpp must delegate through {call}", failures)
 
-    require("#include \"MtProxyEndpointPolicy.h\"" in socket_cpp + socket_h, "ConnectionSocket must include endpoint policy", failures)
-    require("#include \"MtProxyAdaptivePolicy.h\"" in socket_cpp + socket_h, "ConnectionSocket must include adaptive policy", failures)
+    require("#include \"mtproxy/MtProxyEndpointPolicy.h\"" in socket_cpp + socket_h, "ConnectionSocket must include endpoint policy", failures)
+    require("#include \"mtproxy/MtProxyAdaptivePolicy.h\"" in socket_cpp + socket_h, "ConnectionSocket must include adaptive policy", failures)
 
     if failures:
         print("MTProxy policy extraction guard failed:")

@@ -64,9 +64,16 @@ public final class ProxyConnectionEvent {
     public final String networkKey;
     public final String probeKey;
     public final int activationGeneration;
+    // Native retry-authority hold (ms) that arrived with the event; 0 when the
+    // event carries no native clock (Java-origin events, live phases).
+    public final int suggestedHoldMs;
     public final long timestamp;
 
     private ProxyConnectionEvent(String source, Origin origin, int account, String phase, String endpointKey, String networkKey, String probeKey, int activationGeneration, long timestamp) {
+        this(source, origin, account, phase, endpointKey, networkKey, probeKey, activationGeneration, 0, timestamp);
+    }
+
+    private ProxyConnectionEvent(String source, Origin origin, int account, String phase, String endpointKey, String networkKey, String probeKey, int activationGeneration, int suggestedHoldMs, long timestamp) {
         this.source = source;
         this.origin = origin == null ? Origin.ACTIVE_SOCKET : origin;
         this.account = account;
@@ -75,6 +82,7 @@ public final class ProxyConnectionEvent {
         this.networkKey = networkKey == null || networkKey.length() == 0 ? ProxyEndpointKey.networkFromLiveStage(this.endpointKey) : networkKey;
         this.probeKey = probeKey == null ? "" : probeKey;
         this.activationGeneration = activationGeneration;
+        this.suggestedHoldMs = Math.max(0, suggestedHoldMs);
         this.timestamp = timestamp == 0 ? SystemClock.elapsedRealtime() : timestamp;
     }
 
@@ -107,7 +115,11 @@ public final class ProxyConnectionEvent {
     }
 
     public static ProxyConnectionEvent nativeStage(int account, String phase, String endpointKey, String probeKey, String origin, int activationGeneration, long timestamp) {
-        return new ProxyConnectionEvent(SOURCE_NATIVE_STAGE, Origin.fromNative(origin), account, phase, endpointKey, "", probeKey, activationGeneration, timestamp);
+        return nativeStage(account, phase, endpointKey, probeKey, origin, activationGeneration, 0, timestamp);
+    }
+
+    public static ProxyConnectionEvent nativeStage(int account, String phase, String endpointKey, String probeKey, String origin, int activationGeneration, int suggestedHoldMs, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_NATIVE_STAGE, Origin.fromNative(origin), account, phase, endpointKey, "", probeKey, activationGeneration, suggestedHoldMs, timestamp);
     }
 
     public static ProxyConnectionEvent proxyCheck(int account, SharedConfig.ProxyInfo proxyInfo, String phase) {

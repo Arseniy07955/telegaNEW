@@ -131,13 +131,13 @@ def verify_runtime_contract(failures: list[str]) -> None:
 def main() -> int:
     failures: list[str] = []
     cmake = read(JNI / "CMakeLists.txt")
-    coordinator_h = read(TGNET / "MtProxyProbeCoordinator.h")
-    coordinator_cpp = read(TGNET / "MtProxyProbeCoordinator.cpp")
+    coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
+    coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
     socket_h = read(TGNET / "ConnectionSocket.h")
     socket_cpp = read(TGNET / "ConnectionSocket.cpp")
-    endpoint_policy = read(TGNET / "MtProxyEndpointPolicy.cpp")
-    timeline_h = read(TGNET / "MtProxyStartupTimeline.h")
-    timeline_cpp = read(TGNET / "MtProxyStartupTimeline.cpp")
+    endpoint_policy = read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.cpp")
+    timeline_h = read(TGNET.parent / "mtproxy/MtProxyStartupTimeline.h")
+    timeline_cpp = read(TGNET.parent / "mtproxy/MtProxyStartupTimeline.cpp")
     diagnostics = read(MESSENGER / "ProxyCheckDiagnostics.java")
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
@@ -150,7 +150,7 @@ def main() -> int:
     analyzer = read(TOOLS / "analyze_mtproxy_markers.py")
     verifier = read(RUNTIME_LOG_VERIFIER)
 
-    require("tgnet/MtProxyProbeCoordinator.cpp" in cmake, "CMake must compile MtProxyProbeCoordinator.cpp", failures)
+    require("mtproxy/MtProxyProbeCoordinator.cpp" in cmake, "CMake must compile MtProxyProbeCoordinator.cpp", failures)
     require("class MtProxyProbeCoordinator" in coordinator_h, "coordinator header must declare MtProxyProbeCoordinator", failures)
     require("enum class DecisionKind" in coordinator_h and "StartOwner" in coordinator_h and "JoinExisting" in coordinator_h and "UseWorkingRecipe" in coordinator_h and "ProfilesExhaustedBackoff" in coordinator_h and "HandshakeBudgetBackoff" in coordinator_h, "coordinator must expose owner/join/working/exhausted-budget-backoff decisions", failures)
     require("struct ProbeKey" in coordinator_h and "secret_hash" in coordinator_cpp, "coordinator must key exact config by host:port + secret_hash + SNI", failures)
@@ -164,6 +164,19 @@ def main() -> int:
     require("ProbeStatus::PROFILES_EXHAUSTED" in coordinator_cpp and "ProbeStatus::UNSUPPORTED" not in coordinator_cpp, "coordinator must model recipe exhaustion as recovery state, not unsupported terminal state", failures)
     require("state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants)" in coordinator_cpp, "expired profile-exhaustion hold must reset the recipe cursor for a fresh recovery cycle", failures)
     require("RecipeCursor" in coordinator_cpp and "workingRecipe" in coordinator_cpp and "lastRecipeDiagnostic" in coordinator_cpp, "recipe ladder state must live in coordinator as a cursor and full working recipe", failures)
+    complete_success_start = coordinator_cpp.find("void MtProxyProbeCoordinator::completeSuccess")
+    complete_success_body = coordinator_cpp[
+        complete_success_start:coordinator_cpp.find("\n}", complete_success_start)
+    ]
+    require(
+        "entry.second.networkEndpointKey != probeKey.networkEndpointKey" in complete_success_body
+        and "sibling.status != ProbeStatus::HANDSHAKE_BUDGET_BACKOFF" in complete_success_body
+        and "sibling.status != ProbeStatus::PROFILES_EXHAUSTED" in complete_success_body
+        and "clearFakeTlsHandshakeBudget(sibling)" in complete_success_body,
+        "a real success must lift terminal holds from sibling probe keys of the same proxy server "
+        "(otherwise a budget-held SNI variant waits out a stale verdict while a sibling already works)",
+        failures,
+    )
 
     require("MtProxyProbeCoordinator.h" in socket_cpp and "mtProxyProbeBeginOrJoin" in socket_cpp, "ConnectionSocket must delegate probe admission to coordinator", failures)
     require("MtProxyStartupPhase::ProbeWait" in timeline_h and "mtproxy_probe_wait" in timeline_cpp, "startup timeline must model probe wait as a pre-TCP local wait", failures)
@@ -260,9 +273,10 @@ def main() -> int:
         "a joiner whose probe-wait budget expires must leave mtproxy_probe_wait and start a new owner attempt",
         failures,
     )
+    from mtproxy_phase_contract import java_policy
     require(
         "MTPROXY_PROBE_WAIT_TIMEOUT" in phase_policy
-        and "return failure(KeyScope.EXACT, false, false)" in phase_policy[phase_policy.find("case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT_TIMEOUT:"):],
+        and java_policy("mtproxy_probe_wait_timeout") == ("failure", "exact", False, False),
         "mtproxy_probe_wait_timeout must remain a visible exact sticky failure, not a punitive rotation trigger",
         failures,
     )
@@ -335,7 +349,7 @@ def main() -> int:
         failures,
     )
     # --- Commit 3: admission_queue JNI out of lock + probeKey-only Java cancel ---
-    scheduler_cpp = read(TGNET / "MtProxyHandshakeScheduler.cpp")
+    scheduler_cpp = read(TGNET.parent / "mtproxy/MtProxyHandshakeScheduler.cpp")
     admq_idx = socket_cpp.find('publishProxyConnectionStage("admission_queue")')
     admit_idx = socket_cpp.find("mtProxyHandshakeSchedulerAdmit(request)")
     require(
