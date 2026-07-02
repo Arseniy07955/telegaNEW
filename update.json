@@ -1,6 +1,6 @@
 {
   "version_code": 6918,
   "version_name": "12.8.3",
-  "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork%2FTelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Отключено логирование по умолчанию"
+  "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/TelegaNEW-standalone-arm64-v8a.apk",
+  "changelog": "• Исправлены ссылки на скачивание обновлений\n• JA4 / TLS-профиль по умолчанию: Auto rotate\n• Улучшена стабильность прокси-соединений"
 }
