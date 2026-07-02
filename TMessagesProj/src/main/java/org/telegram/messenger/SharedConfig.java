@@ -1686,7 +1686,7 @@ public class SharedConfig {
     }
 
     private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v3", false)) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v5", false)) {
             return;
         }
         // Seed: 0185e6912508d904febdb6df3e60cb49
@@ -1697,21 +1697,27 @@ public class SharedConfig {
         ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275");
         ProxyInfo info3 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd0185e6912508d904febdb6df3e60cb49");
 
+        proxyList.clear();
+        proxyList.add(0, info1);
         proxyList.add(0, info3);
         proxyList.add(0, info2);
-        proxyList.add(0, info1);
 
-        currentProxy = info1;
+        currentProxy = info2;
 
         preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v3", true)
+                .putBoolean("proxies_za_sto_applied_v5", true)
                 .putBoolean("proxy_enabled", true)
-                .putString("proxy_ip", info1.address)
-                .putInt("proxy_port", info1.port)
-                .putString("proxy_user", info1.username)
-                .putString("proxy_pass", info1.password)
-                .putString("proxy_secret", info1.secret)
+                .putString("proxy_ip", info2.address)
+                .putInt("proxy_port", info2.port)
+                .putString("proxy_user", info2.username)
+                .putString("proxy_pass", info2.password)
+                .putString("proxy_secret", info2.secret)
                 .apply();
+
+        // Trigger immediate application to native layer
+        AndroidUtilities.runOnUIThread(() -> {
+            ConnectionsManager.setProxySettings(true, info2.address, info2.port, info2.username, info2.password, info2.secret);
+        }, 1000);
 
         saveProxyList();
     }
