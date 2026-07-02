@@ -233,7 +233,7 @@ jobs:
           gh release create "$TAG" dist-release/*.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TITLE" \
-            --notes "Standalone APK build from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt. Commit: ${GITHUB_SHA}." \
+            --notes "Standalone APK build from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt }}. Commit: ${GITHUB_SHA}." \
             --prerelease \
             --target "$GITHUB_SHA"
           {
