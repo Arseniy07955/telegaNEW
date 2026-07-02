@@ -233,7 +233,7 @@ jobs:
           gh release create "$TAG" dist-release/*.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TITLE" \
-            --notes "Standalone APK build from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt }}. Commit: ${GITHUB_SHA}." \
+            --notes "Standalone APK build from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt. Commit: ${GITHUB_SHA}." \
             --prerelease \
             --target "$GITHUB_SHA"
           {
@@ -244,3 +244,16 @@ jobs:
               echo "- [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name})"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to Beget S3 via SFTP
+        if: env.S3_PASS != ''
+        uses: appleboy/scp-action@master
+        env:
+          S3_PASS: ${{ secrets.S3_PASS }}
+        with:
+          host: ${{ secrets.S3_HOST }}
+          username: ${{ secrets.S3_USER }}
+          password: ${{ secrets.S3_PASS }}
+          source: "dist-release/*.apk"
+          target: "88918b3137bc-openhearted-zohra/myfork/"
+          strip_components: 1
