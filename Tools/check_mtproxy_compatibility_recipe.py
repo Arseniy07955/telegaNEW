@@ -3,20 +3,20 @@ from pathlib import Path
 import re
 import sys
 
-from mtproxy_phase_contract import java_phase_names, native_phase_names
+from mtproxy_phase_contract import java_phase_names, java_policy, native_phase_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
-ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
-ENDPOINT_POLICY_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.h"
-PROBE_COORDINATOR = ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.cpp"
-PROBE_COORDINATOR_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.h"
-ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
-ADAPTIVE_POLICY_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.h"
-SECRET_DOMAIN = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.cpp"
-SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.h"
-SERVER_FLIGHT_PARSER = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.cpp"
+ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp"
+ENDPOINT_POLICY_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.h"
+PROBE_COORDINATOR = ROOT / "TMessagesProj/jni/mtproxy/MtProxyProbeCoordinator.cpp"
+PROBE_COORDINATOR_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyProbeCoordinator.h"
+ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp"
+ADAPTIVE_POLICY_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.h"
+SECRET_DOMAIN = ROOT / "TMessagesProj/jni/mtproxy/MtProxySecretDomain.cpp"
+SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyServerFlightParser.h"
+SERVER_FLIGHT_PARSER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyServerFlightParser.cpp"
 STATE_MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 PHASE_POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java"
@@ -29,11 +29,12 @@ ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 CHECK_ALL = ROOT / "Tools/check_mtproxy_all.py"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
-NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
-HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.h"
-HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
-RECOVERY_POLICY_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.h"
-RECOVERY_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp"
+NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
+HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.h"
+HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.cpp"
+RECOVERY_POLICY_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.h"
+RECOVERY_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp"
+ENDPOINT_RECORDER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp"
 
 RECIPE_FAILURES = {
     "true_client_hello_timeout",
@@ -136,6 +137,8 @@ def main() -> int:
     handshake_plan = read(HANDSHAKE_PLAN) if HANDSHAKE_PLAN.exists() else ""
     recovery_policy_h = read(RECOVERY_POLICY_H) if RECOVERY_POLICY_H.exists() else ""
     recovery_policy = read(RECOVERY_POLICY) if RECOVERY_POLICY.exists() else ""
+    endpoint_recorder = read(ENDPOINT_RECORDER) if ENDPOINT_RECORDER.exists() else ""
+    recorder_failure = method_body(endpoint_recorder, "void MtProxyEndpointRecorder::recordFailure")
 
     for phase in RECIPE_FAILURES | {"handshake_profiles_exhausted", "secret_parse_invalid_domain_control_char", "secret_parse_invalid_domain"}:
         require(phase in java_phase_names(), f"phase contract must expose Java phase {phase}", failures)
@@ -219,6 +222,19 @@ def main() -> int:
         "adaptive policy must expose nextCursorForRecovery(...) as the typed cursor movement API",
         failures,
     )
+    # Defect B: a proxy that returned ZERO bytes after ClientHello is silent/unreachable,
+    # not incompatible. The recipe ladder and the FakeTLS terminal budget must not advance
+    # on it; endpoint cooldown paces the retry with the same recipe. Recipe progression is
+    # reserved for failures with actual response bytes.
+    require(
+        "context.responseBytes = bytesRead" in socket
+        and "bool silentAfterClientHello = context.responseBytes == 0" in recorder_failure
+        and "evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello" in recorder_failure
+        and "&& !silentAfterClientHello" in recorder_failure
+        and "silent_after_client_hello" in recorder_failure,
+        "zero-bytes-after-ClientHello failures must hold the recipe ladder instead of advancing it",
+        failures,
+    )
     recipe_body = block(probe_coordinator, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe")
     adaptive_recipe_body = block(adaptive_policy, "bool MtProxyAdaptivePolicy::failureNeedsRecipe", "int32_t MtProxyAdaptivePolicy::compatibilityTlsProfile")
     next_cursor_body = block(adaptive_policy, "bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor", "static int32_t greaseProbeTlsProfile")
@@ -252,9 +268,9 @@ def main() -> int:
         failures,
     )
     require(
-        has_phase(socket, "handshake_profiles_exhausted", native_constants)
-        and "recipe_exhausted" in socket,
-        "ConnectionSocket must publish handshake_profiles_exhausted after recipe exhaustion",
+        has_phase(endpoint_recorder, "handshake_profiles_exhausted", native_constants)
+        and "recipe_exhausted" in endpoint_recorder,
+        "MtProxyEndpointRecorder must publish handshake_profiles_exhausted after recipe exhaustion",
         failures,
     )
     require(
@@ -313,8 +329,8 @@ def main() -> int:
         failures,
     )
     require(
-        "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in socket,
-        "ConnectionSocket must use recovery action before entering the recipe-failure path",
+        "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in recorder_failure,
+        "MtProxyEndpointRecorder must use recovery action before entering the recipe-failure path",
         failures,
     )
     require(
@@ -389,14 +405,14 @@ def main() -> int:
         failures,
     )
     require(
-        "recipe_failed" in socket
-        and "next_family" in socket
-        and "next_sni_variant" in socket
-        and "next_parser_variant" in socket
-        and "next_classic_variant" in socket
-        and "recipe_id=" in socket
+        "recipe_failed" in endpoint_recorder
+        and "next_family" in endpoint_recorder
+        and "next_sni_variant" in endpoint_recorder
+        and "next_parser_variant" in endpoint_recorder
+        and "next_classic_variant" in endpoint_recorder
+        and "recipe_id=" in endpoint_recorder
         and "server_hello_parser=" in socket,
-        "ConnectionSocket must log each recipe failure with the current recipe identity and next cursor",
+        "MtProxyEndpointRecorder must log each recipe failure with the current recipe identity and next cursor",
         failures,
     )
     require(
@@ -434,38 +450,37 @@ def main() -> int:
         failures,
     )
 
-    recipe_phases = block(phase_policy, "private static PhaseInfo classify", "private static PhaseInfo live")
     for phase in RECIPE_FAILURES:
-        require(phase.upper() in recipe_phases, f"Java phase policy must classify {phase}", failures)
+        require(phase in java_phase_names(), f"Java phase policy must classify {phase}", failures)
     require(
-        "TLS_ALERT_AFTER_CLIENT_HELLO" in recipe_phases
-        and "failure(KeyScope.EXACT, false, false)" in recipe_phases,
+        java_policy("tls_alert_after_client_hello") == ("failure", "exact", False, False)
+        and "ProxyPhaseClassification.isKnownJavaPhase" in phase_policy,
         "recipe failures must be visible but must not directly backoff/rotate the endpoint in Java",
         failures,
     )
     require(
-        "HANDSHAKE_PROFILES_EXHAUSTED" in recipe_phases
-        and "return failure(KeyScope.EXACT, true, true)" in recipe_phases
+        java_policy("handshake_profiles_exhausted") == ("failure", "exact", True, True)
         and "terminalExactConfig" in phase_policy,
         "handshake_profiles_exhausted must be a normal exact recovery failure with rotation hysteresis",
         failures,
     )
     require(
         "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in method_body(phase_policy, "public static boolean isOneShotTerminal")
-        and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in method_body(phase_policy, "private static boolean isTerminalExactConfigPhase")
-        and "terminalExactFailure()" not in block(recipe_phases, "HANDSHAKE_PROFILES_EXHAUSTED", "MTPROXY_PACKET_SENT_NO_RESPONSE"),
+        and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in method_body(phase_policy, "private static boolean isTerminalExactConfigPhase"),
         "handshake_profiles_exhausted must not become terminalExactConfig or isOneShotTerminal in Java",
         failures,
     )
     require(
-        "UNSUPPORTED_FOR_CURRENT_CLIENT" not in recipe_phases
-        or "terminalExactFailure()" not in block(recipe_phases, "UNSUPPORTED_FOR_CURRENT_CLIENT", "MTPROXY_PACKET_SENT_NO_RESPONSE"),
+        "unsupported_for_current_client" not in java_phase_names()
+        or java_policy("unsupported_for_current_client")[0] != "neutral",
         "unsupported_for_current_client must not remain a terminal exact-config Java verdict",
         failures,
     )
+    classification = read(ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h")
+    generated_backoff = block(classification, "inline bool needsReconnectBackoff", "inline bool isObservationFacadePhase")
     require(
-        not has_phase(block(connection, "static bool mtProxyDiagnosticNeedsReconnectBackoff", "static uint32_t mtProxyReconnectBackoffBaseMs"), "tls_alert_after_client_hello", native_constants)
-        and has_phase(connection, "handshake_profiles_exhausted", native_constants),
+        not has_phase(generated_backoff, "tls_alert_after_client_hello", native_constants)
+        and has_phase(generated_backoff, "handshake_profiles_exhausted", native_constants),
         "connection reconnect backoff must wait for recipe exhaustion before endpoint-level backoff",
         failures,
     )
@@ -477,15 +492,9 @@ def main() -> int:
         "existing Java endpoint health policy must reserve long exact-endpoint hold/backoff for invalid-secret phases",
         failures,
     )
-    invalid_secret_policy = block(
-        recipe_phases,
-        "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:",
-        "case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:",
-    )
     require(
-        "SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR" in invalid_secret_policy
-        and "SECRET_PARSE_INVALID_DOMAIN" in invalid_secret_policy
-        and "return failure(KeyScope.EXACT, true, true)" in invalid_secret_policy,
+        java_policy("secret_parse_invalid_domain_control_char") == ("failure", "exact", True, True)
+        and java_policy("secret_parse_invalid_domain") == ("failure", "exact", True, True),
         "invalid secret-domain phases must backoff and rotate/quarantine the exact proxy config in Java",
         failures,
     )

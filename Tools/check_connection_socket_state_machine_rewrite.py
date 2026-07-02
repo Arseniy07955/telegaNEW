@@ -10,6 +10,7 @@ SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.cpp"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
+ENDPOINT_RECORDER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp"
 
 
 def read(path: Path) -> str:
@@ -37,8 +38,10 @@ def main() -> int:
     socket_h = read(SOCKET_H)
     machine_cpp = read(MACHINE_CPP)
     machine_h = read(MACHINE_H)
+    endpoint_recorder_cpp = read(ENDPOINT_RECORDER_CPP)
     cmake = read(CMAKE)
     private = private_section(socket_h)
+    marker_source = socket_cpp + machine_cpp + endpoint_recorder_cpp
 
     if not MACHINE_H.exists() or not MACHINE_CPP.exists():
         fail("ConnectionSocketStateMachine.h/.cpp must exist", failures)
@@ -135,7 +138,7 @@ def main() -> int:
         "first_mtproxy_packet_recv",
         "transport_state=%s",
     ):
-        if marker not in socket_cpp + machine_cpp:
+        if marker not in marker_source:
             fail(f"state-machine rewrite must preserve marker {marker}", failures)
 
     if failures:

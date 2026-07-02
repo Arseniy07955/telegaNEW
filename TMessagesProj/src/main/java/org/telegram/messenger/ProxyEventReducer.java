@@ -14,6 +14,15 @@ final class ProxyEventReducer {
         SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
         String normalizedPhase = ProxyCheckDiagnostics.normalize(event.phase);
         ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForEvent(event);
+        if (ProxyConnectionEvent.SOURCE_CONNECTED.equals(event.source)) {
+            return reduceConnected(currentProxy, event, verdict);
+        }
+        if (ProxyConnectionEvent.SOURCE_CONNECT_START.equals(event.source)) {
+            return reduceConnectStart(currentProxy, event, verdict);
+        }
+        if (ProxyConnectionEvent.SOURCE_USABLE_SUCCESS.equals(event.source)) {
+            return applyVisibleUsableSuccess(currentProxy, event, verdict);
+        }
         if (ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE.equals(normalizedPhase)) {
             if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
                 return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_generation", event.phase, event.endpointKey, verdict);
@@ -66,9 +75,7 @@ final class ProxyEventReducer {
         }
         ProxyWarmupGate.onProxyLivePhase(event.endpointKey, verdict.phase, event.timestamp);
         if (verdict.usableSuccess) {
-            ProxyRuntimeStateStore.markConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration);
-            ProxyRuntimeStateStore.logControl("decision=visible_usable_success source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " phase=" + verdict.phase + " layer=" + verdict.layer + " failure_class=" + verdict.failureClass + " action=" + verdict.action + " endpoint=" + event.endpointKey);
-            return new ProxyRuntimeStateStore.Decision("visible_usable_success", verdict.phase, event.endpointKey, verdict, false, true, false);
+            return applyVisibleUsableSuccess(currentProxy, event, verdict);
         }
         if (ProxyVisibleStateStore.shouldHoldLivePhaseByUsableSuccess(currentProxy, event)) {
             String heldBy = ProxyVisibleStateStore.heldByUsablePhase(currentProxy, event.timestamp);
@@ -150,7 +157,7 @@ final class ProxyEventReducer {
         if (ProxyPhasePolicy.isPunitiveFailure(verdict.phase)) {
             ProxyWarmupGate.onProxyFailure(event.endpointKey, event.phase, event.timestamp);
         }
-        ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp);
+        ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs);
         ProxyRuntimeStateStore.logControl("decision=backoff phase=" + verdict.phase + " layer=" + verdict.layer + " failure_class=" + verdict.failureClass + " confidence=" + verdict.confidence + " action=" + verdict.action + " sticky_until_ms=" + verdict.stickyUntilMs + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " failures=" + failure.consecutiveFailures + " rotation_failures=" + failure.rotationFailures + " rotation_allowed=" + failure.rotationAllowed);
         if (verdict.canRotate && failure.rotationAllowed) {
             ProxyRuntimeStateStore.logControl("decision=rotation_trigger phase=" + verdict.phase + " failures=" + failure.rotationFailures + " failure_class=" + failureClass + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " probe=" + event.probeKey);
@@ -164,6 +171,40 @@ final class ProxyEventReducer {
 
     private static boolean isActiveProxyEvent(ProxyConnectionEvent event) {
         return event != null && ProxyConnectionEvent.isActiveProxyOrigin(event.origin);
+    }
+
+    private static ProxyRuntimeStateStore.Decision reduceConnected(SharedConfig.ProxyInfo currentProxy, ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
+            return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        boolean visibleChanged = ProxyVisibleStateStore.markConnected(currentProxy, event.timestamp);
+        if (visibleChanged) {
+            ProxyHealthStore.rememberConnected(currentProxy, event.timestamp);
+        }
+        return new ProxyRuntimeStateStore.Decision(visibleChanged ? "generic_connected" : "telemetry_only", event.phase, event.endpointKey, verdict, false, visibleChanged, false);
+    }
+
+    private static ProxyRuntimeStateStore.Decision reduceConnectStart(SharedConfig.ProxyInfo currentProxy, ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
+            return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        boolean visibleChanged = ProxyVisibleStateStore.markConnectionStarting(currentProxy, event.timestamp, event.origin);
+        return new ProxyRuntimeStateStore.Decision(visibleChanged ? "visible_only" : "telemetry_only", event.phase, event.endpointKey, verdict, false, visibleChanged, false);
+    }
+
+    private static ProxyRuntimeStateStore.Decision applyVisibleUsableSuccess(SharedConfig.ProxyInfo currentProxy, ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        if (!isActiveProxyEvent(event)) {
+            return updateProxyRowOnly(currentProxy, event, false);
+        }
+        if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
+            return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        boolean visibleChanged = ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration);
+        if (!visibleChanged) {
+            return ProxyRuntimeStateStore.Decision.ignored("ignored_usable_success", event.phase, event.endpointKey, verdict);
+        }
+        ProxyRuntimeStateStore.logControl("decision=visible_usable_success source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " phase=" + verdict.phase + " layer=" + verdict.layer + " failure_class=" + verdict.failureClass + " action=" + verdict.action + " endpoint=" + event.endpointKey);
+        return new ProxyRuntimeStateStore.Decision("visible_usable_success", verdict.phase, event.endpointKey, verdict, false, true, false);
     }
 
     private static ProxyRuntimeStateStore.Decision updateProxyRowOnly(SharedConfig.ProxyInfo currentProxy, ProxyConnectionEvent event, boolean terminalExactConfig) {

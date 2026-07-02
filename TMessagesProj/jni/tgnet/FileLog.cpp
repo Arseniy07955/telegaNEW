@@ -85,6 +85,11 @@ void FileLog::init(std::string path) {
 // minutes was observed. Cap each file and keep a single backup, so worst-case on-disk size is ~2x cap.
 static const size_t MAX_NATIVE_LOG_BYTES = 16 * 1024 * 1024;
 
+// Per-line fflush turns a log burst into one syscall per line and dominated CPU during reconnect
+// storms. Errors/fatals still flush immediately (crash evidence must hit disk); debug lines ride the
+// stdio buffer and are flushed at most once per second, so a crash loses at most ~1s of debug tail.
+static const int64_t NATIVE_LOG_FLUSH_INTERVAL_MS = 1000;
+
 void FileLog::rotateNativeLogIfNeededLocked() {
     if (logFile == nullptr || logPath.empty() || logBytesWritten < MAX_NATIVE_LOG_BYTES) {
         return;
@@ -135,9 +140,14 @@ void FileLog::writeNativeLogLine(int androidPriority, const char *fileSeverity, 
     FILE *logFile = logger.logFile;
     if (logFile) {
         int written = fprintf(logFile, "%s\n", line.c_str());
-        fflush(logFile);
         if (written > 0) {
             logger.logBytesWritten += (size_t) written;
+        }
+        int64_t nowMs = (int64_t) time_now.tv_sec * 1000 + time_now.tv_usec / 1000;
+        bool severityNeedsFlush = androidPriority >= ANDROID_LOG_ERROR;
+        if (severityNeedsFlush || nowMs - logger.lastFlushMs >= NATIVE_LOG_FLUSH_INTERVAL_MS) {
+            fflush(logFile);
+            logger.lastFlushMs = nowMs;
         }
         logger.rotateNativeLogIfNeededLocked();
     }

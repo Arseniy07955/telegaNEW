@@ -5,10 +5,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
-SCHEDULER = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
-SCHEDULER_HEADER = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.h"
+SCHEDULER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.cpp"
+SCHEDULER_HEADER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.h"
 CONNECTION = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 DEFINES = ROOT / "TMessagesProj/jni/tgnet/Defines.h"
+OPTIONS = ROOT / "TMessagesProj/jni/mtproxy/MtProxyOptions.h"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
 
@@ -42,6 +43,7 @@ def main() -> None:
     scheduler_header = read(SCHEDULER_HEADER)
     connection = read(CONNECTION)
     defines = read(DEFINES)
+    options = read(OPTIONS)
     cmake = read(CMAKE)
     scheduler_helpers = slice_between(
         scheduler,
@@ -69,7 +71,7 @@ def main() -> None:
     )
 
     require(
-        "tgnet/MtProxyHandshakeScheduler.cpp" in cmake,
+        "mtproxy/MtProxyHandshakeScheduler.cpp" in cmake,
         "native build must compile MtProxyHandshakeScheduler.cpp",
     )
     require(
@@ -121,13 +123,18 @@ def main() -> None:
         "ConnectionSocket must not own global handshake scheduler state or policy helpers",
     )
     require(
-        "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT 2" in defines
-        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER 2" in defines
-        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET 1" in defines
-        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT 1" in defines
-        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD 1" in defines
-        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE 2" in defines,
-        "startup handshake fanout limits must live in Defines.h so they stay separate from established connection counts",
+        "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT = 2" in options
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER = 2" in options
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET = 1" in options
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT = 1" in options
+        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD = 1" in options
+        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE = 2" in options,
+        "startup handshake fanout limits must live in mtproxy/MtProxyOptions.h (module-owned), separate from established connection counts",
+    )
+    require(
+        "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES" not in defines
+        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES" not in defines,
+        "Defines.h must not re-grow handshake fanout limits; they are owned by mtproxy/MtProxyOptions.h",
     )
     require(
         "struct MtProxyHandshakeGlobalState" in scheduler_helpers

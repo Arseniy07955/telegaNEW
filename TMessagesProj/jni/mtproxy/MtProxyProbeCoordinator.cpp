@@ -191,6 +191,9 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
             && state.fakeTlsHandshakeBudget.terminalUntilMs > now) {
         Decision decision = decisionFromState(DecisionKind::HandshakeBudgetBackoff, state);
+        // Carry the remaining hold so the connection layer can gate its reconnect
+        // timer on the coordinator's clock instead of re-deriving a shorter one.
+        decision.waitMs = (uint32_t) (state.fakeTlsHandshakeBudget.terminalUntilMs - now);
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return decision;
     }
@@ -206,6 +209,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     }
     if (state.status == ProbeStatus::PROFILES_EXHAUSTED && state.profilesExhaustedUntil > now) {
         Decision decision = decisionFromState(DecisionKind::ProfilesExhaustedBackoff, state);
+        decision.waitMs = (uint32_t) (state.profilesExhaustedUntil - now);
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return decision;
     }
@@ -443,6 +447,36 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
         state.greaseProbePending = true;
     }
     clearFakeTlsHandshakeBudget(state);
+    // A real handshake/data-path success on this proxy server is strong evidence the server is
+    // alive: lift terminal holds (FakeTLS budget backoff / profiles exhausted) from sibling probe
+    // keys of the same host:port so their next attempt starts a fresh ladder instead of waiting
+    // out a stale verdict. The 02.07 capture had one SNI variant stuck in a terminal hold while a
+    // sibling variant of the same server was already working; the rescue only happened by luck.
+    // Live PROBING siblings are left untouched.
+    if (!probeKey.networkEndpointKey.empty()) {
+        for (auto &entry : mtProxyProbeStates) {
+            if (entry.first == probeKey.key
+                    || entry.second.networkEndpointKey != probeKey.networkEndpointKey) {
+                continue;
+            }
+            MtProxyProbeState &sibling = entry.second;
+            if (sibling.status != ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
+                    && sibling.status != ProbeStatus::PROFILES_EXHAUSTED) {
+                continue;
+            }
+            uint32_t siblingSniVariants = sibling.allowedSniVariants != 0
+                    ? sibling.allowedSniVariants
+                    : MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+            sibling.status = ProbeStatus::IDLE;
+            sibling.ownerToken = 0;
+            sibling.joinBudgetAnchorMs = 0;
+            sibling.joinBudgetAnchorCursorGen = 0;
+            sibling.profilesExhaustedUntil = 0;
+            sibling.cursor = MtProxyAdaptivePolicy::initialCursor(siblingSniVariants);
+            sibling.lastRecipeDiagnostic.clear();
+            clearFakeTlsHandshakeBudget(sibling);
+        }
+    }
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 

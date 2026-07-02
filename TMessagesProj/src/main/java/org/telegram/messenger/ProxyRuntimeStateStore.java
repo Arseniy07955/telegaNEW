@@ -17,8 +17,12 @@ public final class ProxyRuntimeStateStore {
     private ProxyRuntimeStateStore() {
     }
 
-    public static Decision onNativeStage(ProxyConnectionEvent event) {
+    public static Decision onRuntimeEvent(ProxyConnectionEvent event) {
         return ProxyEventReducer.reduce(event);
+    }
+
+    public static Decision onNativeStage(ProxyConnectionEvent event) {
+        return onRuntimeEvent(event);
     }
 
     public static int noteProxySettingsActivation() {
@@ -166,10 +170,7 @@ public final class ProxyRuntimeStateStore {
         if (proxyInfo == null) {
             return;
         }
-        long now = SystemClock.elapsedRealtime();
-        if (ProxyVisibleStateStore.markConnected(proxyInfo, now)) {
-            ProxyHealthStore.rememberConnected(proxyInfo, now);
-        }
+        onRuntimeEvent(ProxyConnectionEvent.connected(UserConfig.selectedAccount, proxyInfo, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime()));
     }
 
     public static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo) {
@@ -180,7 +181,8 @@ public final class ProxyRuntimeStateStore {
         if (proxyInfo == null) {
             return;
         }
-        ProxyVisibleStateStore.markConnectionStarting(proxyInfo, SystemClock.elapsedRealtime(), origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin);
+        ProxyConnectionEvent.Origin safeOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin;
+        onRuntimeEvent(ProxyConnectionEvent.connectStart(UserConfig.selectedAccount, proxyInfo, safeOrigin, 0, SystemClock.elapsedRealtime()));
     }
 
     public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
@@ -196,11 +198,20 @@ public final class ProxyRuntimeStateStore {
             return;
         }
         String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        onRuntimeEvent(ProxyConnectionEvent.usableSuccess(UserConfig.selectedAccount, proxyInfo, normalized, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, activationGeneration, now));
+    }
+
+    static boolean applyConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration) {
+        if (proxyInfo == null) {
+            return false;
+        }
+        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
         if (!ProxyVisibleStateStore.markConnectionUsable(proxyInfo, normalized, now, activationGeneration)) {
-            return;
+            return false;
         }
         ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now);
         ProxyWarmupGate.onProxyUsable(ProxyEndpointKey.liveStage(proxyInfo), now);
+        return true;
     }
 
     public static ProxyHealthStore.EndpointFailureResult markEndpointFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {

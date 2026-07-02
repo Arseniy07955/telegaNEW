@@ -226,6 +226,10 @@ final class ProxyHealthStore {
     }
 
     static EndpointFailureResult rememberLiveFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now) {
+        return rememberLiveFailure(proxyInfo, diagnostic, now, 0);
+    }
+
+    static EndpointFailureResult rememberLiveFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int suggestedHoldMs) {
         String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
         String key = ProxyEndpointKey.forPhase(proxyInfo, normalized);
         if (key == null) {
@@ -236,7 +240,7 @@ final class ProxyHealthStore {
             logControl("decision=live_failure_dedup endpoint=" + ProxyEndpointKey.endpoint(proxyInfo) + " phase=" + normalized);
             return EndpointFailureResult.dedup(normalized, state.consecutiveFailures, state.rotationFailures);
         }
-        return rememberEndpointFailure(state, proxyInfo, normalized, now, "live_failure");
+        return rememberEndpointFailure(state, proxyInfo, normalized, now, "live_failure", suggestedHoldMs);
     }
 
     static void rememberConnected(SharedConfig.ProxyInfo proxyInfo, long now) {
@@ -288,7 +292,7 @@ final class ProxyHealthStore {
         if (key == null) {
             return EndpointFailureResult.noop(normalized);
         }
-        return rememberEndpointFailure(endpointStateForKey(key), proxyInfo, normalized, now, ProxyConnectionEvent.SOURCE_PROXY_CHECK);
+        return rememberEndpointFailure(endpointStateForKey(key), proxyInfo, normalized, now, ProxyConnectionEvent.SOURCE_PROXY_CHECK, 0);
     }
 
     static EndpointFailureResult lastFailureResult(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now) {
@@ -419,7 +423,7 @@ final class ProxyHealthStore {
         }
     }
 
-    private static EndpointFailureResult rememberEndpointFailure(EndpointState state, SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, String source) {
+    private static EndpointFailureResult rememberEndpointFailure(EndpointState state, SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, String source, int suggestedHoldMs) {
         state.usableSuccessUntil = 0;
         state.postSuccessDataPathShadowCount = 0;
         state.lifecycle = EndpointLifecycle.DEGRADED;
@@ -441,7 +445,16 @@ final class ProxyHealthStore {
             state.rotationFailureWindowStartTime = 0;
             state.rotationFailures = 0;
         }
-        long backoff = failureBackoffMs(state.lastDiagnostic, state.consecutiveFailures);
+        // When the native retry authority shipped a hold with the event, that is
+        // THE clock: the pre-TCP gates deny earlier retries anyway, so a local
+        // re-derivation could only disagree. Invalid-secret config failures keep
+        // their long local floor (config-level quarantine the native cooldown
+        // does not model). Java's own clock remains only for events without a
+        // native hold (Java-origin checks, older natives sending 0).
+        boolean nativeHold = suggestedHoldMs > 0;
+        long backoff = nativeHold
+                ? Math.max(suggestedHoldMs, isInvalidSecretDiagnostic(state.lastDiagnostic) ? INVALID_SECRET_FAILURE_BACKOFF_MS : 0)
+                : failureBackoffMs(state.lastDiagnostic, state.consecutiveFailures);
         state.nextCheckTime = now + backoff;
         boolean rotationAllowed = ProxyPhasePolicy.canRotate(state.lastDiagnostic)
                 && (state.rotationFailures >= PUNITIVE_FAILURES_TO_ROTATE || oneShotTerminal);
@@ -449,7 +462,7 @@ final class ProxyHealthStore {
             state.lifecycle = EndpointLifecycle.QUARANTINED;
         }
         String failureClass = ProxyPhasePolicy.failureClassForPhase(state.lastDiagnostic);
-        logControl("decision=backoff phase=" + state.lastDiagnostic + " failure_class=" + failureClass + " endpoint=" + ProxyEndpointKey.endpoint(proxyInfo) + " wait_ms=" + backoff + " failures=" + state.consecutiveFailures + " rotation_failures=" + state.rotationFailures + " rotation_allowed=" + rotationAllowed + " source=" + source);
+        logControl("decision=backoff phase=" + state.lastDiagnostic + " failure_class=" + failureClass + " endpoint=" + ProxyEndpointKey.endpoint(proxyInfo) + " wait_ms=" + backoff + " hold_source=" + (nativeHold ? "native" : "local") + " failures=" + state.consecutiveFailures + " rotation_failures=" + state.rotationFailures + " rotation_allowed=" + rotationAllowed + " source=" + source);
         return new EndpointFailureResult(state.lastDiagnostic, state.consecutiveFailures, state.rotationFailures, rotationAllowed, true);
     }
 

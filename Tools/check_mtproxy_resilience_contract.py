@@ -11,12 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
-ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
-ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
-HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
-PROBE_COORDINATOR = ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.cpp"
-RECOVERY_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp"
-DATA_PATH_SHAPER = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
+ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp"
+ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp"
+HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.cpp"
+PROBE_COORDINATOR = ROOT / "TMessagesProj/jni/mtproxy/MtProxyProbeCoordinator.cpp"
+RECOVERY_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp"
+DATA_PATH_SHAPER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp"
 CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
@@ -28,7 +28,7 @@ STATUS_MIRROR = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/Proxy
 POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 README = ROOT / "README.md"
-NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
+NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
 
 
 def read(path: Path) -> str:
@@ -109,10 +109,11 @@ def main() -> None:
         "static int64_t cooldownMs",
         "bool MtProxyEndpointPolicy::extractSslipIpv4Address",
     )
+    recorder = read(ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp")
     failure = slice_between(
-        socket,
-        "void ConnectionSocket::recordMtProxyEndpointFailure",
-        "void ConnectionSocket::recordMtProxyEndpointHandshakeOk",
+        recorder,
+        "void MtProxyEndpointRecorder::recordFailure",
+        "void MtProxyEndpointRecorder::recordHandshakeOk",
     )
     send_frame = slice_between(
         socket,
@@ -222,7 +223,7 @@ def main() -> None:
         "post-handshake data-path failures must use shaping/backoff, not FakeTLS recipe cursor movement",
     )
     require(
-        "currentSecretIsFakeTls" in failure
+        "context.fakeTls" in failure
         and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure
         and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure,
         "recipe level must advance only for FakeTLS connections with recovery-action cursor movement",

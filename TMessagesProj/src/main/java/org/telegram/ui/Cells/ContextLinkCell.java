@@ -90,6 +90,7 @@ public class ContextLinkCell extends FrameLayout implements DownloadController.F
 
     private boolean canPreviewGif;
     private boolean isKeyboard;
+    private boolean animationManagedByScheduler;
 
     private boolean isForceGif;
 
@@ -396,7 +397,7 @@ public class ContextLinkCell extends FrameLayout implements DownloadController.F
                     linkImageView.setImage(ImageLocation.getForPath(urlLocation), currentPhotoFilter, ImageLocation.getForPhoto(currentPhotoObjectThumb, photoAttach), currentPhotoFilterThumb, strippedLocation, currentPhotoFilterThumb, null, -1, ext, parentObject, 1);
                 }
             }
-            if (SharedConfig.isAutoplayGifs() || isKeyboard) {
+            if (!animationManagedByScheduler && (SharedConfig.isAutoplayGifs() || isKeyboard)) {
                 linkImageView.setAllowStartAnimation(true);
                 linkImageView.startAnimation();
             } else {
@@ -615,6 +616,10 @@ public class ContextLinkCell extends FrameLayout implements DownloadController.F
 
     public void setCanPreviewGif(boolean value) {
         canPreviewGif = value;
+    }
+
+    public void setAnimationManagedByScheduler(boolean value) {
+        animationManagedByScheduler = value;
     }
 
     public void setIsKeyboard(boolean value) {

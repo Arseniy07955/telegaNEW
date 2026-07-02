@@ -1,7 +1,5 @@
 #include "MtProxySocketPublisher.h"
 
-#include <cstring>
-
 MtProxySocketObservation mtProxyNormalizeSocketObservation(const MtProxySocketObservation &observation) {
     MtProxySocketObservation normalized = observation;
     if (normalized.phase == nullptr || normalized.phase[0] == '\0') {
@@ -23,19 +21,22 @@ void mtProxyPublishSocketObservation(const MtProxySocketObservation &observation
     }
 }
 
-bool mtProxySocketObservationIsHighRiskPhase(const char *phase) {
-    if (phase == nullptr || phase[0] == '\0') {
-        return false;
+void mtProxyPublishSocketObservation(const MtProxySocketObservation &observation, const MtProxySocketPublisherContext &context, const MtProxySocketPublisherCallbacks &callbacks) {
+    MtProxySocketObservation enriched = observation;
+    if (enriched.endpointKey.empty()) {
+        enriched.endpointKey = context.endpointKey;
     }
-    return strcmp(phase, "recipe_failed") == 0
-           || strcmp(phase, MtProxyPhase::HandshakeProfilesExhausted) == 0
-           || strcmp(phase, MtProxyPhase::FaketlsNotMtproxyResponse) == 0
-           || strcmp(phase, MtProxyPhase::FaketlsNoServerHelloTerminal) == 0
-           || strcmp(phase, MtProxyPhase::FaketlsServerClosedTerminal) == 0
-           || strcmp(phase, MtProxyPhase::SecretParseInvalidDomainControlChar) == 0
-           || strcmp(phase, MtProxyPhase::SecretParseInvalidDomain) == 0
-           || strcmp(phase, MtProxyPhase::DnsBlockedZeroAddress) == 0
-           || strcmp(phase, MtProxyPhase::PostHandshakeNoAppdata) == 0
-           || strcmp(phase, MtProxyPhase::FirstTlsAppRecv) == 0
-           || strcmp(phase, MtProxyPhase::FirstMtproxyPacketRecv) == 0;
+    if (enriched.probeKey.empty()) {
+        enriched.probeKey = context.probeKey;
+    }
+    if (enriched.networkEndpointKey.empty()) {
+        enriched.networkEndpointKey = context.networkEndpointKey;
+    }
+    mtProxyPublishSocketObservation(enriched, callbacks);
+}
+
+bool mtProxySocketObservationIsHighRiskPhase(const char *phase) {
+    // The phase set is generated from Tools/mtproxy_phase_contract.py
+    // (observation_facade=True) into MtProxyPhaseClassification.h.
+    return MtProxyPhase::isObservationFacadePhase(phase);
 }

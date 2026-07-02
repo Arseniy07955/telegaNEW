@@ -219,19 +219,21 @@ def main() -> int:
     socket_cpp = read(TGNET / "ConnectionSocket.cpp")
     connection_h = read(TGNET / "Connection.h")
     connection_cpp = read(TGNET / "Connection.cpp")
-    endpoint_policy_h = read(TGNET / "MtProxyEndpointPolicy.h")
-    endpoint_policy_cpp = read(TGNET / "MtProxyEndpointPolicy.cpp")
+    endpoint_policy_h = read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.h")
+    endpoint_policy_cpp = read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.cpp")
     file_operation = read(MESSENGER / "FileLoadOperation.java")
     check_all = read(TOOLS / "check_mtproxy_all.py")
     analyzer = read(TOOLS / "analyze_mtproxy_markers.py")
     phase_contract = read(TOOLS / "mtproxy_phase_contract.py")
 
     require("enum Origin" in event and "ACTIVE_SOCKET" in event and "PROXY_CHECK" in event and "PROXY_LIST_ROW" in event, "ProxyConnectionEvent must carry explicit origin values", failures)
-    require("origin" in wrapper and "probeKey" in wrapper and "activationGeneration" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V" in wrapper, "JNI proxy stage callback must carry origin, probe key, and activation generation", failures)
-    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration)" in defines, "native delegate must expose proxy stage origin, probe key, and activation generation", failures)
+    require("origin" in wrapper and "probeKey" in wrapper and "activationGeneration" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper and "suggestedReconnectHoldMs" in wrapper, "JNI proxy stage callback must carry origin, probe key, activation generation and the native hold", failures)
+    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines, "native delegate must expose proxy stage origin, probe key, activation generation and the native hold", failures)
     require(
-        "return ProxyEventReducer.reduce(event)" in runtime,
-        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        "public static Decision onRuntimeEvent(ProxyConnectionEvent event)" in runtime
+        and "return ProxyEventReducer.reduce(event)" in runtime
+        and "return onRuntimeEvent(event)" in runtime,
+        "ProxyRuntimeStateStore must expose one runtime-event reducer entry and keep onNativeStage as a wrapper",
         failures,
     )
     require(

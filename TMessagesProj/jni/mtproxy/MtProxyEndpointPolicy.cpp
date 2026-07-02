@@ -72,7 +72,7 @@ static uint32_t endpointSecureRandomBounded(uint32_t bound) {
     if (bound <= 1) {
         return 0;
     }
-    uint32_t threshold = (uint32_t) (-bound) % bound;
+    uint32_t threshold = (0u - bound) % bound;
     uint32_t v;
     do {
         v = endpointSecureRandomUint32();

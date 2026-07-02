@@ -12,12 +12,15 @@ import argparse
 import re
 from pathlib import Path
 
-from mtproxy_phase_contract import evidence_classes
+from mtproxy_phase_contract import evidence_classes, observation_facade_phases
 
 
 REASON_RE = re.compile(r"(?<![A-Za-z0-9_])reason=([^ ]+)")
 CONNECTION_RE = re.compile(r"connection\((0x[0-9a-fA-F]+)\)")
-LOG_TIME_RE = re.compile(r"\b(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\.(\d{3})\b")
+# Accepts both logcat timestamps ("07-01 20:59:30.000") and the native _net
+# log format without zero padding ("7-2 11:48:40.760"); with the strict
+# two-digit form every time-window rule silently no-ops on native logs.
+LOG_TIME_RE = re.compile(r"\b(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})\b")
 PROXY_CONTROL_RE = re.compile(r"proxy_control decision=([^ ]+)")
 FIELD_RE_TEMPLATE = r"(?<![A-Za-z0-9_]){}=([^ ]+)"
 EMPTY_DOH_NAME_RE = re.compile(r"https://[^ ]+/(?:resolve|dns-query)\?name=(?:&|$)")
@@ -32,19 +35,7 @@ FAILURE_EVIDENCE_CLASSES = evidence_classes()
 ACTIVE_SOCKET_ORIGINS = {"active_socket", "active_proxy"}
 RECIPE_FAILURE_MARKERS = ("mtproxy_startup recipe_failed", "mtproxy_startup recipe_exhausted")
 USABLE_SUCCESS_PROXY_PHASES = {"first_tls_app_recv", "first_mtproxy_packet_recv"}
-NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = {
-    "recipe_failed",
-    "handshake_profiles_exhausted",
-    "faketls_not_mtproxy_response",
-    "faketls_no_server_hello_terminal",
-    "faketls_server_closed_terminal",
-    "secret_parse_invalid_domain_control_char",
-    "secret_parse_invalid_domain",
-    "dns_blocked_zero_address",
-    "post_handshake_no_appdata",
-    "first_tls_app_recv",
-    "first_mtproxy_packet_recv",
-}
+NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = observation_facade_phases()
 VISIBLE_SUCCESS_HOLD_MS = 45 * 1000
 DNS_VISIBLE_DELAY_MS = 800
 FRESH_FAILURE_HOLD_MS = 15 * 1000
@@ -142,6 +133,18 @@ FAKETLS_RETRY_LIVE_PHASES = {
     "mtproxy_probe_wait",
 }
 FAKETLS_BUDGET_HOLD_MS = 30 * 1000
+# Native markers for terminal verdicts decided before the socket opens
+# (mtProxyProbeBeginOrJoin decision branches in ConnectionSocket.cpp).
+PRE_IO_TERMINAL_DECISION_MARKERS = (
+    "probe_faketls_budget_backoff",
+    "probe_profiles_exhausted",
+)
+# One connection object re-dialing faster than this is always pathological:
+# with reconnect backoff engaged the floor is ~1.8s between attempts, and the
+# bounded probe_join cycle is 250ms across FEW attempts. The 02.07 livelock ran
+# at ~1300 attempts/sec on a single connection.
+RECONNECT_STORM_WINDOW_MS = 1000
+RECONNECT_STORM_LIMIT = 10
 PUNITIVE_ROTATION_PHASES = {
     "tcp_not_connected",
     "tcp_connection_refused",
@@ -625,6 +628,67 @@ def verify_faketls_terminal_budget_replay(lines: list[str]) -> list[str]:
     return failures
 
 
+def verify_pre_io_terminal_close_diagnostic(lines: list[str]) -> list[str]:
+    """A pre-I/O terminal decision (FakeTLS budget backoff / profiles exhausted)
+    must not be followed by close_diagnostic phase=connection_not_started on the
+    same connection: that is the deriveMtProxyTerminalDiagnostic clobber which
+    skips endpoint cooldown and reconnect backoff and produces a reconnect hot
+    loop (02.07 capture: ~1300 reconnects/sec until an unrelated rescue)."""
+    failures: list[str] = []
+    pending: dict[str, str] = {}
+    flagged: set[str] = set()
+    for line in lines:
+        connection = line_connection(line)
+        if not connection:
+            continue
+        if any(marker in line for marker in PRE_IO_TERMINAL_DECISION_MARKERS):
+            pending[connection] = line
+            continue
+        if "connecting via proxy" in line:
+            pending.pop(connection, None)
+            continue
+        if " close_diagnostic phase=" not in line:
+            continue
+        terminal_line = pending.pop(connection, "")
+        if (
+            terminal_line
+            and connection not in flagged
+            and line_field(line, "phase") == "connection_not_started"
+        ):
+            flagged.add(connection)
+            failures.append(
+                "pre-I/O terminal verdict clobbered to connection_not_started in closeSocket "
+                "(deriveMtProxyTerminalDiagnostic must preserve it -> no cooldown, no reconnect "
+                f"backoff, hot loop): {line} after {terminal_line}"
+            )
+    return failures
+
+
+def verify_reconnect_storm(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    attempts: dict[str, list[int]] = {}
+    flagged: set[str] = set()
+    for line in lines:
+        if "connecting via proxy" not in line:
+            continue
+        connection = line_connection(line)
+        current_time = line_time_ms(line)
+        if not connection or current_time is None or connection in flagged:
+            continue
+        window = attempts.setdefault(connection, [])
+        window.append(current_time)
+        while window and current_time - window[0] > RECONNECT_STORM_WINDOW_MS:
+            window.pop(0)
+        if len(window) > RECONNECT_STORM_LIMIT:
+            flagged.add(connection)
+            failures.append(
+                f"reconnect storm: connection {connection} dialed the proxy "
+                f"{len(window)} times within {RECONNECT_STORM_WINDOW_MS}ms; reconnect "
+                f"backoff or a pre-I/O hold must gate retries: {line}"
+            )
+    return failures
+
+
 def verify_rotation_hysteresis(lines: list[str]) -> list[str]:
     failures: list[str] = []
     usable_successes: list[tuple[int | None, str, str]] = []
@@ -995,6 +1059,8 @@ def verify_lines(lines: list[str]) -> list[str]:
     failures.extend(verify_probe_wait_timeout_replay(lines))
     failures.extend(verify_faketls_exact_failure_stickiness(lines))
     failures.extend(verify_faketls_terminal_budget_replay(lines))
+    failures.extend(verify_pre_io_terminal_close_diagnostic(lines))
+    failures.extend(verify_reconnect_storm(lines))
     failures.extend(verify_rotation_hysteresis(lines))
     failures.extend(verify_dns_outage_rotation_hold(lines))
     failures.extend(verify_rotated_away_endpoint_hold(lines))

@@ -43,6 +43,17 @@ static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
 static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
 static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_BROWSER = 4;
 
+// Startup handshake fanout limits: how many concurrent FakeTLS handshakes
+// the scheduler may run globally (per connection-pattern mode) and per
+// endpoint (by endpoint temperature). Deliberately separate from the
+// established-connection counts in tgnet/Defines.h.
+static constexpr int32_t MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT = 2;
+static constexpr int32_t MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER = 2;
+static constexpr int32_t MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET = 1;
+static constexpr int32_t MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT = 1;
+static constexpr int32_t MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD = 1;
+static constexpr int32_t MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE = 2;
+
 struct MtProxyOptions {
     int32_t tlsProfile = MT_PROXY_TLS_PROFILE_AUTO;
     int32_t clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;

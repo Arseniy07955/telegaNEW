@@ -24,6 +24,14 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def block(source: str, start: str, end: str) -> str:
+    start_index = source.find(start)
+    if start_index < 0:
+        return ""
+    end_index = source.find(end, start_index + 1)
+    return source[start_index:end_index if end_index >= 0 else len(source)]
+
+
 def run_verifier(markers: str) -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
         handle.write(markers)
@@ -131,13 +139,18 @@ def verify_runtime_contract(failures: list[str]) -> None:
 def main() -> int:
     failures: list[str] = []
     cmake = read(JNI / "CMakeLists.txt")
-    coordinator_h = read(TGNET / "MtProxyProbeCoordinator.h")
-    coordinator_cpp = read(TGNET / "MtProxyProbeCoordinator.cpp")
+    coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
+    coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
+    lease_h = read(TGNET.parent / "mtproxy/MtProxyProbeLease.h")
+    recorder_h = read(TGNET.parent / "mtproxy/MtProxyEndpointRecorder.h")
+    recorder_cpp = read(TGNET.parent / "mtproxy/MtProxyEndpointRecorder.cpp")
+    publisher_h = read(TGNET.parent / "mtproxy/MtProxySocketPublisher.h")
+    publisher_cpp = read(TGNET.parent / "mtproxy/MtProxySocketPublisher.cpp")
     socket_h = read(TGNET / "ConnectionSocket.h")
     socket_cpp = read(TGNET / "ConnectionSocket.cpp")
-    endpoint_policy = read(TGNET / "MtProxyEndpointPolicy.cpp")
-    timeline_h = read(TGNET / "MtProxyStartupTimeline.h")
-    timeline_cpp = read(TGNET / "MtProxyStartupTimeline.cpp")
+    endpoint_policy = read(TGNET.parent / "mtproxy/MtProxyEndpointPolicy.cpp")
+    timeline_h = read(TGNET.parent / "mtproxy/MtProxyStartupTimeline.h")
+    timeline_cpp = read(TGNET.parent / "mtproxy/MtProxyStartupTimeline.cpp")
     diagnostics = read(MESSENGER / "ProxyCheckDiagnostics.java")
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
@@ -150,7 +163,9 @@ def main() -> int:
     analyzer = read(TOOLS / "analyze_mtproxy_markers.py")
     verifier = read(RUNTIME_LOG_VERIFIER)
 
-    require("tgnet/MtProxyProbeCoordinator.cpp" in cmake, "CMake must compile MtProxyProbeCoordinator.cpp", failures)
+    require("mtproxy/MtProxyProbeCoordinator.cpp" in cmake, "CMake must compile MtProxyProbeCoordinator.cpp", failures)
+    require("mtproxy/MtProxyProbeLease.cpp" in cmake, "CMake must compile MtProxyProbeLease.cpp", failures)
+    require("mtproxy/MtProxyEndpointRecorder.cpp" in cmake, "CMake must compile MtProxyEndpointRecorder.cpp", failures)
     require("class MtProxyProbeCoordinator" in coordinator_h, "coordinator header must declare MtProxyProbeCoordinator", failures)
     require("enum class DecisionKind" in coordinator_h and "StartOwner" in coordinator_h and "JoinExisting" in coordinator_h and "UseWorkingRecipe" in coordinator_h and "ProfilesExhaustedBackoff" in coordinator_h and "HandshakeBudgetBackoff" in coordinator_h, "coordinator must expose owner/join/working/exhausted-budget-backoff decisions", failures)
     require("struct ProbeKey" in coordinator_h and "secret_hash" in coordinator_cpp, "coordinator must key exact config by host:port + secret_hash + SNI", failures)
@@ -164,6 +179,19 @@ def main() -> int:
     require("ProbeStatus::PROFILES_EXHAUSTED" in coordinator_cpp and "ProbeStatus::UNSUPPORTED" not in coordinator_cpp, "coordinator must model recipe exhaustion as recovery state, not unsupported terminal state", failures)
     require("state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants)" in coordinator_cpp, "expired profile-exhaustion hold must reset the recipe cursor for a fresh recovery cycle", failures)
     require("RecipeCursor" in coordinator_cpp and "workingRecipe" in coordinator_cpp and "lastRecipeDiagnostic" in coordinator_cpp, "recipe ladder state must live in coordinator as a cursor and full working recipe", failures)
+    complete_success_start = coordinator_cpp.find("void MtProxyProbeCoordinator::completeSuccess")
+    complete_success_body = coordinator_cpp[
+        complete_success_start:coordinator_cpp.find("\n}", complete_success_start)
+    ]
+    require(
+        "entry.second.networkEndpointKey != probeKey.networkEndpointKey" in complete_success_body
+        and "sibling.status != ProbeStatus::HANDSHAKE_BUDGET_BACKOFF" in complete_success_body
+        and "sibling.status != ProbeStatus::PROFILES_EXHAUSTED" in complete_success_body
+        and "clearFakeTlsHandshakeBudget(sibling)" in complete_success_body,
+        "a real success must lift terminal holds from sibling probe keys of the same proxy server "
+        "(otherwise a budget-held SNI variant waits out a stale verdict while a sibling already works)",
+        failures,
+    )
 
     require("MtProxyProbeCoordinator.h" in socket_cpp and "mtProxyProbeBeginOrJoin" in socket_cpp, "ConnectionSocket must delegate probe admission to coordinator", failures)
     require("MtProxyStartupPhase::ProbeWait" in timeline_h and "mtproxy_probe_wait" in timeline_cpp, "startup timeline must model probe wait as a pre-TCP local wait", failures)
@@ -171,7 +199,23 @@ def main() -> int:
     require("currentMtProxyProbeKey" in socket_h + socket_cpp, "ConnectionSocket must store the active probe key separately from public endpoint key", failures)
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::JoinExisting" in socket_cpp, "joiners must enter probe wait instead of opening TCP", failures)
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::ProfilesExhaustedBackoff" in socket_cpp, "profile exhaustion backoff must stop before TCP/socket setup", failures)
-    require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::HandshakeBudgetBackoff" in socket_cpp and "terminalBudgetExhausted" in socket_cpp and "mtProxyFailureResponseSignature" in socket_cpp, "FakeTLS budget backoff must stop before TCP and terminal exhaustion must publish response-signature evidence", failures)
+    require(
+        "probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::HandshakeBudgetBackoff" in socket_cpp
+        and "terminalBudgetExhausted" in recorder_cpp
+        and "mtProxyFailureResponseSignature" in socket_cpp
+        and "responseSignature" in recorder_cpp,
+        "FakeTLS budget backoff must stop before TCP and terminal exhaustion must publish response-signature evidence",
+        failures,
+    )
+    probe_begin_body = block(socket_cpp, "bool ConnectionSocket::mtProxyProbeBeginOrJoin", "void ConnectionSocket::mtProxyProbeWaitTimerFire")
+    require(
+        "MtProxyEndpointRecorder::recordProfilesExhaustedBackoff" in probe_begin_body
+        and "MtProxyEndpointRecorder::recordHandshakeBudgetBackoff" in probe_begin_body
+        and "observation.reason = \"probe_profiles_exhausted\"" not in probe_begin_body
+        and "observation.reason = \"faketls_handshake_budget_backoff\"" not in probe_begin_body,
+        "pre-TCP profile/budget backoff observations must be built by MtProxyEndpointRecorder, not ConnectionSocket",
+        failures,
+    )
     require("probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::UseWorkingRecipe" in socket_cpp, "working recipe must be reused before running the ladder", failures)
     open_connection_start = socket_cpp.find("void ConnectionSocket::openConnection(std::string address")
     open_connection_end = socket_cpp.find("void ConnectionSocket::openConnectionInternal(bool ipv6)", open_connection_start)
@@ -197,7 +241,7 @@ def main() -> int:
         failures,
     )
     require("owner_generation" in socket_cpp and "ignored_cancelled_generation" in socket_cpp, "native sockets must log generation-aware joins and cancellations", failures)
-    require("working_recipe_cached" in socket_cpp and "working_recipe_cached" in analyzer, "owner success must emit a working_recipe_cached marker for later reuse proof", failures)
+    require("working_recipe_cached" in recorder_cpp and "working_recipe_cached" in analyzer, "owner success must emit a working_recipe_cached marker for later reuse proof", failures)
 
     require("recipeLevelForEndpoint" not in socket_cpp and "recordFailure(context, phase" not in socket_cpp, "ConnectionSocket must not mutate recipe ladder through MtProxyEndpointPolicy", failures)
     require("failureNeedsRecipe" not in endpoint_policy, "endpoint cooldown policy must not own FakeTLS recipe progression", failures)
@@ -260,9 +304,10 @@ def main() -> int:
         "a joiner whose probe-wait budget expires must leave mtproxy_probe_wait and start a new owner attempt",
         failures,
     )
+    from mtproxy_phase_contract import java_policy
     require(
         "MTPROXY_PROBE_WAIT_TIMEOUT" in phase_policy
-        and "return failure(KeyScope.EXACT, false, false)" in phase_policy[phase_policy.find("case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT_TIMEOUT:"):],
+        and java_policy("mtproxy_probe_wait_timeout") == ("failure", "exact", False, False),
         "mtproxy_probe_wait_timeout must remain a visible exact sticky failure, not a punitive rotation trigger",
         failures,
     )
@@ -275,8 +320,17 @@ def main() -> int:
     )
     require("MtProxyProbeCoordinator::reapExpired(now)" in manager_cpp, "ConnectionsManager::select must reap expired PROBING owners on its monotonic tick", failures)
     require(
-        "mtProxyProbeHeartbeat" in socket_cpp and "mtProxyProbeHeartbeat" in socket_h,
-        "ConnectionSocket must heartbeat the probe owner at handshake milestones (socket_connected/client_hello_sent)",
+        "mtProxyProbeLease.touch" in socket_cpp and "mtProxyProbeHeartbeat" not in socket_h,
+        "ConnectionSocket must heartbeat the probe owner through MtProxyProbeLease at handshake milestones (socket_connected/client_hello_sent)",
+        failures,
+    )
+    require(
+        "class MtProxyProbeLease" in lease_h
+        and "void acquire" in lease_h
+        and "void release" in lease_h
+        and "void touch" in lease_h
+        and "uint64_t ownerToken() const" in lease_h,
+        "probe owner token/key capture must live in a small MtProxyProbeLease helper next to MtProxyProbeCoordinator",
         failures,
     )
 
@@ -313,13 +367,21 @@ def main() -> int:
         failures,
     )
     require(
-        "acquireMtProxyProbeLease" in socket_cpp and "releaseMtProxyProbeLease" in socket_cpp
-        and "mtProxyProbeOwnerToken" in socket_h and "mtProxyProbeLeaseKey" in socket_cpp,
-        "ConnectionSocket must hold a token+key lease released key-independently",
+        "MtProxyProbeLease mtProxyProbeLease" in socket_h
+        and "struct MtProxyProbeLeaseState" not in socket_h
+        and "void ConnectionSocket::acquireMtProxyProbeLease" not in socket_cpp
+        and "void ConnectionSocket::releaseMtProxyProbeLease" not in socket_cpp
+        and "void ConnectionSocket::mtProxyProbeHeartbeat" not in socket_cpp
+        and "mtProxyProbeLease.acquire" in socket_cpp
+        and "mtProxyProbeLease.release" in socket_cpp
+        and "mtProxyProbeLease.ownerToken()" in socket_cpp
+        and "MtProxyProbeCoordinator::cancelOwner" not in socket_cpp
+        and "MtProxyProbeCoordinator::touchOwner" not in socket_cpp,
+        "ConnectionSocket must keep only a MtProxyProbeLease member while token/key release and heartbeat live outside the socket",
         failures,
     )
     open_conn_idx = socket_cpp.find("void ConnectionSocket::openConnection(std::string address")
-    open_release_idx = socket_cpp.find("releaseMtProxyProbeLease()", open_conn_idx)
+    open_release_idx = socket_cpp.find("mtProxyProbeLease.release()", open_conn_idx)
     open_scrub_idx = socket_cpp.find('currentMtProxyProbeKey = ""', open_conn_idx)
     require(
         open_conn_idx >= 0 and open_release_idx >= 0 and open_scrub_idx >= 0 and open_release_idx < open_scrub_idx,
@@ -327,15 +389,60 @@ def main() -> int:
         failures,
     )
     close_idx = socket_cpp.find("void ConnectionSocket::closeSocket(")
-    close_recfail_idx = socket_cpp.find("recordMtProxyEndpointFailure(terminalDiagnostic", close_idx)
-    close_release_idx = socket_cpp.find("releaseMtProxyProbeLease()", close_idx)
+    close_recfail_idx = socket_cpp.find("MtProxyEndpointRecorder::recordFailure(mtProxyEndpointFailureContext(resolution.terminalDiagnostic", close_idx)
+    close_release_idx = socket_cpp.find("mtProxyProbeLease.release()", close_idx)
     require(
         close_idx >= 0 and close_recfail_idx >= 0 and close_release_idx >= 0 and close_recfail_idx < close_release_idx,
         "closeSocket must record the failure while the token is live, then release the lease (no phantom re-mint)",
         failures,
     )
+    require(
+        "struct MtProxySocketPublisherContext" in publisher_h
+        and "mtProxyPublishSocketObservation(const MtProxySocketObservation &observation, const MtProxySocketPublisherContext &context, const MtProxySocketPublisherCallbacks &callbacks)" in publisher_cpp
+        and "MtProxySocketPublisherContext context" in socket_cpp
+        and "mtProxyPublishSocketObservation(observation, context, callbacks)" in socket_cpp,
+        "ConnectionSocket must delegate observation enrichment/publisher glue to MtProxySocketPublisher",
+        failures,
+    )
+    require(
+        "class MtProxyEndpointRecorder" in recorder_h
+        and "struct FailureContext" in recorder_h
+        and "struct SuccessContext" in recorder_h
+        and "struct ProbeBackoffContext" in recorder_h
+        and "struct Callbacks" in recorder_h
+        and "recordFailure" in recorder_h
+        and "recordHandshakeOk" in recorder_h
+        and "recordDataPathSuccess" in recorder_h
+        and "recordProfilesExhaustedBackoff" in recorder_h
+        and "recordHandshakeBudgetBackoff" in recorder_h,
+        "endpoint failure/handshake/data-path/probe-backoff telemetry must live in a small MtProxyEndpointRecorder helper",
+        failures,
+    )
+    require(
+        "void ConnectionSocket::recordMtProxyEndpointFailure" not in socket_cpp
+        and "void ConnectionSocket::recordMtProxyEndpointHandshakeOk" not in socket_cpp
+        and "void ConnectionSocket::recordMtProxyEndpointDataPathSuccess" not in socket_cpp
+        and "recordMtProxyEndpointFailure(" not in socket_h
+        and "recordMtProxyEndpointHandshakeOk(" not in socket_h
+        and "recordMtProxyEndpointDataPathSuccess(" not in socket_h
+        and "MtProxyEndpointRecorder::recordFailure" in socket_cpp
+        and "MtProxyEndpointRecorder::recordHandshakeOk" in socket_cpp
+        and "MtProxyEndpointRecorder::recordDataPathSuccess" in socket_cpp,
+        "ConnectionSocket must call MtProxyEndpointRecorder instead of owning endpoint recorder methods",
+        failures,
+    )
+    require(
+        "MtProxyProbeCoordinator::completeFailure" in recorder_cpp
+        and "MtProxyProbeCoordinator::completeSuccess" in recorder_cpp
+        and "MtProxyEndpointPolicy::recordFailure" in recorder_cpp
+        and "MtProxyEndpointPolicy::recordHandshakeOk" in recorder_cpp
+        and "MtProxyEndpointPolicy::recordDataPathSuccess" in recorder_cpp
+        and "MtProxySocketObservation" in recorder_cpp,
+        "MtProxyEndpointRecorder must own coordinator completion, endpoint policy writes, and terminal observation creation",
+        failures,
+    )
     # --- Commit 3: admission_queue JNI out of lock + probeKey-only Java cancel ---
-    scheduler_cpp = read(TGNET / "MtProxyHandshakeScheduler.cpp")
+    scheduler_cpp = read(TGNET.parent / "mtproxy/MtProxyHandshakeScheduler.cpp")
     admq_idx = socket_cpp.find('publishProxyConnectionStage("admission_queue")')
     admit_idx = socket_cpp.find("mtProxyHandshakeSchedulerAdmit(request)")
     require(

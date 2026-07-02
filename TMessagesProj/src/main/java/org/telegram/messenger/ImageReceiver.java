@@ -297,6 +297,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
     private boolean allowStartLottieAnimation = true;
     public boolean useSharedAnimationQueue;
     private boolean allowDecodeSingleFrame;
+    private boolean animationLimitFps;
     private int autoRepeat = 1;
     private int autoRepeatCount = -1;
     private long autoRepeatTimeout;
@@ -934,6 +935,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
                 fileDrawable.addParent(this);
             }
             fileDrawable.setUseSharedQueue(useSharedAnimationQueue || fileDrawable.isWebmSticker);
+            fileDrawable.setLimitFps(animationLimitFps);
             if (allowStartAnimation && currentOpenedLayerFlags == 0) {
                 fileDrawable.checkRepeat();
             }
@@ -2291,8 +2293,17 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
         visibleInvalidate = invalidate;
     }
 
+    private Runnable invalidateDelegate;
+    public void setInvalidateDelegate(Runnable invalidateDelegate) {
+        this.invalidateDelegate = invalidateDelegate;
+    }
+
     public final Runnable invalidateRunnable = this::invalidate;
     public void invalidate() {
+        if (invalidateDelegate != null) {
+            invalidateDelegate.run();
+            return;
+        }
         if (parentView == null) {
             return;
         }
@@ -2669,6 +2680,14 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
         allowDecodeSingleFrame = value;
     }
 
+    public void setAnimationLimitFps(boolean value) {
+        animationLimitFps = value;
+        AnimatedFileDrawable animation = getAnimation();
+        if (animation != null) {
+            animation.setLimitFps(animationLimitFps);
+        }
+    }
+
     public void setAutoRepeat(int value) {
         autoRepeat = value;
         RLottieDrawable drawable = getLottieAnimation();
@@ -2985,6 +3004,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
         } else if (drawable instanceof AnimatedFileDrawable) {
             AnimatedFileDrawable fileDrawable = (AnimatedFileDrawable) drawable;
             fileDrawable.setUseSharedQueue(useSharedAnimationQueue);
+            fileDrawable.setLimitFps(animationLimitFps);
             if (attachedToWindow) {
                 fileDrawable.addParent(this);
             }
@@ -2993,9 +3013,7 @@ public class ImageReceiver implements NotificationCenter.NotificationCenterDeleg
             }
             fileDrawable.setAllowDecodeSingleFrame(allowDecodeSingleFrame);
             animationReadySent = false;
-            if (parentView != null) {
-                parentView.invalidate();
-            }
+            invalidate();
         } else if (drawable instanceof RLottieDrawable) {
             RLottieDrawable fileDrawable = (RLottieDrawable) drawable;
             if (attachedToWindow) {

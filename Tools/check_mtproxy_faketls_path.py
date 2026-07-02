@@ -20,15 +20,15 @@ HDR = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_HDR = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 PROXY_CHECK_HDR = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
-MTPROXY_OPTIONS = ROOT / "TMessagesProj/jni/tgnet/MtProxyOptions.h"
-MTPROXY_PHASE_CONTRACT_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
-MTPROXY_SECRET_DOMAIN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.h"
-MTPROXY_SECRET_DOMAIN_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.cpp"
-MTPROXY_SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.h"
-MTPROXY_SERVER_FLIGHT_PARSER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.cpp"
-MTPROXY_HANDSHAKE_SCHEDULER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.h"
-MTPROXY_HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
-MTPROXY_DATA_PATH_SHAPER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
+MTPROXY_OPTIONS = ROOT / "TMessagesProj/jni/mtproxy/MtProxyOptions.h"
+MTPROXY_PHASE_CONTRACT_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
+MTPROXY_SECRET_DOMAIN_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxySecretDomain.h"
+MTPROXY_SECRET_DOMAIN_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxySecretDomain.cpp"
+MTPROXY_SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyServerFlightParser.h"
+MTPROXY_SERVER_FLIGHT_PARSER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyServerFlightParser.cpp"
+MTPROXY_HANDSHAKE_SCHEDULER_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.h"
+MTPROXY_HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakeScheduler.cpp"
+MTPROXY_DATA_PATH_SHAPER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 CM_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 CM_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
@@ -481,7 +481,7 @@ def main() -> int:
         and "lastMonotonicPauseTime" in cpp
         and '"background_handshake_aborted"' in cpp
         and 'releaseProxyHandshakeAdmission(false, pausedDuringHandshake ? "background_handshake_aborted" : "freeze_timeout")' in cpp
-        and 'strcmp(diagnostic, "background_handshake_aborted") == 0' in cpp,
+        and '"background_handshake_aborted"' in (ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h").read_text(encoding="utf-8"),
         "FakeTLS ServerHello wait timeout must be named accurately and screen-off/background aborts must stay local",
     )
     require(
@@ -544,7 +544,7 @@ def main() -> int:
         and "MtProxyPhase::SecretParseInvalidDomain" in secret_domain_cpp
         and 'SecretParseInvalidDomainControlChar = "secret_parse_invalid_domain_control_char"' in phase_contract
         and 'SecretParseInvalidDomain = "secret_parse_invalid_domain"' in phase_contract
-        and "tgnet/MtProxySecretDomain.cpp" in cmake,
+        and "mtproxy/MtProxySecretDomain.cpp" in cmake,
         "secret-domain planning helpers must live in MtProxySecretDomain and stay out of ConnectionSocket.cpp",
     )
     require(
@@ -570,7 +570,7 @@ def main() -> int:
         and "mtProxyVerifyServerHelloHmac" not in cpp
         and "MtProxyServerHelloParseResult" not in cpp
         and "MtProxyServerFlightParseResult parseResult = mtProxyParseServerHelloFlight" in cpp
-        and "tgnet/MtProxyServerFlightParser.cpp" in cmake
+        and "mtproxy/MtProxyServerFlightParser.cpp" in cmake
         and "TLS server hello hmac wait" in cpp
         and "TLS server hello wait for tail data" in cpp
         and "server_hello_hmac_timeout" in cpp,

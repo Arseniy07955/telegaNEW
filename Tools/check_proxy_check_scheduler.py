@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
 STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java"
+REDUCER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyEventReducer.java"
 VISIBLE_STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java"
 HEALTH = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyHealthStore.java"
 STATUS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyStatusMirror.java"
@@ -31,7 +32,6 @@ checks = [
     (SCHEDULER, "activeRequest", "scheduler must keep a single active background check"),
     (HEALTH, "EndpointState", "health store must keep per-endpoint check state outside mutable ProxyInfo rows"),
     (HEALTH, "endpointStates", "health store must remember endpoint cooldowns across UI/rotation sweeps"),
-    (SCHEDULER, "enqueueStale", "scheduler must expose stale-check enqueueing"),
     (SCHEDULER, "enqueueNow", "scheduler must expose priority manual checks so GUI does not bypass the shared queue"),
     (SCHEDULER, "owner == null", "scheduler must reject ownerless checks because they cannot be cancelled or drained reliably"),
     (SCHEDULER, "isFresh", "scheduler must expose one freshness policy for UI and rotation"),
@@ -71,7 +71,7 @@ checks = [
     (SCHEDULER, "cancelProxyCheck", "scheduler must cancel the native active check when owner is cancelled"),
     (SCHEDULER, "onProxyCheckQueueFinished", "scheduler must notify owners when their sweep is drained"),
     (SCHEDULER, "proxy_check_scheduler ", "scheduler must use a stable log prefix for UI diagnostics"),
-    (SCHEDULER, "enqueue endpoint=", "scheduler must log enqueue decisions for UI diagnostics"),
+    (SCHEDULER, "enqueue_now endpoint=", "scheduler must log enqueue decisions for UI diagnostics"),
     (SCHEDULER, "start endpoint=", "scheduler must log check start for UI diagnostics"),
     (SCHEDULER, "finish result=", "scheduler must log check finish for UI diagnostics"),
     (SCHEDULER, "finish_ignored", "scheduler must log late native callbacks that no longer match the active Java request"),
@@ -128,6 +128,7 @@ if failed:
 
 scheduler_text = SCHEDULER.read_text(encoding="utf-8")
 store_text = STORE.read_text(encoding="utf-8")
+reducer_text = REDUCER.read_text(encoding="utf-8")
 visible_text = VISIBLE_STORE.read_text(encoding="utf-8")
 health_text = HEALTH.read_text(encoding="utf-8")
 status_text = STATUS.read_text(encoding="utf-8")
@@ -140,9 +141,9 @@ if "proxyInfo.address.toLowerCase(Locale.US)" in endpoint_key_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {ENDPOINT_KEY.relative_to(ROOT)}: endpointKey must normalize null host values before lowercasing")
     sys.exit(1)
-if "if (proxyInfo == null || owner == null)" not in scheduler_text or "if (proxyList == null || owner == null)" not in scheduler_text:
+if "if (proxyInfo == null || owner == null)" not in scheduler_text:
     print("Proxy check scheduler guard failed:")
-    print(f" - {SCHEDULER.relative_to(ROOT)}: enqueueNow/enqueueStale must reject ownerless checks at the public API boundary")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: enqueueNow must reject ownerless checks at the public API boundary")
     sys.exit(1)
 if "long appliedTime = ProxyRuntimeStateStore.appliedTimeForProxyCheck(request.currentAccount, request.proxyInfo, time);" not in scheduler_text or "long callbackTime = ProxyRuntimeStateStore.callbackTimeForProxyCheck(request.currentAccount, request.proxyInfo, time);" not in scheduler_text:
     print("Proxy check scheduler guard failed:")
@@ -151,16 +152,22 @@ if "long appliedTime = ProxyRuntimeStateStore.appliedTimeForProxyCheck(request.c
 mark_connected_start = store_text.find("public static void markConnected")
 mark_connected_end = store_text.find("public static void markConnectionStarting", mark_connected_start)
 mark_connected_body = store_text[mark_connected_start:mark_connected_end]
+reducer_mark_connected_start = reducer_text.find("private static ProxyRuntimeStateStore.Decision reduceConnected")
+reducer_mark_connected_end = reducer_text.find("private static ProxyRuntimeStateStore.Decision reduceConnectStart", reducer_mark_connected_start)
+reducer_mark_connected_body = reducer_text[reducer_mark_connected_start:reducer_mark_connected_end]
 visible_mark_connected_start = visible_text.find("static boolean markConnected")
-visible_mark_connected_end = visible_text.find("static void markConnectionStarting", visible_mark_connected_start)
+visible_mark_connected_end = visible_text.find("static boolean markConnectionStarting", visible_mark_connected_start)
 visible_mark_connected_body = visible_text[visible_mark_connected_start:visible_mark_connected_end]
 if (
     "boolean preserveFreshProxyPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now);" not in visible_mark_connected_body
     or "if (!preserveFreshProxyPhase)" not in visible_mark_connected_body
     or visible_mark_connected_body.find("if (!preserveFreshProxyPhase)") > visible_mark_connected_body.find("ProxyStatusMirror.markConnected(proxyInfo, now)")
     or "return !preserveFreshProxyPhase;" not in visible_mark_connected_body
-    or "if (ProxyVisibleStateStore.markConnected(proxyInfo, now))" not in mark_connected_body
-    or "ProxyHealthStore.rememberConnected(proxyInfo, now);" not in mark_connected_body
+    or "ProxyConnectionEvent.connected" not in mark_connected_body
+    or "onRuntimeEvent(" not in mark_connected_body
+    or "boolean visibleChanged = ProxyVisibleStateStore.markConnected(currentProxy, event.timestamp);" not in reducer_mark_connected_body
+    or "if (visibleChanged)" not in reducer_mark_connected_body
+    or "ProxyHealthStore.rememberConnected(currentProxy, event.timestamp);" not in reducer_mark_connected_body
 ):
     print("Proxy check scheduler guard failed:")
     print(f" - {STORE.relative_to(ROOT)} / {VISIBLE_STORE.relative_to(ROOT)}: generic connected-state observations must preserve fresh terminal failure or usable success phases")
@@ -175,14 +182,19 @@ if "availableCheckTime = now" in status_mark_connected_body:
 mark_starting_start = store_text.find("public static void markConnectionStarting")
 mark_starting_end = store_text.find("public static void markConnectionUsable", mark_starting_start)
 mark_starting_body = store_text[mark_starting_start:mark_starting_end]
-visible_mark_starting_start = visible_text.find("static void markConnectionStarting")
+reducer_mark_starting_start = reducer_text.find("private static ProxyRuntimeStateStore.Decision reduceConnectStart")
+reducer_mark_starting_end = reducer_text.find("private static ProxyRuntimeStateStore.Decision applyVisibleUsableSuccess", reducer_mark_starting_start)
+reducer_mark_starting_body = reducer_text[reducer_mark_starting_start:reducer_mark_starting_end]
+visible_mark_starting_start = visible_text.find("static boolean markConnectionStarting")
 visible_mark_starting_end = visible_text.find("static boolean markConnectionUsable", visible_mark_starting_start)
 visible_mark_starting_body = visible_text[visible_mark_starting_start:visible_mark_starting_end]
 held_live_idx = visible_mark_starting_body.find("decision=held_live_by_usable_success")
 routine_visible_idx = visible_mark_starting_body.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now);", held_live_idx)
 clear_usable_idx = visible_mark_starting_body.find("ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName)")
 if (
-    "ProxyVisibleStateStore.markConnectionStarting(proxyInfo" not in mark_starting_body
+    "ProxyConnectionEvent.connectStart" not in mark_starting_body
+    or "onRuntimeEvent(" not in mark_starting_body
+    or "boolean visibleChanged = ProxyVisibleStateStore.markConnectionStarting(currentProxy, event.timestamp, event.origin);" not in reducer_mark_starting_body
     or "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)" not in visible_mark_starting_body
     or held_live_idx < 0
     or routine_visible_idx < 0
@@ -372,26 +384,17 @@ if "case NETWORK:" not in endpoint_key_text or "case EXACT:" not in endpoint_key
     print(f" - {ENDPOINT_KEY.relative_to(ROOT)}: phase-aware endpoint state must choose between host/port and exact proxy keys")
     sys.exit(1)
 
-enqueue_stale_start = scheduler_text.find("public static int enqueueStale(")
-enqueue_stale_end = scheduler_text.find("public static void cancelOwner(", enqueue_stale_start)
-enqueue_stale_body = scheduler_text[enqueue_stale_start:enqueue_stale_end]
-ordered_needles = [
-    "attachPending(proxyInfo, owner, callback, false)",
-    "clearDetachedCheckState(proxyInfo, \"enqueue\")",
-    "shouldCheck(proxyInfo, false)",
-]
-last_index = -1
-for needle in ordered_needles:
-    needle_index = enqueue_stale_body.find(needle)
-    if needle_index == -1 or needle_index <= last_index:
-        print("Proxy check scheduler guard failed:")
-        print(f" - {SCHEDULER.relative_to(ROOT)}: enqueueStale must attach to active endpoint checks before deciding a ProxyInfo is already checking")
-        sys.exit(1)
-    last_index = needle_index
-
-if "shouldCheck(proxyInfo, false)" not in enqueue_stale_body:
+if "enqueueStale" in scheduler_text:
     print("Proxy check scheduler guard failed:")
-    print(f" - {SCHEDULER.relative_to(ROOT)}: background sweeps must use cooldown-aware non-forced checks")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: sweep-style stale enqueueing must not return; checks are explicit (enqueueNow) and endpoint cadence is native (nextAllowedCheckTime)")
+    sys.exit(1)
+if "failureBackoffMs" in scheduler_text or "cooldownMs" in scheduler_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: scheduler must not own an endpoint retry clock; hold windows come from the native retry authority via ProxyHealthStore")
+    sys.exit(1)
+if "ProxyRuntimeStateStore.nextAllowedCheckTime(proxyInfo)" not in scheduler_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: shouldCheck must gate on the store-provided nextAllowedCheckTime (native-fed hold), not local math")
     sys.exit(1)
 should_check_method = scheduler_text[scheduler_text.find("private static boolean shouldCheck"):]
 should_check_method = should_check_method[:should_check_method.find("\n    public static", 1)]

@@ -195,9 +195,9 @@ final class ProxyVisibleStateStore {
         return !preserveFreshProxyPhase;
     }
 
-    static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, long now, ProxyConnectionEvent.Origin origin) {
+    static boolean markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, long now, ProxyConnectionEvent.Origin origin) {
         if (proxyInfo == null) {
-            return;
+            return false;
         }
         clearPendingDnsVisiblePhase(ProxyEndpointKey.liveStage(proxyInfo), now);
         boolean forceVisibleActivation = origin == ProxyConnectionEvent.Origin.USER_SELECT
@@ -208,26 +208,27 @@ final class ProxyVisibleStateStore {
             ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName);
             ProxyStatusMirror.markConnectionStarting(proxyInfo, now);
             ProxyRuntimeStateStore.logControl("decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
-            return;
+            return true;
         }
         if (ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)) {
             ProxyRuntimeStateStore.logControl("decision=ignored_rotated_away source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
-            return;
+            return false;
         }
         if (ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, ProxyCheckDiagnostics.CONNECT_START)) {
             ProxyRuntimeStateStore.logControl("decision=held_by_fresh_failure source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + ProxyStatusMirror.diagnostic(proxyInfo));
-            return;
+            return false;
         }
         if (ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)) {
             ProxyRuntimeStateStore.logControl("decision=held_live_by_usable_success source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + heldByUsablePhase(proxyInfo, now));
-            return;
+            return false;
         }
         if (isCurrentProxyUsable(proxyInfo, now)) {
             ProxyRuntimeStateStore.logControl("decision=held_live_by_current_proxy_usable source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + heldByCurrentProxyPhase(proxyInfo, now));
-            return;
+            return false;
         }
         ProxyStatusMirror.markConnectionStarting(proxyInfo, now);
         ProxyRuntimeStateStore.logControl("decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
+        return true;
     }
 
     static boolean markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration) {

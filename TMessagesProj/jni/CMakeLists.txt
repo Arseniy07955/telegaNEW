@@ -184,6 +184,39 @@ set_target_properties(tdutils PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTOR
 #            SIZEOF_SIZE_T=8)
 #endif()
 
+# mtproxy_core: self-contained MTProxy/FakeTLS policy engine (see mtproxy/README.md).
+# Depends only on BoringSSL; PUBLIC-exports jni/ so consumers include it as
+# "mtproxy/MtProxyX.h". Java/socket layers link against this, never vice versa.
+add_library(mtproxy_core STATIC
+        mtproxy/MtProxyAdaptivePolicy.cpp
+        mtproxy/MtProxyDataPathShaper.cpp
+        mtproxy/MtProxyEndpointRecorder.cpp
+        mtproxy/MtProxyEndpointPolicy.cpp
+        mtproxy/MtProxyFailureEvidence.cpp
+        mtproxy/MtProxyHandshakePlan.cpp
+        mtproxy/MtProxyHandshakeScheduler.cpp
+        mtproxy/MtProxyProbeCoordinator.cpp
+        mtproxy/MtProxyProbeLease.cpp
+        mtproxy/MtProxyRecoveryPolicy.cpp
+        mtproxy/MtProxyRetryAuthority.cpp
+        mtproxy/MtProxySecretDomain.cpp
+        mtproxy/MtProxySocketPublisher.cpp
+        mtproxy/MtProxyServerFlightParser.cpp
+        mtproxy/MtProxyStartupTimeline.cpp
+        mtproxy/MtProxyTerminalDiagnostic.cpp)
+target_compile_options(mtproxy_core PUBLIC
+        -Wall -frtti -finline-functions -ffast-math -Oz)
+set_target_properties(mtproxy_core PROPERTIES
+        ANDROID_ARM_MODE arm)
+target_compile_definitions(mtproxy_core PUBLIC
+        HAVE_PTHREAD)
+target_include_directories(mtproxy_core PUBLIC
+        boringssl/include/
+        ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mtproxy_core
+        ssl
+        crypto)
+
 #tgnet
 add_library(tgnet STATIC
         tgnet/ApiScheme.cpp
@@ -195,18 +228,6 @@ add_library(tgnet STATIC
         tgnet/ConnectionsManager.cpp
         tgnet/ConnectionSocket.cpp
         tgnet/ConnectionSocketStateMachine.cpp
-        tgnet/MtProxyAdaptivePolicy.cpp
-        tgnet/MtProxyDataPathShaper.cpp
-        tgnet/MtProxyEndpointPolicy.cpp
-        tgnet/MtProxyFailureEvidence.cpp
-        tgnet/MtProxyHandshakePlan.cpp
-        tgnet/MtProxyHandshakeScheduler.cpp
-        tgnet/MtProxyProbeCoordinator.cpp
-        tgnet/MtProxyRecoveryPolicy.cpp
-        tgnet/MtProxySecretDomain.cpp
-        tgnet/MtProxySocketPublisher.cpp
-        tgnet/MtProxyServerFlightParser.cpp
-        tgnet/MtProxyStartupTimeline.cpp
         tgnet/WssTransport.cpp
         tgnet/Datacenter.cpp
         tgnet/EventObject.cpp
@@ -228,6 +249,7 @@ target_compile_definitions(tgnet PUBLIC
 target_include_directories(tgnet PUBLIC
         boringssl/include/)
 target_link_libraries(tgnet
+        mtproxy_core
         ssl
         crypto)
 

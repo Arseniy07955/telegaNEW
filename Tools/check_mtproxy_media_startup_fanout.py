@@ -165,6 +165,7 @@ def main():
     media_delay = method_body(media, "private boolean delayProxyWarmupPrefetch")
     stories_delay = method_body(stories, "private boolean delayProxyWarmupPrefetch")
     mark_usable = method_body(runtime, "public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration)")
+    apply_usable = method_body(runtime, "static boolean applyConnectionUsable")
     mark_failure = method_body(runtime, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
 
     require(
@@ -261,8 +262,9 @@ def main():
             failures,
         )
     require(
-        "ProxyWarmupGate.onProxyUsable" in mark_usable
-        and "ProxyEndpointKey.liveStage(proxyInfo)" in mark_usable,
+        "ProxyConnectionEvent.usableSuccess" in mark_usable
+        and "ProxyWarmupGate.onProxyUsable" in apply_usable
+        and "ProxyEndpointKey.liveStage(proxyInfo)" in apply_usable,
         "usable MTProxy proof must switch ProxyWarmupGate to USABLE for the live endpoint",
         failures,
     )

@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKS = [
     "check_connection_socket_state_machine_rewrite.py",
     "check_tgnet_network_type_access.py",
+    "check_mtproxy_module_boundary.py",
+    "build_mtproxy_host.py",
     "check_mtproxy_options_contract.py",
     "check_mtproxy_policy_extraction.py",
     "check_mtproxy_faketls_path.py",
@@ -23,6 +25,7 @@ CHECKS = [
     "check_mtproxy_plain_dd_lifecycle.py",
     "check_mtproxy_datapath_failure.py",
     "check_mtproxy_phase_contract.py",
+    "check_mtproxy_phase_classification.py",
     "check_mtproxy_compatibility_ladder_broad.py",
     "check_mtproxy_compatibility_recipe.py",
     "check_mtproxy_resilience_contract.py",

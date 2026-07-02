@@ -15,6 +15,10 @@ import java.util.List;
 
 public class ProxyCheckScheduler {
 
+    // Start-to-start smoothing between queued checks. This is queue-submission
+    // hygiene for the single-active executor, NOT an endpoint retry clock:
+    // whether an endpoint may be tried again is decided by the native retry
+    // authority and reaches Java as nextAllowedCheckTime (see shouldCheck).
     private static final long PROXY_CHECK_SPACING_MS = 700L;
 
     private static final ArrayList<Request> queue = new ArrayList<>();
@@ -45,31 +49,10 @@ public class ProxyCheckScheduler {
         return true;
     }
 
-    public static int enqueueStale(int currentAccount, List<SharedConfig.ProxyInfo> proxyList, Object owner, Callback callback) {
-        if (proxyList == null || owner == null) {
-            log("enqueue_rejected owner=" + owner);
-            return 0;
-        }
-        int added = 0;
-        for (int i = 0, count = proxyList.size(); i < count; i++) {
-            SharedConfig.ProxyInfo proxyInfo = proxyList.get(i);
-            if (attachPending(proxyInfo, owner, callback, false)) {
-                added++;
-                continue;
-            }
-            clearDetachedCheckState(proxyInfo, "enqueue");
-            if (!shouldCheck(proxyInfo, false)) {
-                continue;
-            }
-            queue.add(new Request(currentAccount, proxyInfo, owner, callback));
-            added++;
-            log("enqueue endpoint=" + endpoint(proxyInfo) + " queued=" + queue.size());
-        }
-        if (added > 0) {
-            AndroidUtilities.runOnUIThread(startNextRunnable);
-        }
-        return added;
-    }
+    // There is deliberately no sweep-style bulk enqueue here: background
+    // proxy-check sweeps were removed (they fought the native gates and
+    // spammed endpoints). Checks are explicit (enqueueNow from the UI), and
+    // per-endpoint cadence comes from the native retry authority.
 
     public static void clearDetachedCheckStates(List<SharedConfig.ProxyInfo> proxyList, String reason) {
         if (proxyList == null) {

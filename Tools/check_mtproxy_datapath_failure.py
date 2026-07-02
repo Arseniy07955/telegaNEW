@@ -36,10 +36,10 @@ def main() -> int:
     connection_h = read("TMessagesProj/jni/tgnet/Connection.h")
     manager = read("TMessagesProj/jni/tgnet/ConnectionsManager.cpp")
     manager_h = read("TMessagesProj/jni/tgnet/ConnectionsManager.h")
-    endpoint_policy = read("TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp")
-    shaper = read("TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp")
-    recovery_policy = read("TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp")
-    adaptive_policy = read("TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp")
+    endpoint_policy = read("TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp")
+    shaper = read("TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp")
+    recovery_policy = read("TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp")
+    adaptive_policy = read("TMessagesProj/jni/mtproxy/MtProxyAdaptivePolicy.cpp")
     phase_policy = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java")
     runtime_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java")
     visible_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java")
@@ -62,13 +62,11 @@ def main() -> int:
         "native endpoint policy must not route DD first-packet no-response to the host:port network key",
         failures,
     )
+    from mtproxy_phase_contract import java_policy
     require(
-        "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:" in phase_policy
-        and "return live(KeyScope.EXACT);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_SENT:", "case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:")
-        and "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:" in phase_policy
-        and "return success(KeyScope.EXACT);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:", "case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:")
-        and "case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:" in phase_policy
-        and "return failure(KeyScope.EXACT, true, true);" in slice_between(phase_policy, "case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:", "case ProxyCheckDiagnostics.UNKNOWN_FAIL:"),
+        java_policy("first_mtproxy_packet_sent") == ("live", "exact", False, False)
+        and java_policy("first_mtproxy_packet_recv") == ("success", "exact", False, False)
+        and java_policy("mtproxy_packet_sent_no_response") == ("failure", "exact", True, True),
         "Java phase policy must classify DD sent/recv/no-response as exact data-path phases",
         failures,
     )
@@ -85,8 +83,8 @@ def main() -> int:
         "firstTransportPacketSent = true;" in socket
         and "firstTransportPacketReceived = true;" in socket
         and "dataPathProven = true;" in socket
-        and 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")' in socket
-        and 'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in socket,
+        and 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_mtproxy_packet_recv"), mtProxyEndpointRecorderCallbacks())' in socket
+        and 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())' in socket,
         "native socket must mark data-path proof only after first transport/appdata receive",
         failures,
     )
@@ -108,16 +106,16 @@ def main() -> int:
         failures,
     )
     require(
-        'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in socket
+        'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())' in socket
         and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in socket
         and "publishMtProxySocketObservation(observation)" in socket,
         "first_tls_app_recv must remain the FakeTLS usable success marker",
         failures,
     )
     require(
-        "recordMtProxyEndpointHandshakeOk(\"server_hello_hmac_ok\")" in socket
+        'MtProxyEndpointRecorder::recordHandshakeOk(mtProxyEndpointSuccessContext("server_hello_hmac_ok"), mtProxyEndpointRecorderCallbacks())' in socket
         and "setTransportState(TransportState::MtprotoReady, \"server_hello_hmac_ok\")" in socket
-        and "recordMtProxyEndpointDataPathSuccess(\"server_hello_hmac_ok\")" not in socket,
+        and "recordDataPathSuccess(mtProxyEndpointSuccessContext(\"server_hello_hmac_ok\")" not in socket,
         "server_hello_hmac_ok must remain only a handshake milestone, not data-path success",
         failures,
     )

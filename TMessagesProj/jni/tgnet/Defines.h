@@ -28,12 +28,7 @@
 #define PROXY_CONNECTIONS_COUNT 4
 #define DOWNLOAD_CONNECTIONS_COUNT 2
 #define UPLOAD_CONNECTIONS_COUNT 4
-#define MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT 2
-#define MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER 2
-#define MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET 1
-#define MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT 1
-#define MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD 1
-#define MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE 2
+// MT_PROXY_STARTUP_* handshake fanout limits live in mtproxy/MtProxyOptions.h
 #define CONNECTION_BACKGROUND_KEEP_TIME 10000
 #define MAX_ACCOUNT_COUNT 5
 #define USE_DELEGATE_HOST_RESOLVE
@@ -151,7 +146,7 @@ typedef struct ConnectiosManagerDelegate {
     virtual void onUpdate(int32_t instanceNum) = 0;
     virtual void onSessionCreated(int32_t instanceNum) = 0;
     virtual void onConnectionStateChanged(ConnectionState state, int32_t instanceNum) = 0;
-    virtual void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration) = 0;
+    virtual void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs) = 0;
     virtual void onUnparsedMessageReceived(int64_t reqMessageId, NativeByteBuffer *buffer, ConnectionType connectionType, int32_t instanceNum) = 0;
     virtual void onLogout(int32_t instanceNum) = 0;
     virtual void onUpdateConfig(TL_config *config, int32_t instanceNum) = 0;

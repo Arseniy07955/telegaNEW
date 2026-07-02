@@ -7,6 +7,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 FILE_LOG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileLog.java"
 APPLICATION_LOADER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java"
+NATIVE_FILE_LOG_CPP = ROOT / "TMessagesProj/jni/tgnet/FileLog.cpp"
+NATIVE_FILE_LOG_H = ROOT / "TMessagesProj/jni/tgnet/FileLog.h"
 
 
 def read(path: Path) -> str:
@@ -76,6 +78,32 @@ def main() -> int:
     require(
         "!file.isFile()" in cleanup_logs,
         "cleanupLogs() must delete only regular log files and leave subdirectories alone",
+        failures,
+    )
+
+    native_log_cpp = read(NATIVE_FILE_LOG_CPP)
+    native_log_h = read(NATIVE_FILE_LOG_H)
+    require(
+        "MAX_NATIVE_LOG_BYTES" in native_log_cpp
+        and "rotateNativeLogIfNeededLocked" in native_log_cpp
+        and "rotateNativeLogIfNeededLocked" in native_log_h,
+        "native _net log must stay size-capped with ring rotation",
+        failures,
+    )
+    require(
+        "NATIVE_LOG_FLUSH_INTERVAL_MS" in native_log_cpp
+        and "androidPriority >= ANDROID_LOG_ERROR" in native_log_cpp
+        and "lastFlushMs" in native_log_h,
+        "native log must flush errors immediately but batch debug flushes "
+        "(per-line fflush turned reconnect storms into a syscall-per-line firehose)",
+        failures,
+    )
+    write_locked = extract_method(file_log, "private static synchronized void writeLogLineLocked")
+    require(
+        write_locked != ""
+        and "lastStreamFlushMs" in write_locked
+        and '"E".equals(level)' in write_locked,
+        "Java FileLog must flush errors immediately but batch debug flushes",
         failures,
     )
 

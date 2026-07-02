@@ -122,9 +122,10 @@ def main() -> int:
     require(policy, "FIRST_TLS_APP_RECV", "ProxyPhasePolicy must treat first TLS app recv as usable success", failures)
     require(policy, "FIRST_MTPROXY_PACKET_RECV", "ProxyPhasePolicy must treat first MTProxy packet recv as usable success", failures)
     require(policy, "SERVER_HELLO_HMAC_OK", "ProxyPhasePolicy must explicitly classify server hello as handshake only", failures)
+    from mtproxy_phase_contract import java_policy
     one_shot_terminal = method_body(policy, "public static boolean isOneShotTerminal")
-    handshake_profiles_decision = phase_return(policy, "HANDSHAKE_PROFILES_EXHAUSTED")
-    if "failure(KeyScope.EXACT, true, true)" not in handshake_profiles_decision or "terminalExactFailure()" in handshake_profiles_decision:
+    kind, scope, backoff, rotate = java_policy("handshake_profiles_exhausted")
+    if (kind, scope, backoff, rotate) != ("failure", "exact", True, True):
         failures.append("handshake_profiles_exhausted must remain a recoverable exact failure, not terminalExactConfig")
     if "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in one_shot_terminal:
         failures.append("handshake_profiles_exhausted must not be isOneShotTerminal in Java")
@@ -132,24 +133,26 @@ def main() -> int:
         if f"case ProxyCheckDiagnostics.{phase}:" not in one_shot_terminal:
             failures.append(f"{phase.lower()} must remain isOneShotTerminal in Java")
     require(diagnostics, "BACKGROUND_HANDSHAKE_ABORTED", "ProxyCheckDiagnostics must expose background/screen-off FakeTLS aborts", failures)
+    if "ProxyPhaseClassification.isKnownJavaPhase" not in policy:
+        failures.append("ProxyPhasePolicy.classify must delegate to the generated contract table")
     for phase in (
-        "CONNECTION_NOT_STARTED",
-        "ADMISSION_TIMEOUT",
-        "TCP_CONNECT_GATE_TIMEOUT",
-        "ENDPOINT_COOLDOWN_TIMEOUT",
-        "DNS_COALESCE_TIMEOUT",
-        "DNS_BLOCKED_ZERO_ADDRESS",
-        "DNS_NEGATIVE_CACHE_HIT",
+        "connection_not_started",
+        "admission_timeout",
+        "tcp_connect_gate_timeout",
+        "endpoint_cooldown_timeout",
+        "dns_coalesce_timeout",
+        "dns_blocked_zero_address",
+        "dns_negative_cache_hit",
     ):
-        decision = phase_return(policy, phase)
-        if "failure(" not in decision or "false, false" not in decision:
-            failures.append(f"ProxyPhasePolicy must classify local scheduler timeout {phase.lower()} as visible failure without backoff or rotation")
-    for phase in ("HOST_RESOLVE_FAILED", "HOST_RESOLVE_TIMEOUT", "TCP_NOT_CONNECTED", "TCP_CONNECTION_REFUSED", "TCP_CONNECT_TIMEOUT"):
-        decision = phase_return(policy, phase)
-        if "failure(" not in decision or "true, true" not in decision:
-            failures.append(f"ProxyPhasePolicy must keep real network phase {phase.lower()} punitive")
-    background_decision = phase_return(policy, "BACKGROUND_HANDSHAKE_ABORTED")
-    if "failure(" not in background_decision or "false, false" not in background_decision:
+        kind, scope, backoff, rotate = java_policy(phase)
+        if kind != "failure" or backoff or rotate:
+            failures.append(f"ProxyPhasePolicy must classify local scheduler timeout {phase} as visible failure without backoff or rotation")
+    for phase in ("host_resolve_failed", "host_resolve_timeout", "tcp_not_connected", "tcp_connection_refused", "tcp_connect_timeout"):
+        kind, scope, backoff, rotate = java_policy(phase)
+        if kind != "failure" or not backoff or not rotate:
+            failures.append(f"ProxyPhasePolicy must keep real network phase {phase} punitive")
+    kind, scope, backoff, rotate = java_policy("background_handshake_aborted")
+    if kind != "failure" or backoff or rotate:
         failures.append("ProxyPhasePolicy must classify background_handshake_aborted as non-punitive lifecycle telemetry")
 
     for phase in sorted(endpoint_key_phases(ENDPOINT_NETWORK)):

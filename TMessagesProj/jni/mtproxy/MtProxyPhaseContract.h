@@ -57,6 +57,12 @@ constexpr const char *FirstMtproxyPacketRecv = "first_mtproxy_packet_recv";
 constexpr const char *ShadowedSocketFailure = "shadowed_socket_failure";
 constexpr const char *IgnoredCancelledGeneration = "ignored_cancelled_generation";
 constexpr const char *ReconnectBackoffSuppressed = "reconnect_backoff_suppressed";
+constexpr const char *RecipeFailed = "recipe_failed";
 }
+
+// Classification helpers (isPreIoTerminalVerdict, needsReconnectBackoff,
+// isObservationFacadePhase) are generated from Tools/mtproxy_phase_contract.py
+// into MtProxyPhaseClassification.h - edit the Python contract, not C++ lists.
+#include "MtProxyPhaseClassification.h"
 
 #endif

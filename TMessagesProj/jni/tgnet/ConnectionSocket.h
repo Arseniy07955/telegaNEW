@@ -14,8 +14,10 @@
 #include <memory>
 #include <string>
 #include "ConnectionSocketStateMachine.h"
-#include "MtProxyAdaptivePolicy.h"
-#include "MtProxyOptions.h"
+#include "mtproxy/MtProxyAdaptivePolicy.h"
+#include "mtproxy/MtProxyEndpointRecorder.h"
+#include "mtproxy/MtProxyOptions.h"
+#include "mtproxy/MtProxyProbeLease.h"
 
 class NativeByteBuffer;
 class ConnectionsManager;
@@ -45,6 +47,11 @@ public:
     const char *getProxyCheckDiagnostic();
     bool isProxyCloseDiagnosticSuppressed();
     bool isClosingOrClosedForWrites() const;
+    // Remaining coordinator terminal hold (budget backoff / profiles exhausted)
+    // captured on the pre-TCP close path; consumed once by the Connection layer
+    // so the reconnect timer waits out the coordinator's clock instead of a
+    // shorter re-derived backoff. Returns 0 when no hold was suggested.
+    uint32_t consumeSuggestedReconnectHoldMs();
 
 protected:
     int32_t instanceNum;
@@ -78,10 +85,28 @@ private:
     bool wssUsedRelayFallback = false;
     bool suppressNextProxyCloseDiagnostic = false;
     uint32_t proxyActivationGeneration = 0;
+    uint32_t proxySuggestedReconnectHoldMs = 0;
     std::string proxyActivationOrigin = "active_socket";
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
+    // closeSocket is a dispatcher over these pipeline steps, in execution
+    // order ([close-step N/8]). Step 3's resolution is the only data that
+    // flows between steps; later steps must not re-derive diagnostics.
+    struct CloseDiagnosticResolution {
+        std::string terminalDiagnostic;
+        bool suppress = false;
+        bool shadowedSocketFailure = false;
+        int64_t shadowedHoldMs = 0;
+    };
+    bool closeStepReentryGuard(int32_t reason, int32_t error);
+    void closeStepTransportGate();
+    CloseDiagnosticResolution closeStepResolveDiagnostic(int32_t reason, int32_t error);
+    void closeStepLogDisconnect(int32_t reason, int32_t error, const CloseDiagnosticResolution &resolution);
+    void closeStepPublishVerdict(int32_t reason, const CloseDiagnosticResolution &resolution);
+    void closeStepReleaseResources();
+    void closeStepOsTeardown();
+    void closeStepResetStateAndNotify(int32_t reason, int32_t error);
     bool matchesMtProxyEndpointKey(const std::string &endpointKey);
     bool matchesMtProxyProbeKey(const std::string &probeKey);
     void cancelMtProxyEndpointAttempt(const char *reason);
@@ -134,7 +159,6 @@ private:
     bool canRunMtProxyPreTcpTimer(MtProxyStartupTimerKind expectedKind, uint32_t timerGeneration);
     void classifyMtProxyPreTcpTimeoutDiagnostic(const char *reason);
     std::string deriveMtProxyTerminalDiagnostic(int32_t reason, int32_t error);
-    bool mtProxyDiagnosticIsLocalSchedulerTimeout(const char *diagnostic);
     MtProxyStartupTimerKind mtProxyStartupTimerKindForMode(int32_t mode);
     void setMtProxySocketConnectedLogged(bool logged, const char *reason);
     bool canStartHostResolve();
@@ -160,21 +184,14 @@ private:
     bool scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6);
     bool mtProxyProbeBeginOrJoin(bool ipv6);
     void mtProxyProbeWaitTimerFire(bool ipv6);
-    void acquireMtProxyProbeLease(uint64_t token);
-    void releaseMtProxyProbeLease();
-    void mtProxyProbeHeartbeat();
-    uint64_t mtProxyProbeOwnerToken = 0;
-    std::string mtProxyProbeLeaseKey;
-    std::string mtProxyProbeLeaseEndpointKey;
-    std::string mtProxyProbeLeaseNetworkEndpointKey;
-    uint32_t mtProxyProbeLeaseAllowedSni = 0;
-    uint32_t mtProxyProbeLeaseActivationGeneration = 0;
+    MtProxyProbeLease mtProxyProbeLease;
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);
     bool scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6);
-    void recordMtProxyEndpointFailure(const char *diagnostic, const char *reason);
-    void recordMtProxyEndpointHandshakeOk(const char *reason);
-    void recordMtProxyEndpointDataPathSuccess(const char *reason);
+    MtProxyEndpointRecorder::Callbacks mtProxyEndpointRecorderCallbacks();
+    MtProxyEndpointRecorder::FailureContext mtProxyEndpointFailureContext(const char *diagnostic, const char *reason);
+    MtProxyEndpointRecorder::SuccessContext mtProxyEndpointSuccessContext(const char *reason);
+    MtProxyEndpointRecorder::ProbeBackoffContext mtProxyEndpointProbeBackoffContext(uint32_t holdMs, uint32_t generation, const std::string &terminalPhase);
     void publishMtProxySocketObservation(const MtProxySocketObservation &observation);
     void publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength);
     void closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason);

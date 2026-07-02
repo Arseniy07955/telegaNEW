@@ -75,6 +75,7 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
 
     private final static int STICKER_SIZE = 66;
     private boolean drawInParentView;
+    private Runnable schedulerInvalidateDelegate;
     private final Theme.ResourcesProvider resourceProvider;
 
     public StickerEmojiCell(Context context, boolean isEmojiPanel, Theme.ResourcesProvider resourcesProvider) {
@@ -287,11 +288,12 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
         updatePremiumStatus(false);
         imageView.setAlpha(alpha * premiumAlpha);
         if (drawInParentView) {
-            imageView.setInvalidateAll(true);
+            imageView.setInvalidateAll(false);
             imageView.setParentView((View) getParent());
         } else {
             imageView.setParentView(this);
         }
+        imageView.setInvalidateDelegate(schedulerInvalidateDelegate);
     }
 
     private void updatePremiumStatus(boolean animated) {
@@ -347,10 +349,19 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
         return imageView;
     }
 
+    public void setSchedulerInvalidateDelegate(Runnable schedulerInvalidateDelegate) {
+        this.schedulerInvalidateDelegate = schedulerInvalidateDelegate;
+        imageView.setInvalidateDelegate(schedulerInvalidateDelegate);
+    }
+
     @Override
     public void invalidate() {
         if (drawInParentView && getParent() != null) {
-            ((View) getParent()).invalidate();
+            if (schedulerInvalidateDelegate != null) {
+                schedulerInvalidateDelegate.run();
+            } else {
+                ((View) getParent()).invalidate();
+            }
         }
         emojiTextView.invalidate();
         super.invalidate();
@@ -391,11 +402,12 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         if (drawInParentView) {
-            imageView.setInvalidateAll(true);
+            imageView.setInvalidateAll(false);
             imageView.setParentView((View) getParent());
         } else {
             imageView.setParentView(this);
         }
+        imageView.setInvalidateDelegate(schedulerInvalidateDelegate);
         imageView.onAttachedToWindow();
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.currentUserPremiumStatusChanged);
     }

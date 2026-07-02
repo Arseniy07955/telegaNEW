@@ -292,8 +292,8 @@ def main() -> int:
     health = read(MESSENGER / "ProxyHealthStore.java")
     rotation = read(MESSENGER / "ProxyRotationController.java")
     engine = read(MESSENGER / "ProxyRotationEngine.java")
-    policy_h = read(NATIVE / "MtProxyEndpointPolicy.h")
-    policy_cpp = read(NATIVE / "MtProxyEndpointPolicy.cpp")
+    policy_h = read(NATIVE.parent / "mtproxy/MtProxyEndpointPolicy.h")
+    policy_cpp = read(NATIVE.parent / "mtproxy/MtProxyEndpointPolicy.cpp")
     socket = read(NATIVE / "ConnectionSocket.cpp")
     analyzer = read(ANALYZER)
     runtime_verifier = read(RUNTIME_LOG_VERIFIER)
@@ -303,8 +303,9 @@ def main() -> int:
     require("public static long usableSuccessRemainingMs" in store, "runtime store must expose remaining usable-success hold", failures)
     require("static long usableSuccessRemainingMs" in health, "health store must expose usable-success remaining time", failures)
     require(
-        "return ProxyEventReducer.reduce(event)" in method_body(store, "public static Decision onNativeStage"),
-        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        "return onRuntimeEvent(event)" in method_body(store, "public static Decision onNativeStage")
+        and "return ProxyEventReducer.reduce(event)" in method_body(store, "public static Decision onRuntimeEvent"),
+        "ProxyRuntimeStateStore.onNativeStage must delegate through the unified runtime-event reducer",
         failures,
     )
 
@@ -411,26 +412,27 @@ def main() -> int:
         "selected-account connected/updating current proxy must hold later live socket telemetry before visible writes",
         failures,
     )
-    mark_start = method_body(visible, "static void markConnectionStarting")
+    mark_start = method_body(visible, "static boolean markConnectionStarting")
     runtime_mark_start = method_body(store, "public static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent.Origin origin)")
     connect_start_hold_idx = mark_start.find("decision=held_live_by_usable_success")
     current_proxy_hold_idx = mark_start.find("decision=held_live_by_current_proxy_usable")
     force_visible_idx = mark_start.find("boolean forceVisibleActivation")
     force_clear_idx = mark_start.find("ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName)")
-    force_return_idx = mark_start.find("return;", force_clear_idx)
+    force_return_idx = mark_start.find("return true;", force_clear_idx)
     mark_visible_idx = mark_start.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now)", connect_start_hold_idx)
     require(
         connect_start_hold_idx >= 0
         and mark_visible_idx >= 0
         and connect_start_hold_idx < mark_visible_idx
         and "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)" in mark_start
-        and "return;" in mark_start[connect_start_hold_idx:mark_visible_idx],
+        and "return false;" in mark_start[connect_start_hold_idx:mark_visible_idx],
         "Java connect_start must be held by fresh usable success before it can overwrite visible state",
         failures,
     )
     require(
-        "ProxyVisibleStateStore.markConnectionStarting(proxyInfo" in runtime_mark_start,
-        "ProxyRuntimeStateStore.markConnectionStarting must delegate visible writes to ProxyVisibleStateStore",
+        "ProxyConnectionEvent.connectStart" in runtime_mark_start
+        and "onRuntimeEvent" in runtime_mark_start,
+        "ProxyRuntimeStateStore.markConnectionStarting must publish a runtime event instead of writing visible state directly",
         failures,
     )
     require(
@@ -535,12 +537,13 @@ def main() -> int:
         "recordFailure must return a budgeted shadowed result without increasing cooldown counters",
         failures,
     )
-    failure_body = method_body(socket, "void ConnectionSocket::recordMtProxyEndpointFailure")
+    endpoint_recorder = read(ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp")
+    failure_body = method_body(endpoint_recorder, "void MtProxyEndpointRecorder::recordFailure")
     require(
         "endpoint_failure_shadowed_by_success" in failure_body
         and "shadowedByUsableSuccess" in failure_body
         and "hold_ms" in failure_body,
-        "ConnectionSocket must log shadowed native failures with a dedicated marker",
+        "native endpoint recorder must log shadowed native failures with a dedicated marker",
         failures,
     )
 

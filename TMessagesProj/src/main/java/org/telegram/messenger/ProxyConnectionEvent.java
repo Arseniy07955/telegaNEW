@@ -8,6 +8,7 @@ public final class ProxyConnectionEvent {
     public static final String SOURCE_PROXY_CHECK = "proxy_check";
     public static final String SOURCE_CONNECTED = "connected";
     public static final String SOURCE_CONNECT_START = "connect_start";
+    public static final String SOURCE_USABLE_SUCCESS = "usable_success";
 
     public enum Origin {
         ACTIVE_SOCKET("active_socket"),
@@ -64,9 +65,16 @@ public final class ProxyConnectionEvent {
     public final String networkKey;
     public final String probeKey;
     public final int activationGeneration;
+    // Native retry-authority hold (ms) that arrived with the event; 0 when the
+    // event carries no native clock (Java-origin events, live phases).
+    public final int suggestedHoldMs;
     public final long timestamp;
 
     private ProxyConnectionEvent(String source, Origin origin, int account, String phase, String endpointKey, String networkKey, String probeKey, int activationGeneration, long timestamp) {
+        this(source, origin, account, phase, endpointKey, networkKey, probeKey, activationGeneration, 0, timestamp);
+    }
+
+    private ProxyConnectionEvent(String source, Origin origin, int account, String phase, String endpointKey, String networkKey, String probeKey, int activationGeneration, int suggestedHoldMs, long timestamp) {
         this.source = source;
         this.origin = origin == null ? Origin.ACTIVE_SOCKET : origin;
         this.account = account;
@@ -75,6 +83,7 @@ public final class ProxyConnectionEvent {
         this.networkKey = networkKey == null || networkKey.length() == 0 ? ProxyEndpointKey.networkFromLiveStage(this.endpointKey) : networkKey;
         this.probeKey = probeKey == null ? "" : probeKey;
         this.activationGeneration = activationGeneration;
+        this.suggestedHoldMs = Math.max(0, suggestedHoldMs);
         this.timestamp = timestamp == 0 ? SystemClock.elapsedRealtime() : timestamp;
     }
 
@@ -107,7 +116,11 @@ public final class ProxyConnectionEvent {
     }
 
     public static ProxyConnectionEvent nativeStage(int account, String phase, String endpointKey, String probeKey, String origin, int activationGeneration, long timestamp) {
-        return new ProxyConnectionEvent(SOURCE_NATIVE_STAGE, Origin.fromNative(origin), account, phase, endpointKey, "", probeKey, activationGeneration, timestamp);
+        return nativeStage(account, phase, endpointKey, probeKey, origin, activationGeneration, 0, timestamp);
+    }
+
+    public static ProxyConnectionEvent nativeStage(int account, String phase, String endpointKey, String probeKey, String origin, int activationGeneration, int suggestedHoldMs, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_NATIVE_STAGE, Origin.fromNative(origin), account, phase, endpointKey, "", probeKey, activationGeneration, suggestedHoldMs, timestamp);
     }
 
     public static ProxyConnectionEvent proxyCheck(int account, SharedConfig.ProxyInfo proxyInfo, String phase) {
@@ -115,11 +128,23 @@ public final class ProxyConnectionEvent {
     }
 
     public static ProxyConnectionEvent connected(int account, SharedConfig.ProxyInfo proxyInfo) {
-        return new ProxyConnectionEvent(SOURCE_CONNECTED, Origin.ACTIVE_SOCKET, account, ProxyCheckDiagnostics.OK, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", 0, SystemClock.elapsedRealtime());
+        return connected(account, proxyInfo, Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime());
+    }
+
+    public static ProxyConnectionEvent connected(int account, SharedConfig.ProxyInfo proxyInfo, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_CONNECTED, origin, account, ProxyCheckDiagnostics.OK, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
     }
 
     public static ProxyConnectionEvent connectStart(int account, SharedConfig.ProxyInfo proxyInfo) {
-        return new ProxyConnectionEvent(SOURCE_CONNECT_START, Origin.ACTIVE_SOCKET, account, ProxyCheckDiagnostics.CONNECT_START, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", 0, SystemClock.elapsedRealtime());
+        return connectStart(account, proxyInfo, Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime());
+    }
+
+    public static ProxyConnectionEvent connectStart(int account, SharedConfig.ProxyInfo proxyInfo, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_CONNECT_START, origin, account, ProxyCheckDiagnostics.CONNECT_START, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
+    }
+
+    public static ProxyConnectionEvent usableSuccess(int account, SharedConfig.ProxyInfo proxyInfo, String diagnostic, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_USABLE_SUCCESS, origin, account, diagnostic, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
     }
 
     public static boolean isActiveProxyOrigin(Origin origin) {

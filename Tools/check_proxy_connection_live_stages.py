@@ -190,17 +190,16 @@ def main() -> None:
         and "FIRST_MTPROXY_PACKET_RECV" in diagnostics,
         "ProxyCheckDiagnostics must define concrete data-path success phases that prove a proxy is usable again",
     )
-    usable_method = text("policy")
+    from mtproxy_phase_contract import java_policy
     require(
-        "case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_OK:" in usable_method
-        and "case ProxyCheckDiagnostics.FIRST_TLS_APP_RECV:" in usable_method
-        and "case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:" in usable_method
-        and "return success(KeyScope.EXACT);" in usable_method,
+        java_policy("server_hello_hmac_ok") == ("live", "exact", False, False)
+        and java_policy("first_tls_app_recv") == ("success", "exact", False, False)
+        and java_policy("first_mtproxy_packet_recv") == ("success", "exact", False, False),
         "server_hello_hmac_ok must remain a handshake live phase, not a data-path usable success",
     )
     require(
         ("ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)" in reducer_text or "if (verdict.usableSuccess)" in reducer_text)
-        and "ProxyRuntimeStateStore.markConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in reducer_text,
+        and "ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in reducer_text,
         "concrete success phases from native must clear stale Java endpoint backoff and fresh terminal failures",
     )
     require(
@@ -229,7 +228,7 @@ def main() -> None:
         reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"):
         reducer_text.find("private static boolean isActiveProxyEvent", reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"))
     ]
-    mark_failure_idx = stage_callback.find("rememberLiveFailure(currentProxy, event.phase, event.timestamp);")
+    mark_failure_idx = stage_callback.find("rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs);")
     selected_ui_idx = stage_callback.find("if (selectedAccountStage && verdict.canOverwriteVisible)")
     require(
         mark_failure_idx >= 0
@@ -239,7 +238,7 @@ def main() -> None:
     )
     require(
         "final String endpointKey" in text("connections_java")
-        and "ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration)" in text("connections_java")
+        and "ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, suggestedHoldMs" in text("connections_java")
         and "ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)" in reducer_text,
         "native proxy live stages from stale endpoint/secret keys must not overwrite the currently selected proxy diagnostic",
     )
@@ -258,7 +257,7 @@ def main() -> None:
         and "probeKey" in text("defines")
         and "activationGeneration" in text("defines")
         and "jclass_ConnectionsManager_onProxyConnectionStageChanged" in text("wrapper")
-        and 'GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V")' in text("wrapper"),
+        and 'GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V")' in text("wrapper"),
         "JNI bridge must forward native proxy live stages with endpoint and probe keys to ConnectionsManager",
     )
     require(

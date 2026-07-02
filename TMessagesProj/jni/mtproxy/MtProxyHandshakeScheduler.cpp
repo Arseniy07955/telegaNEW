@@ -1,6 +1,5 @@
 #include "MtProxyHandshakeScheduler.h"
 
-#include "Defines.h"
 #include "MtProxyOptions.h"
 
 #include <algorithm>
@@ -122,7 +121,7 @@ static uint32_t mtProxySecureRandomBounded(uint32_t bound) {
     if (bound <= 1) {
         return 0;
     }
-    uint32_t threshold = (uint32_t) (-bound) % bound;
+    uint32_t threshold = (0u - bound) % bound;
     uint32_t v;
     do {
         RAND_bytes((uint8_t *) &v, sizeof(v));
