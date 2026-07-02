@@ -247,13 +247,14 @@ jobs:
 
       - name: Upload to Beget S3 via SFTP
         if: env.S3_PASS != ''
-        uses: appleboy/scp-action@master
+        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
         env:
           S3_PASS: ${{ secrets.S3_PASS }}
         with:
-          host: ${{ secrets.S3_HOST }}
           username: ${{ secrets.S3_USER }}
+          server: ${{ secrets.S3_HOST }}
           password: ${{ secrets.S3_PASS }}
-          source: "dist-release/*.apk"
-          target: "88918b3137bc-openhearted-zohra/myfork/"
-          strip_components: 1
+          local_path: 'dist-release/'
+          remote_path: '/88918b3137bc-openhearted-zohra/myfork/'
+          sftp_only: true
+          delete_remote_files: false
