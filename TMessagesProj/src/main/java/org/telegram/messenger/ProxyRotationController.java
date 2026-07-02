@@ -159,6 +159,7 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
         if (scheduledSwitchRunnable == runnable) {
             scheduledSwitchRunnable = null;
         }
+        log("scheduled_check skipped background_disabled reason=" + attempt.reason);
         ProxyRotationEngine.SwitchDecision decision = engine.completeScheduledAttempt(attempt, SharedConfig.currentProxy);
         if (decision.stale) {
             log("scheduled_check stale reason=" + decision.decision);

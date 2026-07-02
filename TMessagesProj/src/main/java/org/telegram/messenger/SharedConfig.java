@@ -646,7 +646,11 @@ public class SharedConfig {
             mtProxyConnectionPatternMode = clampInt(preferences.getInt("mtProxyConnectionPatternMode", 0), 0, 4);
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
-            mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 1), 0, 2);
+            mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 0), 0, 2);
+            // telegaNEW: Auto-enable Soft Startup Cover for first-run/new-users
+            if (!preferences.contains("mtProxyStartupCoverMode")) {
+                mtProxyStartupCoverMode = 1;
+            }
             wssTransportMode = normalizeWssTransportMode(preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY));
             // Auto-enable official Telegram WSS once on first run. Official
             // routes are native MTProto-over-WebSocket for DC2/DC4, not a
