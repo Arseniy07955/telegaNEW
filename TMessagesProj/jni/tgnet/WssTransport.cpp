@@ -341,6 +341,13 @@ bool WssTransport::queueHttpUpgrade() {
     }
     secWebSocketKey = base64Encode(randomKey, sizeof(randomKey));
     std::string path = normalizeWssPath(config.path);
+    if (!config.targetAddress.empty()) {
+        if (path.find('?') == std::string::npos) {
+            path += "?dst=" + config.targetAddress;
+        } else {
+            path += "&dst=" + config.targetAddress;
+        }
+    }
     std::string host = config.domain;
     if (config.relayPort != 443) {
         host += ":" + std::to_string((uint32_t) config.relayPort);
