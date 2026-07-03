@@ -1,6 +1,6 @@
 {
-  "version_code": 6921,
-  "version_name": "12.8.1 (v2.2)",
+  "version_code": 6922,
+  "version_name": "12.8.1 (v2.3)",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Версия Telegram зафиксирована на 12.8.1\n• WSS теперь выключен по умолчанию (можно включить вручную)\n• По умолчанию активны MTProto прокси\n• Улучшена логика автообновлений"
+  "changelog": "• Добавлена визуальная обратная связь при ручной проверке обновлений\n• Параметр 'Меньше параллельных каналов MTProxy' теперь выключен по умолчанию\n• Оптимизация сетевых настроек"
 }
