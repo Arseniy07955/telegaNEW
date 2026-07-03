@@ -14,8 +14,6 @@
 struct WssRouteConfig {
     int32_t mode = 0;
     int32_t gatewayMode = 0;
-    int32_t dcId = 0;
-    bool isMedia = false;
     std::string relayIp;
     std::string relayHostFallback;
     uint16_t relayPort = 443;
@@ -54,8 +52,6 @@ public:
     static WssRouteConfig customRoute(
             int32_t mode,
             int32_t gatewayMode,
-            int32_t dcId,
-            bool isMedia,
             const std::string &host,
             uint16_t port,
             const std::string &path,

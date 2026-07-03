@@ -84,7 +84,6 @@ WssRouteConfig WssTransport::officialRouteFor(int32_t dcId, bool isMedia) {
     }
     route.mode = WSS_TRANSPORT_OFFICIAL;
     route.gatewayMode = 0;
-    route.dcId = dcId;
     route.relayIp = OFFICIAL_WSS_RELAY_IP;
     route.relayPort = 443;
     route.path = OFFICIAL_WSS_PATH;
@@ -103,8 +102,6 @@ WssRouteConfig WssTransport::officialRouteFor(int32_t dcId, bool isMedia) {
 WssRouteConfig WssTransport::customRoute(
         int32_t mode,
         int32_t gatewayMode,
-        int32_t dcId,
-        bool isMedia,
         const std::string &host,
         uint16_t port,
         const std::string &path,
@@ -118,8 +115,6 @@ WssRouteConfig WssTransport::customRoute(
     WssRouteConfig route;
     route.mode = mode;
     route.gatewayMode = gatewayMode;
-    route.dcId = dcId;
-    route.isMedia = isMedia;
     route.relayIp = host;
     route.relayPort = port == 0 ? 443 : port;
     route.domain = host;
@@ -346,16 +341,6 @@ bool WssTransport::queueHttpUpgrade() {
     }
     secWebSocketKey = base64Encode(randomKey, sizeof(randomKey));
     std::string path = normalizeWssPath(config.path);
-    if (config.mode == WSS_TRANSPORT_CUSTOM && config.dcId != 0) {
-        if (path.find('?') == std::string::npos) {
-            path += "?dc=" + std::to_string(config.dcId);
-        } else {
-            path += "&dc=" + std::to_string(config.dcId);
-        }
-        if (config.isMedia) {
-            path += "&m=1";
-        }
-    }
     std::string host = config.domain;
     if (config.relayPort != 443) {
         host += ":" + std::to_string((uint32_t) config.relayPort);

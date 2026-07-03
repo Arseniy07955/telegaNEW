@@ -3420,8 +3420,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             selectedWssRoute = WssTransport::customRoute(
                     manager.wssTransportMode,
                     manager.wssGatewayMode,
-                    datacenterId,
-                    mediaConnection,
                     manager.wssHost,
                     manager.wssPort,
                     manager.wssPath,
