@@ -30,7 +30,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    #runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -206,7 +207,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    runs-on: ubuntu-latest
+    #runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build
     if: ${{ success() }}
     steps:
