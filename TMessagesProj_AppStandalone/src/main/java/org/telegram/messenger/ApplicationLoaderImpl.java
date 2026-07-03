@@ -60,19 +60,16 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
 
-                    // Simple but effective comparison: 
-                    // if one is 4 digits and other is 5, normalize to 5.
-                    int latest = versionCode;
-                    int current = BuildConfig.VERSION_CODE;
-                    if (latest < 10000) latest *= 10;
-                    if (current < 10000) current *= 10;
+                    // Robust normalization: bring both to base version (e.g. 6920)
+                    int latest = versionCode > 100000 ? versionCode / 10 : versionCode;
+                    int current = BuildConfig.VERSION_CODE > 100000 ? BuildConfig.VERSION_CODE / 10 : BuildConfig.VERSION_CODE;
 
                     if (latest > current) {
-                        pendingUpdate = new BetaUpdate(versionName, versionCode, changelog);
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: new update available: " + versionName + " (" + latest + " > " + current + ")");
+                        pendingUpdate = new BetaUpdate(versionName, latest, changelog);
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update available: " + versionName + " (" + latest + " > " + current + ")");
                     } else {
                         pendingUpdate = null;
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: no new update (current: " + current + ", latest: " + latest + ")");
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: up to date (current: " + current + ", latest: " + latest + ")");
                     }
                 } catch (Exception e) {
                     FileLog.e("telegaNEW: failed to parse update.json", e);
