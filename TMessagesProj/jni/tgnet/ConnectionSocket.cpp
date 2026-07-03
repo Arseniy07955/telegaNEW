@@ -3421,6 +3421,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                     manager.wssTransportMode,
                     manager.wssGatewayMode,
                     datacenterId,
+                    mediaConnection,
                     manager.wssHost,
                     manager.wssPort,
                     manager.wssPath,

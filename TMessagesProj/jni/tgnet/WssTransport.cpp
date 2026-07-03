@@ -104,6 +104,7 @@ WssRouteConfig WssTransport::customRoute(
         int32_t mode,
         int32_t gatewayMode,
         int32_t dcId,
+        bool isMedia,
         const std::string &host,
         uint16_t port,
         const std::string &path,
@@ -118,6 +119,7 @@ WssRouteConfig WssTransport::customRoute(
     route.mode = mode;
     route.gatewayMode = gatewayMode;
     route.dcId = dcId;
+    route.isMedia = isMedia;
     route.relayIp = host;
     route.relayPort = port == 0 ? 443 : port;
     route.domain = host;
@@ -349,6 +351,9 @@ bool WssTransport::queueHttpUpgrade() {
             path += "?dc=" + std::to_string(config.dcId);
         } else {
             path += "&dc=" + std::to_string(config.dcId);
+        }
+        if (config.isMedia) {
+            path += "&m=1";
         }
     }
     std::string host = config.domain;
