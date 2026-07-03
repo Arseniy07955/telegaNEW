@@ -642,7 +642,11 @@ public class SharedConfig {
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
             showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
-            mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", false);
+            mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
+            // telegaNEW: Disable 'Меньше параллельных каналов MTProxy' by default for new users
+            if (!preferences.contains("mtProxySoftMux")) {
+                mtProxySoftMux = false;
+            }
             mtProxyConnectionPatternMode = clampInt(preferences.getInt("mtProxyConnectionPatternMode", 0), 0, 4);
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
@@ -1690,7 +1694,7 @@ public class SharedConfig {
     }
 
     private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v6", false)) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v7", false)) {
             return;
         }
         // Seed: 0185e6912508d904febdb6df3e60cb49
@@ -1700,8 +1704,10 @@ public class SharedConfig {
         ProxyInfo info1 = new ProxyInfo("144.31.15.132", 443, "", "", "ee0185e6912508d904febdb6df3e60cb4979612e7275");
         ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275");
         ProxyInfo info3 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd0185e6912508d904febdb6df3e60cb49");
+        ProxyInfo info4 = new ProxyInfo("pokemon.catpaws.ru", 9443, "", "", "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275");
 
         proxyList.clear();
+        proxyList.add(0, info4);
         proxyList.add(0, info1);
         proxyList.add(0, info3);
         proxyList.add(0, info2);
@@ -1709,7 +1715,7 @@ public class SharedConfig {
         currentProxy = info2;
 
         preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v6", true)
+                .putBoolean("proxies_za_sto_applied_v7", true)
                 .putBoolean("proxy_enabled", true)
                 .putString("proxy_ip", info2.address)
                 .putInt("proxy_port", info2.port)
