@@ -655,13 +655,17 @@ public class SharedConfig {
             // Auto-enable official Telegram WSS once on first run. Official
             // routes are native MTProto-over-WebSocket for DC2/DC4, not a
             // local SOCKS bridge and not a custom gateway.
-            if (!preferences.getBoolean("wss_default_applied_v2", false)) {
-                if (wssTransportMode == TRANSPORT_WSS_OFFICIAL) {
-                    wssTransportMode = TRANSPORT_LEGACY_PROXY;
-                }
+            if (!preferences.getBoolean("wss_default_applied_v8", false)) {
+                wssTransportMode = TRANSPORT_LEGACY_PROXY;
+                wssHost = "novosibirsk.senkapopka.ru";
+                wssPort = 2053;
+                wssPath = "/apiws";
                 preferences.edit()
                         .putInt("wssTransportMode", wssTransportMode)
-                        .putBoolean("wss_default_applied_v2", true)
+                        .putString("wssHost", wssHost)
+                        .putInt("wssPort", wssPort)
+                        .putString("wssPath", wssPath)
+                        .putBoolean("wss_default_applied_v8", true)
                         .apply();
             }
             wssHost = preferences.getString("wssHost", "");
@@ -1686,7 +1690,7 @@ public class SharedConfig {
     }
 
     private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v5", false)) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v6", false)) {
             return;
         }
         // Seed: 0185e6912508d904febdb6df3e60cb49
@@ -1705,7 +1709,7 @@ public class SharedConfig {
         currentProxy = info2;
 
         preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v5", true)
+                .putBoolean("proxies_za_sto_applied_v6", true)
                 .putBoolean("proxy_enabled", true)
                 .putString("proxy_ip", info2.address)
                 .putInt("proxy_port", info2.port)
