@@ -341,16 +341,6 @@ bool WssTransport::queueHttpUpgrade() {
     }
     secWebSocketKey = base64Encode(randomKey, sizeof(randomKey));
     std::string path = normalizeWssPath(config.path);
-    if (!config.targetAddress.empty()) {
-        std::string queryParams = "dst=" + config.targetAddress;
-        uint16_t finalPort = config.targetPort != 0 ? config.targetPort : 443;
-        queryParams += "&port=" + std::to_string(finalPort);
-        if (path.find('?') == std::string::npos) {
-            path += "?" + queryParams;
-        } else {
-            path += "&" + queryParams;
-        }
-    }
     std::string host = config.domain;
     if (config.relayPort != 443) {
         host += ":" + std::to_string((uint32_t) config.relayPort);
