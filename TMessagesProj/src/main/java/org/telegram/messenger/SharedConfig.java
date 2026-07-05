@@ -2168,6 +2168,72 @@ public class SharedConfig {
         pref.edit().putBoolean("drawActionBarShadow", drawActionBarShadow);
     }
 
+    public static void startFastSweep(int currentAccount, List<SharedConfig.ProxyInfo> proxies) {
+        if (proxies == null || proxies.isEmpty()) {
+            return;
+        }
+        if (BuildVars.LOGS_ENABLED) {
+            FileLog.d("proxy_check_scheduler fast_sweep start count=" + proxies.size());
+        }
+        final SharedConfig.ProxyInfo[] bestProxy = {null};
+        final long[] bestPing = {Long.MAX_VALUE};
+
+        for (SharedConfig.ProxyInfo info : proxies) {
+            if (info.checking) continue;
+            ProxyRuntimeStateStore.setChecking(info, true);
+            ConnectionsManager.getInstance(currentAccount).checkProxy(info.address, info.port, info.username, info.password, info.secret, (time, diagnostic) -> {
+                AndroidUtilities.runOnUIThread(() -> {
+                    ProxyRuntimeStateStore.applyMeasuredProxyCheckResult(info, time, diagnostic);
+                    if (time >= 0) {
+                        if (BuildVars.LOGS_ENABLED) {
+                            FileLog.d("proxy_check_scheduler fast_sweep result ok endpoint=" + info.address + ":" + info.port + " ping=" + time);
+                        }
+                        
+                        if (time < bestPing[0]) {
+                            bestPing[0] = time;
+                            bestProxy[0] = info;
+                            
+                            // If it's fast enough (< 400ms), apply immediately if not logged in
+                            if (time < 400 && !UserConfig.getInstance(currentAccount).isClientActivated()) {
+                                applyBestProxy(currentAccount, info);
+                            }
+                        }
+                    } else {
+                        if (BuildVars.LOGS_ENABLED) {
+                            FileLog.d("proxy_check_scheduler fast_sweep result fail endpoint=" + info.address + ":" + info.port + " diag=" + diagnostic);
+                        }
+                    }
+                    NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, info);
+                });
+            });
+        }
+
+        // Final check after 3 seconds to pick the best one found so far
+        AndroidUtilities.runOnUIThread(() -> {
+            if (bestProxy[0] != null && !UserConfig.getInstance(currentAccount).isClientActivated()) {
+                applyBestProxy(currentAccount, bestProxy[0]);
+            }
+        }, 3500);
+    }
+
+    private static void applyBestProxy(int account, SharedConfig.ProxyInfo info) {
+        if (SharedConfig.currentProxy == info) return;
+        if (BuildVars.LOGS_ENABLED) {
+            FileLog.d("proxy_check_scheduler fast_sweep applying best proxy=" + info.address + ":" + info.port + " ping=" + info.ping);
+        }
+        SharedConfig.currentProxy = info;
+        SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
+        editor.putString("proxy_ip", info.address);
+        editor.putInt("proxy_port", info.port);
+        editor.putString("proxy_user", info.username);
+        editor.putString("proxy_pass", info.password);
+        editor.putString("proxy_secret", info.secret);
+        editor.putBoolean("proxy_enabled", true);
+        editor.apply();
+        ConnectionsManager.setProxySettings(true, info.address, info.port, info.username, info.password, info.secret);
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
+    }
+
 
 
 }

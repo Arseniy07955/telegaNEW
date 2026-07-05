@@ -137,7 +137,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                         if (listChanged) {
                             SharedConfig.saveProxyList();
                             // telegaNEW: Fast sweep all proxies at startup to find the best one
-                            ProxyCheckScheduler.startFastSweep(UserConfig.selectedAccount, SharedConfig.proxyList);
+                            SharedConfig.startFastSweep(UserConfig.selectedAccount, SharedConfig.proxyList);
                         }
 
                         // Auto-apply if marked active
