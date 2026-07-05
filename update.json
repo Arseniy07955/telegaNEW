@@ -8,7 +8,7 @@
       "server": "nsk.cdn.catpaws.ru",
       "port": 443,
       "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275",
-    "priority": true
+      "priority": true
     },
     {
       "server": "37.139.34.199",
