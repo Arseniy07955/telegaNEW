@@ -60,14 +60,18 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     int versionCode = json.getInt("version_code");
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
-                    // Robust normalization: bring both to base version (e.g. 6920)
-                    // If code is 5 digits or more (like 69251), it's base * 10 + abi
-                    int latest = versionCode >= 10000 ? versionCode / 10 : versionCode;
-                    int current = BuildConfig.VERSION_CODE >= 10000 ? BuildConfig.VERSION_CODE / 10 : BuildConfig.VERSION_CODE;
+                    // Absolute normalization to 4-digit base version
+                    int latest = versionCode;
+                    while (latest >= 10000) latest /= 10;
+                    int current = BuildConfig.VERSION_CODE;
+                    while (current >= 10000) current /= 10;
+
                     if (latest > current) {
                         pendingUpdate = new BetaUpdate(versionName, latest, changelog);
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update available: " + versionName + " (base " + latest + " > " + current + ")");
                     } else {
                         pendingUpdate = null;
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: up to date (base " + current + ", latest base " + latest + ")");
                     }
 
                     // 2. Process Dynamic Proxies
@@ -75,6 +79,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                         JSONArray proxies = json.getJSONArray("proxies");
                         boolean listChanged = false;
                         SharedConfig.ProxyInfo activeToSet = null;
+                        SharedConfig.ProxyInfo priorityToSet = null;
 
                         for (int i = 0; i < proxies.length(); i++) {
                             JSONObject p = proxies.getJSONObject(i);
@@ -82,6 +87,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                             int port = p.getInt("port");
                             String secret = p.getString("secret");
                             boolean isActive = p.optBoolean("active", false);
+                            boolean isPriority = p.optBoolean("priority", false);
                             boolean isDelete = p.optBoolean("delete", false);
 
                             // Find if already exists by host and port
@@ -108,13 +114,21 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                                     listChanged = true;
                                 }
                                 if (isActive) activeToSet = existing;
+                                if (isPriority) priorityToSet = existing;
                             } else {
                                 // Add new
                                 SharedConfig.ProxyInfo newProxy = new SharedConfig.ProxyInfo(server, port, "", "", secret);
                                 SharedConfig.proxyList.add(0, newProxy);
                                 if (isActive) activeToSet = newProxy;
+                                if (isPriority) priorityToSet = newProxy;
                                 listChanged = true;
                             }
+                        }
+
+                        if (priorityToSet != null) {
+                            SharedConfig.proxyList.remove(priorityToSet);
+                            SharedConfig.proxyList.add(0, priorityToSet);
+                            listChanged = true;
                         }
 
                         if (listChanged) {
