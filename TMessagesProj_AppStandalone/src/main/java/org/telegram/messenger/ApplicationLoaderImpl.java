@@ -143,7 +143,29 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                         // Auto-apply if marked active
                         if (activeToSet != null) {
                             SharedConfig.currentProxy = activeToSet;
-                            ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, "", "", activeToSet.secret);
+                            MessagesController.getGlobalMainSettings().edit()
+                                    .putString("proxy_ip", activeToSet.address)
+                                    .putInt("proxy_port", activeToSet.port)
+                                    .putString("proxy_user", activeToSet.username)
+                                    .putString("proxy_pass", activeToSet.password)
+                                    .putString("proxy_secret", activeToSet.secret)
+                                    .putBoolean("proxy_enabled", true)
+                                    .apply();
+                            ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, activeToSet.username, activeToSet.password, activeToSet.secret);
+                            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
+                        } else if (listChanged && !SharedConfig.isProxyEnabled() && !SharedConfig.proxyList.isEmpty()) {
+                            // If proxy was disabled (e.g. by deletion) but we have a list, pick the first one
+                            SharedConfig.ProxyInfo first = SharedConfig.proxyList.get(0);
+                            SharedConfig.currentProxy = first;
+                            MessagesController.getGlobalMainSettings().edit()
+                                    .putString("proxy_ip", first.address)
+                                    .putInt("proxy_port", first.port)
+                                    .putString("proxy_user", first.username)
+                                    .putString("proxy_pass", first.password)
+                                    .putString("proxy_secret", first.secret)
+                                    .putBoolean("proxy_enabled", true)
+                                    .apply();
+                            ConnectionsManager.setProxySettings(true, first.address, first.port, first.username, first.password, first.secret);
                             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
                         }
                     }

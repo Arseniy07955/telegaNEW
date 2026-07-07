@@ -1,24 +1,25 @@
 {
-  "version_code": 694000,
-  "version_name": "12.8.1 (v3.0)",
+  "version_code": 694100,
+  "version_name": "12.8.1 (v3.1)",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Новая версия форка v3.0\n• тест улучшения подключений!",
+  "changelog": "• Исправлена проблема отключения прокси при удалении старых серверов\n• Улучшена принудительная активация активного прокси\n• Обновление v3.1",
   "proxies": [
     {
       "server": "nsk.cdn.catpaws.ru",
       "port": 443,
-      "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275",
-      "priority": true
+      "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275"
     },
     {
       "server": "37.139.34.199",
       "port": 443,
-      "secret": "ee5f52936aa7e559b6bf6b6c62d28f0ae6"
+      "secret": "ee5f52936aa7e559b6bf6b6c62d28f0ae6",
+      "delete": true
     },
     {
       "server": "213.219.212.17",
       "port": 8443,
-      "secret": "ee9e1dde0de02a2e7c22d10e2fff84101374676e6e2e6c697665"
+      "secret": "ee9e1dde0de02a2e7c22d10e2fff84101374676e6e2e6c697665",
+      "delete": true
     },
     {
       "server": "213.219.212.16",
@@ -28,12 +29,14 @@
     {
       "server": "51.250.14.117",
       "port": 443,
-      "secret": "ee243dfaf43e1ee52a26d97077b7c994a163646e2e79616e6465782e6e6574"
+      "secret": "ee243dfaf43e1ee52a26d97077b7c994a163646e2e79616e6465782e6e6574",
+      "delete": true
     },
     {
       "server": "51.250.73.54",
       "port": 443,
-      "secret": "ee6a0333c1db3f8eaba5c76731a44203b6617669746f2e7275"
+      "secret": "ee6a0333c1db3f8eaba5c76731a44203b6617669746f2e7275",
+      "delete": true
     },
     {
       "server": "fast.proxytg.space",
@@ -43,7 +46,8 @@
     {
       "server": "proxy.vmelectronics.ru",
       "port": 443,
-      "secret": "ee6164732e78352e72759c6509729477"
+      "secret": "ee6164732e78352e72759c6509729477",
+      "active": true
     }
   ]
 }
