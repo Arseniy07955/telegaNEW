@@ -2054,6 +2054,14 @@ public class ImageLoader {
         return localInstance;
     }
 
+    /** Releases bitmap caches without creating ImageLoader just to handle memory pressure. */
+    public static void clearMemoryIfInitialized() {
+        ImageLoader localInstance = Instance;
+        if (localInstance != null) {
+            localInstance.clearMemory();
+        }
+    }
+
     public ImageLoader() {
         thumbGeneratingQueue.setPriority(Thread.MIN_PRIORITY);
 
@@ -2064,7 +2072,8 @@ public class ImageLoader {
         } else {
             maxSize = 15;
         }
-        int cacheSize = DEBUG_MODE ? 1 : Math.min(maxSize, memoryClass / 7) * 1024 * 1024;
+        int cacheSize = DEBUG_MODE ? 1 : Math.min(maxSize,
+                memoryClass / DeviceResourcePolicy.getImageCacheDivisor()) * 1024 * 1024;
 
         int commonCacheSize =  DEBUG_MODE ? 1 : (int) (cacheSize * 0.8f);
         int smallImagesCacheSize =   DEBUG_MODE ? 1 : (int) (cacheSize * 0.2f);

@@ -272,6 +272,14 @@ public class ApplicationLoader extends Application {
             DownloadController.getInstance(a);
         }
         BillingController.getInstance().startConnection();
+
+        // Metadata is prepared in Application.onCreate(), but the CPython heap is intentionally
+        // started only after Telegram's own account/database initialization has settled.
+        try {
+            org.telegram.plugins.PluginsController.getInstance().startEnabledPlugins();
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
     }
 
     public ApplicationLoader() {
@@ -291,7 +299,8 @@ public class ApplicationLoader extends Application {
 
         ZaStoPrivacy.load();
 
-        // ZaStoGram plugin engine: start CPython + load enabled .plugin files (off the main thread).
+        // ZaStoGram plugin engine: discover metadata now; CPython starts after app initialization
+        // and only when at least one compatible plugin is actually enabled.
         try {
             org.telegram.plugins.PluginsController.getInstance().init(applicationContext);
         } catch (Throwable t) {
@@ -323,6 +332,10 @@ public class ApplicationLoader extends Application {
                 FileLog.e(e);
             }
             FileLog.d("device = manufacturer=" + Build.MANUFACTURER + ", device=" + Build.DEVICE + ", model=" + Build.MODEL + ", product=" + Build.PRODUCT);
+            DeviceResourcePolicy.logConfiguration();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                ProcessExitDiagnostics.logPreviousExit(applicationContext);
+            }
         }
         if (applicationContext == null) {
             applicationContext = getApplicationContext();
@@ -390,6 +403,18 @@ public class ApplicationLoader extends Application {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        DeviceResourcePolicy.onTrimMemory(level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        DeviceResourcePolicy.onLowMemory();
     }
 
     private void initPushServices() {

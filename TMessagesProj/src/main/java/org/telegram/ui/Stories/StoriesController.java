@@ -23,6 +23,7 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
+import org.telegram.messenger.DeviceResourcePolicy;
 import org.telegram.messenger.DownloadController;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
@@ -556,6 +557,9 @@ public class StoriesController {
     }
 
     public void preloadUserStories(TL_stories.PeerStories userStories) {
+        if (!DeviceResourcePolicy.allowStoryPreload()) {
+            return;
+        }
         int preloadPosition = 0;
         for (int i = 0; i < userStories.stories.size(); i++) {
             if (userStories.stories.get(i).id > userStories.max_read_id) {
@@ -577,6 +581,9 @@ public class StoriesController {
     }
 
     private void preloadStory(long dialogId, TL_stories.StoryItem storyItem) {
+        if (!DeviceResourcePolicy.allowStoryPreload()) {
+            return;
+        }
         if (storyItem.attachPath != null) {
             return;
         }

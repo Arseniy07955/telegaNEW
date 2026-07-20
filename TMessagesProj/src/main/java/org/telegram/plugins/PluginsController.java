@@ -51,6 +51,7 @@ public class PluginsController {
     private DispatchQueue queue;
 
     private volatile boolean pythonStarted;
+    private volatile boolean startupRequested;
     private PyObject loader; // _plugin_loader module
 
     private final List<PluginInfo> plugins = new ArrayList<>();
@@ -77,7 +78,7 @@ public class PluginsController {
 
     // ------------------------------------------------------------------ lifecycle
 
-    /** Called once from ApplicationLoader.onCreate(). Loads enabled plugins off the main thread. */
+    /** Called once from ApplicationLoader.onCreate(). Discovers plugins without starting Python. */
     public void init(Context context) {
         if (appContext != null) {
             return;
@@ -95,14 +96,34 @@ public class PluginsController {
         } catch (Throwable t) {
             FileLog.e(t);
         }
-        // Start Python and load enabled plugins in the background.
+    }
+
+    /** Starts the runtime after Telegram startup, and only if it has useful work to do. */
+    public void startEnabledPlugins() {
+        if (appContext == null || queue == null || startupRequested) {
+            return;
+        }
+        startupRequested = true;
         queue.postRunnable(() -> {
             try {
-                ensurePythonStarted();
                 List<PluginInfo> snapshot;
                 synchronized (plugins) {
                     snapshot = new ArrayList<>(plugins);
                 }
+                boolean hasEnabledCompatiblePlugin = false;
+                for (PluginInfo info : snapshot) {
+                    if (info.enabled && isCompatible(info)) {
+                        hasEnabledCompatiblePlugin = true;
+                        break;
+                    }
+                }
+                if (!hasEnabledCompatiblePlugin) {
+                    FileLog.d("zasto plugins: python startup skipped, no enabled compatible plugins");
+                    refreshRequestHooks();
+                    notifyChanged();
+                    return;
+                }
+                ensurePythonStarted();
                 for (PluginInfo info : snapshot) {
                     if (info.enabled && isCompatible(info)) {
                         loadPluginInternal(info);
@@ -366,8 +387,8 @@ public class PluginsController {
         info.enabled = enabled;
         persistIndex();
         queue.postRunnable(() -> {
-            ensurePythonStarted();
             if (enabled) {
+                ensurePythonStarted();
                 if (isCompatible(info)) {
                     loadPluginInternal(info);
                 }

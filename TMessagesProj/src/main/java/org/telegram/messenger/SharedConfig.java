@@ -1909,6 +1909,7 @@ public class SharedConfig {
         int androidVersion = Build.VERSION.SDK_INT;
         int cpuCount = ConnectionsManager.CPU_COUNT;
         int memoryClass = ((ActivityManager) ApplicationLoader.applicationContext.getSystemService(Context.ACTIVITY_SERVICE)).getMemoryClass();
+        boolean constrainedByHeap = DeviceResourcePolicy.isConstrainedDevice();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && Build.SOC_MODEL != null) {
             int hash = Build.SOC_MODEL.toUpperCase().hashCode();
@@ -1943,6 +1944,7 @@ public class SharedConfig {
 
         int performanceClass;
         if (
+            constrainedByHeap ||
             androidVersion < 21 ||
             cpuCount <= 2 ||
             memoryClass <= 100 ||
