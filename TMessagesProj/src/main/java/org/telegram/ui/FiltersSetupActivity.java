@@ -40,6 +40,7 @@ import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
+import org.telegram.messenger.ZaStoPrivacy;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
@@ -596,9 +597,11 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
             items.add(ItemInner.asButton(LocaleController.getString(R.string.CreateNewFilter)));
         }
         items.add(ItemInner.asShadow(null));
+        items.add(ItemInner.asCheck(LocaleController.getString(R.string.ZaHideAllChats), CHECK_TYPE_HIDE_ALL_CHATS));
+        items.add(ItemInner.asShadow(LocaleController.getString(R.string.ZaHideAllChatsInfo)));
         folderTagsPosition = items.size();
         showTagsRow = items.size();
-        items.add(ItemInner.asCheck(LocaleController.getString(R.string.FolderShowTags)));
+        items.add(ItemInner.asCheck(LocaleController.getString(R.string.FolderShowTags), CHECK_TYPE_FOLDER_TAGS));
         items.add(ItemInner.asShadow(!getUserConfig().isPremium() ? AndroidUtilities.replaceSingleTag(LocaleController.getString(R.string.FolderShowTagsInfoPremium), Theme.key_windowBackgroundWhiteBlueHeader, AndroidUtilities.REPLACING_TAG_TYPE_LINKBOLD, () -> {
             presentFragment(new PremiumPreviewFragment("settings"));
         }) : LocaleController.getString(R.string.FolderShowTagsInfo)));
@@ -688,6 +691,13 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
                 return;
             }
             if (item.viewType == VIEW_TYPE_CHECK) {
+                if (item.checkType == CHECK_TYPE_HIDE_ALL_CHATS) {
+                    boolean hideAllChats = !ZaStoPrivacy.HIDE_ALL_CHATS;
+                    ZaStoPrivacy.set(ZaStoPrivacy.KEY_HIDE_ALL_CHATS, hideAllChats);
+                    ((TextCheckCell) view).setChecked(hideAllChats);
+                    getNotificationCenter().postNotificationName(NotificationCenter.dialogFiltersUpdated);
+                    return;
+                }
                 if (!getUserConfig().isPremium()) {
                     showDialog(new PremiumFeatureBottomSheet(this, PremiumPreviewFragment.PREMIUM_FEATURE_FOLDER_TAGS, true));
                     return;
@@ -785,6 +795,9 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
     private static final int VIEW_TYPE_FILTER_SUGGESTION = 5;
     private static final int VIEW_TYPE_CHECK = 6;
 
+    private static final int CHECK_TYPE_FOLDER_TAGS = 0;
+    private static final int CHECK_TYPE_HIDE_ALL_CHATS = 1;
+
     private int shiftDp = -4;
 
     private static class ItemInner extends AdapterWithDiffUtils.Item {
@@ -796,6 +809,7 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
         MessagesController.DialogFilter filter;
         int filterColor;
         TLRPC.TL_dialogFilterSuggested suggested;
+        int checkType;
 
         public static ItemInner asHeader(CharSequence text) {
             ItemInner i = new ItemInner(VIEW_TYPE_HEADER);
@@ -826,9 +840,10 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
             i.suggested = suggested;
             return i;
         }
-        public static ItemInner asCheck(CharSequence text) {
+        public static ItemInner asCheck(CharSequence text, int checkType) {
             ItemInner i = new ItemInner(VIEW_TYPE_CHECK);
             i.text = text;
+            i.checkType = checkType;
             return i;
         }
 
@@ -846,6 +861,9 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
             }
             if (viewType == VIEW_TYPE_HEADER || viewType == VIEW_TYPE_BUTTON || viewType == VIEW_TYPE_SHADOW || viewType == VIEW_TYPE_CHECK) {
                 if (!TextUtils.equals(text, other.text)) {
+                    return false;
+                }
+                if (viewType == VIEW_TYPE_CHECK && checkType != other.checkType) {
                     return false;
                 }
             }
@@ -1086,8 +1104,13 @@ public class FiltersSetupActivity extends BaseFragment implements NotificationCe
                 }
                 case VIEW_TYPE_CHECK: {
                     TextCheckCell cell = (TextCheckCell) holder.itemView;
-                    cell.setTextAndCheck(item.text, getMessagesController().folderTags, divider);
-                    cell.setCheckBoxIcon(!getUserConfig().isPremium() ? R.drawable.permission_locked : 0);
+                    if (item.checkType == CHECK_TYPE_HIDE_ALL_CHATS) {
+                        cell.setTextAndCheck(item.text, ZaStoPrivacy.HIDE_ALL_CHATS, divider);
+                        cell.setCheckBoxIcon(0);
+                    } else {
+                        cell.setTextAndCheck(item.text, getMessagesController().folderTags, divider);
+                        cell.setCheckBoxIcon(!getUserConfig().isPremium() ? R.drawable.permission_locked : 0);
+                    }
                     break;
                 }
                 case VIEW_TYPE_FILTER_SUGGESTION: {

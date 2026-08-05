@@ -413,6 +413,8 @@
     <string name="ZaLogsFooter">Новый файл лога создаётся при каждом открытии приложения, чтобы разные сессии не путались. Старые файлы сверх лимита удаляются автоматически.</string>
     <string name="ZaLogsKeep">Хранить последние файлы</string>
     <string name="ZaLogsKeepUnlimited">Без ограничения</string>
+    <string name="ZaHideAllChats">Скрыть вкладку «Все чаты»</string>
+    <string name="ZaHideAllChatsInfo">Вкладка скрывается, если создана хотя бы одна пользовательская папка. При включении список чатов переключится на первую папку.</string>
     <string name="EditableForwardMode">Редактируемая пересылка</string>
     <string name="EditableForwardAlbum">Отправить альбомом</string>
     <string name="EditableForwardSeparatePosts">Отправить отдельными постами</string>

@@ -2750,6 +2750,8 @@
     <string name="ZaLogsFooter">A new log file is created every time you open the app, so different sessions don\'t get mixed up. Old files beyond the limit are removed automatically.</string>
     <string name="ZaLogsKeep">Keep recent files</string>
     <string name="ZaLogsKeepUnlimited">Unlimited</string>
+    <string name="ZaHideAllChats">Hide the “All Chats” tab</string>
+    <string name="ZaHideAllChatsInfo">The tab is hidden when at least one custom chat folder exists. Turning this on switches the chat list to the first folder.</string>
     <string name="DebugMenuEnableLogs">Enable Logs</string>
     <string name="DebugMenuDisableLogs">Disable Logs</string>
     <string name="DebugMenuLoginToast_one">Click %d more time to open debug menu.</string>
