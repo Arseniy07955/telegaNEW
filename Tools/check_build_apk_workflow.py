@@ -205,6 +205,7 @@ def check_workflow(workflow_text: str) -> list[str]:
         "ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}",
         "release:",
         "needs: [prepare, build]",
+        "if: ${{ success() && github.event_name == 'workflow_dispatch' }}",
         "actions/download-artifact@v4",
         "pattern: ZaStoGram-standalone-*",
         "merge-multiple: true",
@@ -226,6 +227,12 @@ def check_workflow(workflow_text: str) -> list[str]:
 
     if "gh release upload" in workflow_text and "--clobber" in workflow_text:
         errors.append("Workflow must not clobber release assets; each run needs a fresh prerelease tag")
+
+    if re.search(
+        r"(?ms)^  release:\n.*?^    if: \$\{\{ success\(\) \}\}",
+        workflow_text,
+    ):
+        errors.append("Push-triggered background builds must not publish GitHub releases")
 
     for expected in ABI_FLAVORS.values():
         matrix_literals = [

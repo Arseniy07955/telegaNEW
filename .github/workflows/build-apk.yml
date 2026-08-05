@@ -1,6 +1,7 @@
 name: Build ZaStoGram APK
 
-# Сборка устанавливаемого APK прямо в облаке GitHub — локально ничего ставить не нужно.
+# Фоновая облачная сборка APK. Push в master только собирает и сохраняет artifacts:
+# локальный release-процесс её не ждёт и не использует её APK для публикации.
 #
 # Как запустить:
 #   1) Вкладка Actions в репозитории -> слева "Build ZaStoGram APK" -> кнопка "Run workflow".
@@ -288,7 +289,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [prepare, build]
-    if: ${{ success() }}
+    # Push-сборки остаются фоновой проверкой и никогда не публикуют релиз.
+    # Облачная публикация доступна только при явном ручном workflow_dispatch.
+    if: ${{ success() && github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
