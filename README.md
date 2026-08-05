@@ -708,6 +708,14 @@ ApplicationData-записями в серверном handshake flight.
 Закоммиченного APK здесь намеренно нет. APK собирается из исходников локально
 или через GitHub Actions.
 
+Для локальной сборки нужны Android Studio 2025.1.4, Android NDK 27.2.12479018
+и Android SDK 35. После клонирования и при каждом обновлении upstream
+инициализируй нативные зависимости:
+
+```sh
+git submodule update --init --recursive --depth=1
+```
+
 1. Получи `api_id` и `api_hash` на [my.telegram.org](https://my.telegram.org).
 2. Укажи свои значения в проекте Telegram Android.
 3. Подставь свой ключ подписи релизной сборки.
