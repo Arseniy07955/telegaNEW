@@ -14,7 +14,20 @@ name: Build ZaStoGram APK
 # Без них соберётся с тестовым APP_ID=4 (вход может не работать).
 
 on:
-  workflow_dispatch: {}        # ручной запуск кнопкой
+  workflow_dispatch:
+    inputs:
+      release_channel:
+        description: Канал публикации
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - stable
+      stable_version:
+        description: Версия stable в формате x.y.z (например, 1.1.0)
+        required: false
+        type: string
   push:
     branches: [ master ]       # и автоматически при пуше в master
 
@@ -29,7 +42,44 @@ permissions:
   actions: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+      tag: ${{ steps.release.outputs.tag }}
+      title: ${{ steps.release.outputs.title }}
+    steps:
+      - name: Resolve release identity
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.release_channel || 'dev' }}
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.stable_version || '' }}
+        run: |
+          set -euo pipefail
+          channel="$REQUESTED_CHANNEL"
+          if [ "$channel" = "stable" ]; then
+            if ! [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Stable version must use x.y.z format"
+              exit 1
+            fi
+            tag="$REQUESTED_VERSION"
+            title="ZaStoGram $tag"
+          else
+            channel="dev"
+            tag="zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}"
+            title="ZaStoGram APK #${{ github.run_number }}.${{ github.run_attempt }}"
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::Release tag $tag already exists"
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -115,6 +165,7 @@ jobs:
           fi
 
       - name: Enable network logs for MTProxy diagnostics
+        if: ${{ needs.prepare.outputs.channel == 'dev' }}
         run: |
           BV=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i 's/public static boolean LOGS_ENABLED = BuildConfig.DEBUG_VERSION;/public static boolean LOGS_ENABLED = true;/' "$BV"
@@ -190,10 +241,10 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          # Every workflow build belongs to the development update channel and
-          # identifies the exact prerelease which will be created by the release job.
-          ZASTO_UPDATE_CHANNEL: dev
-          ZASTO_RELEASE_TAG: zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}
+          # The release identity is embedded in the APK so the updater stays on the
+          # selected channel and never offers the currently installed release again.
+          ZASTO_UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+          ZASTO_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           ZASTO_BUILD_NUMBER: ${{ github.run_number }}
           ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
@@ -236,7 +287,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [prepare, build]
     if: ${{ success() }}
     steps:
       - name: Download APK artifacts
@@ -246,30 +297,37 @@ jobs:
           path: dist-release
           merge-multiple: true
 
-      - name: Create per-run prerelease
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.prepare.outputs.title }}
         run: |
           set -euo pipefail
-          TAG="zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}"
-          TITLE="ZaStoGram APK #${{ github.run_number }}.${{ github.run_attempt }}"
           shopt -s nullglob
           APKS=(dist-release/*.apk)
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "::error::No APK artifacts downloaded for prerelease"
+            echo "::error::No APK artifacts downloaded for release"
             exit 1
           fi
-          gh release create "$TAG" dist-release/*.apk \
+          RELEASE_ARGS=()
+          RELEASE_KIND="Stable release"
+          if [ "$RELEASE_CHANNEL" = "dev" ]; then
+            RELEASE_ARGS+=(--prerelease)
+            RELEASE_KIND="Development prerelease"
+          fi
+          gh release create "$RELEASE_TAG" dist-release/*.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$TITLE" \
-            --notes "Standalone APK build from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt }}. Commit: ${GITHUB_SHA}." \
-            --prerelease \
+            --title "$RELEASE_TITLE" \
+            --notes "$RELEASE_KIND from workflow run ${{ github.run_number }}, attempt ${{ github.run_attempt }}. Commit: ${GITHUB_SHA}." \
+            "${RELEASE_ARGS[@]}" \
             --target "$GITHUB_SHA"
           {
-            echo "### Prerelease APKs"
+            echo "### $RELEASE_TITLE APKs"
             echo
             for apk in "${APKS[@]}"; do
               name="$(basename "$apk")"
-              echo "- [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name})"
+              echo "- [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${name})"
             done
           } >> "$GITHUB_STEP_SUMMARY"

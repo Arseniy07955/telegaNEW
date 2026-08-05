@@ -94,13 +94,15 @@ def main() -> int:
 
     for literal in (
         "python3 Tools/check_github_update_contract.py",
-        "ZASTO_UPDATE_CHANNEL: dev",
-        "ZASTO_RELEASE_TAG: zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}",
+        "release_channel:",
+        "stable_version:",
+        "ZASTO_UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}",
+        "ZASTO_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}",
         "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
         "ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}",
         "--prerelease",
     ):
-        require(workflow, literal, "GitHub Actions dev-release identity", failures)
+        require(workflow, literal, "GitHub Actions dev/stable release identity", failures)
 
     for text, description in (
         (layout, "GitHub update drawer UI"),
