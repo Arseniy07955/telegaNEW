@@ -144,6 +144,27 @@ MTProxy не лечит все сбои сменой JA4. Основные кл�
 `MtProxyRetryAuthority` разделяют запись фактов, выбор рецепта, координацию
 проб и фактический reconnect. GUI и runtime-логи используют ту же карту фаз.
 
+DRS пока не первым: до расширения динамических размеров записей должны быть
+стабильны DNS, TCP, handshake и data-aware отправка завершённых TLS frames.
+Иначе `host_resolve_failed` или `mtproxy_packet_sent_no_response` ошибочно
+выглядят как проблема record sizing, хотя соответствующий слой ещё не
+участвовал.
+
+### Архитектура проверки прокси
+
+`ProxyCheckScheduler` владеет Java-очередью проверок, native socket публикует
+фазовые события, а `finishProxyCheck` завершает ровно активное поколение
+проверки. Java backoff использует ту же фазовую идею ключей: network-сбои
+группируются по адресу, а проверки склеиваются только по полному exact key
+`host:port:username:password:secret`.
+
+Наблюдение generic `Connected` не стирает свежую terminal phase конкретного
+endpoint. Явный новый старт подключения может начать новое поколение, но не
+должен стирать ещё актуальный usable success. Итог проверяется через
+`Tools/analyze_mtproxy_markers.py`; verdict
+`connected_without_socket_connected_marker` означает, что Java увидела
+connected-state без подтверждённого native socket marker.
+
 ## Нативный Telegram WSS
 
 WSS — настоящий TLS + WebSocket transport, а не FakeTLS и не локальный proxy
@@ -161,10 +182,11 @@ MiniApp-поля удаляются схемой proxy config V4.
 - media/download/upload соединения используют соответствующий
   `kwsN-1.web.telegram.org`;
 - путь WebSocket — `/apiws`, subprotocol — `binary`;
-- первая попытка идёт на известный официальный relay IP без зависимости от
-  DNS, но TLS SNI и hostname verification используют домен Telegram;
-- при неудаче transport переключается на доменное разрешение и запоминает
-  успешный fallback на 30 минут;
+- route, DNS, TLS SNI и hostname verification используют один официальный
+  hostname; ручной таблицы relay IP нет;
+- WSS не наследует адрес или secret от выбранного TCP/MTProxy `dcOption`;
+- obfuscated init и каждый готовый abridged MTProto packet отправляются
+  отдельными binary WebSocket messages;
 - test backend, неизвестные и CDN DC остаются на обычном транспорте;
 - пока WSS не умеет маршрутизировать CDN DC ids, клиент не объявляет поддержку
   CDN redirects для загрузок в этом режиме.
@@ -349,6 +371,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass \
 ```sh
 python3 Tools/verify_mtproxy_runtime_logs.py mtproxy-logs-live/<session>
 ```
+
+`mtproxy_runtime_contract.txt` подтверждает порядок live-маркеров и наличие
+`transport_state=`. Сначала фиксируется `endpoint_handshake_ok`.
+`endpoint_data_path_success` должен появляться только после первого `first_tls_app_recv`
+для FakeTLS либо после `first_mtproxy_packet_recv` для обычного MTProxy.
 
 Stable APK не включает принудительные сетевые логи.
 
