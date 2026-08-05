@@ -56,6 +56,12 @@ private:
         Closed,
     };
 
+    enum class IoWait : uint8_t {
+        None,
+        Read,
+        Write,
+    };
+
     bool finishTcpConnect(std::string *diagnostic);
     bool startTls(std::string *diagnostic);
     bool pumpTls(std::string *diagnostic);
@@ -65,10 +71,14 @@ private:
     bool parseHttpResponse(std::string *diagnostic);
     bool parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::string *diagnostic);
     bool queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std::string *diagnostic);
+    void setIoWait(IoWait wait, const char *operation);
+    const char *stateName() const;
+    const char *ioWaitName() const;
     Route routeConfig;
     SSL *ssl = nullptr;
     int socketFd = -1;
     State state = State::Closed;
+    IoWait ioWait = IoWait::None;
     transport::HandshakePhase phase = transport::HandshakePhase::None;
     std::vector<uint8_t> pendingOutput;
     size_t pendingOutputOffset = 0;

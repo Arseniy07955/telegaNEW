@@ -3768,7 +3768,12 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
             return;
         }
         setTransportState(TransportState::TcpConnecting, "wss_socket_connect_start");
-        eventMask.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
+        // OpenSSL can switch between WANT_READ and WANT_WRITE while the TLS
+        // handshake is in flight. A level-triggered WSS fd makes each desired
+        // direction observable; edge-triggered epoll can lose the writable
+        // edge during that switch and leave the client in "Connecting" until
+        // the request timeout.
+        eventMask.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR;
         eventMask.data.ptr = eventObject;
         if (!canRegisterEpollSocket()
                 || !stateMachine.epollCtlAdd(ConnectionsManager::getInstance(instanceNum).epolFd)) {
@@ -5022,7 +5027,10 @@ void ConnectionSocket::adjustWriteOp() {
     if (!canModifyEpollWriteInterest("adjustWriteOp")) {
         return;
     }
-    eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
+    eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+    if (!isCurrentTransportWss()) {
+        eventMask.events |= EPOLLET;
+    }
     bool hasPendingClientHello = pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize;
     bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
     bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr

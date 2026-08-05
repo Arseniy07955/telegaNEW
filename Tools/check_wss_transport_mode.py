@@ -125,6 +125,18 @@ def main() -> None:
             and "currentWssTransport->onEvent" in socket_cpp
             and "currentWssTransport->write" in socket_cpp,
             "ConnectionSocket must delegate WSS I/O to the socket module")
+    require("if (!isCurrentTransportWss())" in socket_cpp
+            and "eventMask.events |= EPOLLET" in socket_cpp,
+            "WSS must stay level-triggered while TCP transports keep edge-triggered epoll")
+    require("enum class IoWait" in wss_h
+            and "SSL_ERROR_WANT_READ" in wss_cpp
+            and "SSL_ERROR_WANT_WRITE" in wss_cpp
+            and "ioWait == IoWait::Write" in wss_cpp,
+            "WSS must preserve OpenSSL read/write wait direction")
+    require("wss_socket tcp_connected" in wss_cpp
+            and "wss_socket tls_ready" in wss_cpp
+            and "wss_socket timeout" in wss_cpp,
+            "WSS diagnostics must identify TCP, TLS, and timeout phases")
     require("writeTransportPacket" in socket_cpp
             and "outgoingWssMessages" in socket_cpp
             and "wssHandshakePrefixSize" in connection_cpp,

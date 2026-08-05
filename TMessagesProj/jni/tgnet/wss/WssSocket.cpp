@@ -182,6 +182,9 @@ bool Socket::finishTcpConnect(std::string *diagnostic) {
         return false;
     }
     phase = transport::HandshakePhase::TcpConnected;
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_socket tcp_connected domain=%s", routeConfig.domain.c_str());
+    }
     return startTls(diagnostic);
 }
 
@@ -227,7 +230,8 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
     if ((events & (EPOLLIN | EPOLLOUT)) && !flushPending(diagnostic)) {
         return false;
     }
-    if ((events & EPOLLIN) && (state == State::HttpRead || state == State::Ready)) {
+    const bool retryReadOnWrite = ioWait == IoWait::Write && (events & EPOLLOUT);
+    if (((events & EPOLLIN) || retryReadOnWrite) && (state == State::HttpRead || state == State::Ready)) {
         if (!readIntoBuffer(diagnostic)) {
             return false;
         }
@@ -259,11 +263,15 @@ bool Socket::pumpTls(std::string *diagnostic) {
     }
     const int result = SSL_connect(ssl);
     if (result == 1) {
+        setIoWait(IoWait::None, "tls_ready");
         if (SSL_get_verify_result(ssl) != X509_V_OK) {
             setDiagnostic(diagnostic, "wss_tls_verify_failed");
             return false;
         }
         phase = transport::HandshakePhase::TlsReady;
+        if (LOGS_ENABLED) {
+            DEBUG_D("wss_socket tls_ready domain=%s", routeConfig.domain.c_str());
+        }
         if (!queueHttpUpgrade(diagnostic)) {
             return false;
         }
@@ -271,7 +279,12 @@ bool Socket::pumpTls(std::string *diagnostic) {
         return true;
     }
     const int error = SSL_get_error(ssl, result);
-    if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
+    if (error == SSL_ERROR_WANT_READ) {
+        setIoWait(IoWait::Read, "tls_handshake");
+        return true;
+    }
+    if (error == SSL_ERROR_WANT_WRITE) {
+        setIoWait(IoWait::Write, "tls_handshake");
         return true;
     }
     setDiagnostic(diagnostic, "wss_tls_failed");
@@ -316,7 +329,12 @@ bool Socket::flushPending(std::string *diagnostic) {
             continue;
         }
         const int error = SSL_get_error(ssl, result);
-        if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
+        if (error == SSL_ERROR_WANT_READ) {
+            setIoWait(IoWait::Read, "write");
+            return true;
+        }
+        if (error == SSL_ERROR_WANT_WRITE) {
+            setIoWait(IoWait::Write, "write");
             return true;
         }
         setDiagnostic(diagnostic, "wss_write_failed");
@@ -325,6 +343,7 @@ bool Socket::flushPending(std::string *diagnostic) {
     if (!pendingOutput.empty()) {
         pendingOutput.clear();
         pendingOutputOffset = 0;
+        setIoWait(IoWait::None, "write_complete");
         if (state == State::HttpWrite) {
             state = State::HttpRead;
         }
@@ -345,7 +364,12 @@ bool Socket::readIntoBuffer(std::string *diagnostic) {
             continue;
         }
         const int error = SSL_get_error(ssl, result);
-        if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
+        if (error == SSL_ERROR_WANT_READ) {
+            setIoWait(IoWait::Read, "read");
+            return true;
+        }
+        if (error == SSL_ERROR_WANT_WRITE) {
+            setIoWait(IoWait::Write, "read");
             return true;
         }
         setDiagnostic(diagnostic, result == 0 || error == SSL_ERROR_ZERO_RETURN
@@ -489,6 +513,7 @@ bool Socket::queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std:
         setDiagnostic(diagnostic, "wss_random_failed");
         return false;
     }
+    const bool outputWasEmpty = pendingOutputOffset >= pendingOutput.size();
     if (pendingOutputOffset > 0) {
         pendingOutput.erase(pendingOutput.begin(), pendingOutput.begin() + pendingOutputOffset);
         pendingOutputOffset = 0;
@@ -515,6 +540,9 @@ bool Socket::queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std:
     for (uint32_t i = 0; i < size; ++i) {
         pendingOutput.push_back(data[i] ^ mask[i % sizeof(mask)]);
     }
+    if (outputWasEmpty) {
+        setIoWait(IoWait::None, "frame_queued");
+    }
     return true;
 }
 
@@ -532,8 +560,8 @@ bool Socket::isReady() const {
 
 bool Socket::wantsWrite() const {
     return state == State::TcpConnecting
-            || state == State::TlsHandshake
-            || pendingOutputOffset < pendingOutput.size();
+            || ioWait == IoWait::Write
+            || (pendingOutputOffset < pendingOutput.size() && ioWait != IoWait::Read);
 }
 
 bool Socket::isClosed() const {
@@ -549,6 +577,50 @@ const char *Socket::transportName() const {
 }
 
 void Socket::timedOut() {
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_socket timeout domain=%s state=%s wait=%s", routeConfig.domain.c_str(), stateName(), ioWaitName());
+    }
+}
+
+void Socket::setIoWait(IoWait wait, const char *operation) {
+    if (ioWait == wait) {
+        return;
+    }
+    ioWait = wait;
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_socket io_wait domain=%s state=%s wait=%s operation=%s",
+                routeConfig.domain.c_str(), stateName(), ioWaitName(), operation != nullptr ? operation : "unknown");
+    }
+}
+
+const char *Socket::stateName() const {
+    switch (state) {
+        case State::TcpConnecting:
+            return "tcp_connecting";
+        case State::TlsHandshake:
+            return "tls_handshake";
+        case State::HttpWrite:
+            return "http_write";
+        case State::HttpRead:
+            return "http_read";
+        case State::Ready:
+            return "ready";
+        case State::Closed:
+            return "closed";
+    }
+    return "unknown";
+}
+
+const char *Socket::ioWaitName() const {
+    switch (ioWait) {
+        case IoWait::None:
+            return "none";
+        case IoWait::Read:
+            return "read";
+        case IoWait::Write:
+            return "write";
+    }
+    return "unknown";
 }
 
 void Socket::close() {
@@ -562,6 +634,7 @@ void Socket::close() {
     }
     state = State::Closed;
     phase = transport::HandshakePhase::None;
+    ioWait = IoWait::None;
     pendingOutput.clear();
     pendingOutputOffset = 0;
     inputBuffer.clear();
