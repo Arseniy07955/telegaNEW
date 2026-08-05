@@ -3404,7 +3404,11 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         socketAddress.sin_family = AF_INET;
         socketAddress.sin_port = htons(wssConnectPort);
         bool continueCheckAddress = false;
-        if (inet_pton(AF_INET, wssConnectHost.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
+        if (inet_pton(AF_INET, wssConnectHost.c_str(), &socketAddress.sin_addr.s_addr) == 1) {
+            // The relay owns the socket address. Never carry the address
+            // family of the ignored dcOption target into WSS setup.
+            ipv6 = false;
+        } else {
             continueCheckAddress = true;
         }
         if (continueCheckAddress) {

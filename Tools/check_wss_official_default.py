@@ -40,9 +40,9 @@ def main() -> None:
             "official WSS relay catalog must cover exactly DC1-DC5")
     require('mediaConnection ? "-1.web.telegram.org"' in wss_cpp,
             "official WSS must select the media relay variant")
-    require("const bool wssMediaRoute = isMediaConnectionType(connectionType)" in connection_cpp
-            and "connectionType & ConnectionTypeUpload" in connection_cpp,
-            "download/upload traffic must select media WSS independently of media-only IP options")
+    require("getDatacenterId(), isMediaConnection);" in connection_cpp
+            and "wssMediaRoute" not in connection_cpp,
+            "WSS relay selection must follow the selected auth realm; uploads use regular kwsN")
     require("forceProxyLikeInitForWss" not in connection_cpp
             and "if (useSecret != 0)" in connection_cpp,
             "direct WSS must not inject the MTProxy-only DC marker")

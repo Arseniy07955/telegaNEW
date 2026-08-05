@@ -9,6 +9,7 @@
 #include "../transport/TransportSocket.h"
 
 #include <openssl/ssl.h>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -85,8 +86,12 @@ private:
     State state = State::Closed;
     IoWait ioWait = IoWait::None;
     transport::HandshakePhase phase = transport::HandshakePhase::None;
-    std::vector<uint8_t> pendingOutput;
+    // Keep every TLS write retry in a stable, immutable allocation. OpenSSL
+    // requires the same buffer and length after WANT_READ/WANT_WRITE; a single
+    // appendable vector violated that contract under bursty uploads.
+    std::deque<std::vector<uint8_t>> pendingOutput;
     size_t pendingOutputOffset = 0;
+    size_t pendingOutputBytes = 0;
     std::vector<uint8_t> inputBuffer;
     std::string secWebSocketKey;
     bool fragmentedMessage = false;

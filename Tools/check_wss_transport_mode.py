@@ -145,6 +145,15 @@ def main() -> None:
             and "wssHandshakePrefixSize" in connection_cpp
             and socket_state_cpp.count('{"writeTransportPacket"') >= 5,
             "WSS must preserve init and MTProto packet message boundaries")
+    require("std::deque<std::vector<uint8_t>> pendingOutput" in wss_h
+            and "pendingOutput.front()" in wss_cpp
+            and "pendingOutput.push_back(std::move(frame))" in wss_cpp,
+            "WSS TLS retries must keep immutable frame buffers during upload bursts")
+    require("The relay owns the socket address" in socket_cpp
+            and "ipv6 = false;" in socket_cpp,
+            "WSS relay address family must not inherit the ignored DC target family")
+    require("lastPushPingTime != 0" in manager_cpp,
+            "push ping timeout must not spin after clearing its timestamp")
     for forbidden in ("wssSocksHost", "wssFallbackProxy", "WssRouteConfig"):
         require(forbidden not in socket_cpp + socket_h,
                 f"ConnectionSocket must not contain obsolete WSS proxy field {forbidden}")

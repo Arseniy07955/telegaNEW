@@ -418,35 +418,39 @@ bool Socket::queueHttpUpgrade(std::string *diagnostic) {
             "Origin: https://web.telegram.org\r\n"
             "User-Agent: Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36\r\n"
             "\r\n";
-    pendingOutput.assign(request.begin(), request.end());
+    pendingOutput.clear();
+    pendingOutput.emplace_back(request.begin(), request.end());
     pendingOutputOffset = 0;
+    pendingOutputBytes = request.size();
     return true;
 }
 
 bool Socket::flushPending(std::string *diagnostic) {
-    while (pendingOutputOffset < pendingOutput.size()) {
-        const int result = SSL_write(
-                ssl,
-                pendingOutput.data() + pendingOutputOffset,
-                static_cast<int>(pendingOutput.size() - pendingOutputOffset));
-        if (result > 0) {
-            pendingOutputOffset += static_cast<size_t>(result);
-            continue;
+    while (!pendingOutput.empty()) {
+        const std::vector<uint8_t> &output = pendingOutput.front();
+        while (pendingOutputOffset < output.size()) {
+            const int result = SSL_write(
+                    ssl,
+                    output.data() + pendingOutputOffset,
+                    static_cast<int>(output.size() - pendingOutputOffset));
+            if (result > 0) {
+                pendingOutputOffset += static_cast<size_t>(result);
+                continue;
+            }
+            const int error = SSL_get_error(ssl, result);
+            if (error == SSL_ERROR_WANT_READ) {
+                setIoWait(IoWait::Read, "write");
+                return true;
+            }
+            if (error == SSL_ERROR_WANT_WRITE) {
+                setIoWait(IoWait::Write, "write");
+                return true;
+            }
+            setDiagnostic(diagnostic, "wss_write_failed");
+            return false;
         }
-        const int error = SSL_get_error(ssl, result);
-        if (error == SSL_ERROR_WANT_READ) {
-            setIoWait(IoWait::Read, "write");
-            return true;
-        }
-        if (error == SSL_ERROR_WANT_WRITE) {
-            setIoWait(IoWait::Write, "write");
-            return true;
-        }
-        setDiagnostic(diagnostic, "wss_write_failed");
-        return false;
-    }
-    if (!pendingOutput.empty()) {
-        pendingOutput.clear();
+        pendingOutputBytes -= output.size();
+        pendingOutput.pop_front();
         pendingOutputOffset = 0;
         setIoWait(IoWait::None, "write_complete");
         if (state == State::HttpWrite) {
@@ -618,33 +622,34 @@ bool Socket::queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std:
         setDiagnostic(diagnostic, "wss_random_failed");
         return false;
     }
-    const bool outputWasEmpty = pendingOutputOffset >= pendingOutput.size();
-    if (pendingOutputOffset > 0) {
-        pendingOutput.erase(pendingOutput.begin(), pendingOutput.begin() + pendingOutputOffset);
-        pendingOutputOffset = 0;
-    }
     const size_t frameOverhead = size < 126 ? 6 : (size <= 0xffff ? 8 : 14);
-    if (pendingOutput.size() + frameOverhead + size > kMaxPendingOutput) {
+    const size_t frameSize = frameOverhead + size;
+    if (pendingOutputBytes > kMaxPendingOutput - frameSize) {
         setDiagnostic(diagnostic, "wss_write_queue_full");
         return false;
     }
-    pendingOutput.push_back(static_cast<uint8_t>(0x80 | opcode));
+    const bool outputWasEmpty = pendingOutput.empty();
+    std::vector<uint8_t> frame;
+    frame.reserve(frameSize);
+    frame.push_back(static_cast<uint8_t>(0x80 | opcode));
     if (size < 126) {
-        pendingOutput.push_back(static_cast<uint8_t>(0x80 | size));
+        frame.push_back(static_cast<uint8_t>(0x80 | size));
     } else if (size <= 0xffff) {
-        pendingOutput.push_back(0x80 | 126);
-        pendingOutput.push_back(static_cast<uint8_t>((size >> 8) & 0xff));
-        pendingOutput.push_back(static_cast<uint8_t>(size & 0xff));
+        frame.push_back(0x80 | 126);
+        frame.push_back(static_cast<uint8_t>((size >> 8) & 0xff));
+        frame.push_back(static_cast<uint8_t>(size & 0xff));
     } else {
-        pendingOutput.push_back(0x80 | 127);
+        frame.push_back(0x80 | 127);
         for (int i = 7; i >= 0; --i) {
-            pendingOutput.push_back(static_cast<uint8_t>((static_cast<uint64_t>(size) >> (i * 8)) & 0xff));
+            frame.push_back(static_cast<uint8_t>((static_cast<uint64_t>(size) >> (i * 8)) & 0xff));
         }
     }
-    pendingOutput.insert(pendingOutput.end(), mask, mask + sizeof(mask));
+    frame.insert(frame.end(), mask, mask + sizeof(mask));
     for (uint32_t i = 0; i < size; ++i) {
-        pendingOutput.push_back(data[i] ^ mask[i % sizeof(mask)]);
+        frame.push_back(data[i] ^ mask[i % sizeof(mask)]);
     }
+    pendingOutputBytes += frame.size();
+    pendingOutput.push_back(std::move(frame));
     if (outputWasEmpty) {
         setIoWait(IoWait::None, "frame_queued");
     }
@@ -666,7 +671,7 @@ bool Socket::isReady() const {
 bool Socket::wantsWrite() const {
     return state == State::TcpConnecting
             || ioWait == IoWait::Write
-            || (pendingOutputOffset < pendingOutput.size() && ioWait != IoWait::Read);
+            || (!pendingOutput.empty() && ioWait != IoWait::Read);
 }
 
 bool Socket::isClosed() const {
@@ -757,6 +762,7 @@ void Socket::close() {
     ioWait = IoWait::None;
     pendingOutput.clear();
     pendingOutputOffset = 0;
+    pendingOutputBytes = 0;
     inputBuffer.clear();
     fragmentedMessage = false;
 }

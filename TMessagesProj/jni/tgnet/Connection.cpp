@@ -480,12 +480,12 @@ void Connection::connect() {
         }
         setMtProxyHandshakePriority(mtProxyHandshakePriority);
     }
-    // WSS relay selection follows the traffic class, not whether this DC
-    // happened to publish a media_only IP address. Telegram Web routes both
-    // downloads and uploads through the per-DC -1 endpoint.
-    const bool wssMediaRoute = isMediaConnectionType(connectionType)
-            || (connectionType & ConnectionTypeUpload) != 0;
-    openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), wssMediaRoute);
+    // The WSS hostname must follow the authorization realm, not the amount or
+    // direction of file traffic. Upload connections use the regular temp key
+    // and therefore belong on kwsN; only connections that actually selected a
+    // media address/key belong on kwsN-1. Routing uploads by their file-lane
+    // classification makes the media relay reject the regular key with -404.
+    openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), isMediaConnection);
     if (connectionType == ConnectionTypeProxy) {
         setTimeout(5);
     } else if (connectionType == ConnectionTypePush) {

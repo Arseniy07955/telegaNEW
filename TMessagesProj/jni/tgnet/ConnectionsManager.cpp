@@ -300,7 +300,9 @@ void ConnectionsManager::select() {
 
     Datacenter *datacenter = getDatacenterWithId(currentDatacenterId);
     if (pushConnectionEnabled) {
-        if ((sendingPushPing && llabs(now - lastPushPingTime) >= 30000) || llabs(now - lastPushPingTime) >= nextPingTimeOffset + 10000) {
+        if (lastPushPingTime != 0
+                && ((sendingPushPing && llabs(now - lastPushPingTime) >= 30000)
+                    || llabs(now - lastPushPingTime) >= nextPingTimeOffset + 10000)) {
             lastPushPingTime = 0;
             sendingPushPing = false;
             if (datacenter != nullptr) {
