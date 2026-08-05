@@ -85,7 +85,6 @@ private:
     using TransportActionRule = ConnectionSocketStateMachine::ActionRule;
 
     ConnectionSocketStateMachine stateMachine;
-    bool wssUsedRelayFallback = false;
     bool suppressNextProxyCloseDiagnostic = false;
     uint32_t proxyActivationGeneration = 0;
     uint32_t proxyConfigGeneration = 0;

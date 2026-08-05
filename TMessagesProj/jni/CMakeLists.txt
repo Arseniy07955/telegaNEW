@@ -185,6 +185,7 @@ set_target_properties(tdutils PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTOR
 # "mtproxy/MtProxyX.h". Java/socket layers link against this, never vice versa.
 add_library(mtproxy_core STATIC
         mtproxy/MtProxyAdaptivePolicy.cpp
+        mtproxy/MtProxyClientHelloPolicy.cpp
         mtproxy/MtProxyDataPathShaper.cpp
         mtproxy/MtProxyEndpointRecorder.cpp
         mtproxy/MtProxyEndpointPolicy.cpp
@@ -224,7 +225,7 @@ add_library(tgnet STATIC
         tgnet/ConnectionsManager.cpp
         tgnet/ConnectionSocket.cpp
         tgnet/ConnectionSocketStateMachine.cpp
-        tgnet/WssTransport.cpp
+        tgnet/wss/WssSocket.cpp
         tgnet/Datacenter.cpp
         tgnet/EventObject.cpp
         tgnet/FileLog.cpp
@@ -244,6 +245,8 @@ target_compile_definitions(tgnet PUBLIC
         HAVE_PTHREAD)
 target_include_directories(tgnet PUBLIC
         boringssl/include/)
+target_include_directories(tgnet PRIVATE
+        voip/webrtc)
 target_link_libraries(tgnet
         mtproxy_core
         ssl

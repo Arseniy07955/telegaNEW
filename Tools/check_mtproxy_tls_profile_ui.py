@@ -28,8 +28,9 @@ def main() -> None:
     require(
         "MT_PROXY_TLS_PROFILE_AUTO" in connections
         and "MT_PROXY_TLS_PROFILE_OVERRIDE" in connections
-        and "stableMtProxyTlsHash" in connections,
-        "Auto mode must keep the existing sticky per-endpoint/profile selection",
+        and "return MT_PROXY_TLS_PROFILE_YANDEX;" in connections
+        and "stableMtProxyTlsHash" not in connections,
+        "Auto mode must use the measured-safe tdesktop Yandex profile",
     )
     require(
         "getMtProxyTlsProfileOverride()" in connections
@@ -49,11 +50,14 @@ def main() -> None:
         and "ConnectionsManager.setMtProxyTlsProfileOverride" in proxy_list,
         "proxy settings UI must expose Auto, Auto rotate, and manual JA4 profile selection",
     )
+    options = proxy_list.split("MT_PROXY_TLS_PROFILE_OPTIONS = new int[] {", 1)[1].split("};", 1)[0]
     require(
-        "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in proxy_list
-        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in proxy_list
-        and "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in proxy_list,
-        "JA4 UI must include the Android profile family for the default testing path",
+        "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in options
+        and "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in options
+        and "MT_PROXY_TLS_PROFILE_YANDEX" in options
+        and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" not in options
+        and "MT_PROXY_TLS_PROFILE_CHROME_MODERN" not in options,
+        "JA4 UI must expose only profiles that are allowed onto the wire",
     )
     require(
         "ConnectionsManager.setProxySettings(true" in proxy_list,

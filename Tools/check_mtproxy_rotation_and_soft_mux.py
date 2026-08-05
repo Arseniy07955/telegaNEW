@@ -57,17 +57,20 @@ def main() -> None:
         "proxy settings UI must expose Auto rotate as a selectable JA4 mode",
     )
     require(
-        re.search(
-            r"private static final int MT_PROXY_TLS_PROFILE_RANDOM_COUNT = 2;",
-            connections,
-        )
-        and "return MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP;" not in connections,
-        "stable Auto pool must exclude Android OkHttp until it is server-compatible",
+        "return MT_PROXY_TLS_PROFILE_YANDEX;" in connections
+        and "MT_PROXY_TLS_PROFILE_RANDOM_COUNT" not in connections
+        and "stableMtProxyTlsHash" not in connections,
+        "Auto must use the measured-safe tdesktop Yandex profile without endpoint randomization",
     )
+    rotate_pool = adaptive_cpp.split("static int32_t autoRotatePoolProfile", 1)[1].split("};", 1)[0]
     require(
-        "return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;" in connections
-        and "return MT_PROXY_TLS_PROFILE_YANDEX;" in connections,
-        "stable Auto pool must currently use Firefox Android and Yandex only",
+        "MT_PROXY_TLS_PROFILE_YANDEX" in rotate_pool
+        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in rotate_pool
+        and "MT_PROXY_TLS_PROFILE_FIREFOX" in rotate_pool
+        and "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in rotate_pool
+        and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" not in rotate_pool
+        and "MT_PROXY_TLS_PROFILE_CHROME_MODERN" not in rotate_pool,
+        "Auto rotate must exclude the two withheld Chromium wire profiles",
     )
     require(
         "tlsAutoRotateProfiles" in adaptive_cpp

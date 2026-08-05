@@ -14,7 +14,7 @@
 #include <memory>
 #include <string>
 #include "mtproxy/MtProxyStartupTimeline.h"
-#include "WssTransport.h"
+#include "wss/WssSocket.h"
 
 class ByteArray;
 class ByteStream;
@@ -142,8 +142,8 @@ public:
         bool active = false;
         int32_t datacenterId = 0;
         bool mediaConnection = false;
-        WssRouteConfig route;
-        std::unique_ptr<WssTransport> transport;
+        tgnet::wss::Route route;
+        std::unique_ptr<tgnet::transport::Socket> transport;
     };
 
     struct AdmissionSubstate {

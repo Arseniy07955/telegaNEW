@@ -4,6 +4,7 @@
  */
 
 #include "MtProxyAdaptivePolicy.h"
+#include "MtProxyClientHelloPolicy.h"
 #include "MtProxyServerFlightParser.h"
 
 #include <map>
@@ -42,10 +43,10 @@ static uint64_t profileHash(uint64_t hash, const std::string &value) {
 
 static int32_t autoRotatePoolProfile(int32_t index) {
     static const int32_t profiles[] = {
-            MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID,
-            MT_PROXY_TLS_PROFILE_ANDROID_CHROME,
             MT_PROXY_TLS_PROFILE_YANDEX,
+            MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID,
             MT_PROXY_TLS_PROFILE_FIREFOX,
+            MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP,
     };
     int32_t normalizedIndex = index % MT_PROXY_ALTERNATE_PROFILE_COUNT;
     if (normalizedIndex < 0) {
@@ -113,10 +114,10 @@ static bool profileUsesModernExtensions(int32_t profile) {
 
 static int32_t alternateCompatibilityTlsProfile(int32_t alternateProfileIndex) {
     static const int32_t profiles[] = {
-            MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID,
-            MT_PROXY_TLS_PROFILE_ANDROID_CHROME,
             MT_PROXY_TLS_PROFILE_YANDEX,
+            MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID,
             MT_PROXY_TLS_PROFILE_FIREFOX,
+            MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP,
     };
     int32_t normalizedIndex = alternateProfileIndex % MT_PROXY_ALTERNATE_PROFILE_COUNT;
     if (normalizedIndex < 0) {
@@ -139,19 +140,19 @@ uint32_t MtProxyAdaptivePolicy::sniVariantMask(int32_t variant) {
 const char *MtProxyAdaptivePolicy::clientHelloFamilyName(int32_t family) {
     switch (family) {
         case CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT:
-            return "chrome_modern_soft_fragment";
+            return "yandex_soft_fragment";
         case CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT:
-            return "chrome_modern_no_fragment";
+            return "tdesktop_yandex_no_fragment";
         case CLIENT_HELLO_ANDROID_CHROME_NO_FRAGMENT:
-            return "android_chrome_no_fragment";
-        case CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT:
             return "firefox_android_no_fragment";
+        case CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT:
+            return "firefox_no_fragment";
         case CLIENT_HELLO_LEGACY_NO_GREASE_NO_MODERN_EXTENSIONS:
             return "legacy_no_grease_no_modern_extensions";
         case CLIENT_HELLO_LEGACY_TLS12_MINIMAL:
-            return "legacy_tls12_minimal";
+            return "android_okhttp_no_fragment";
         default:
-            return "chrome_modern_soft_fragment";
+            return "tdesktop_yandex_no_fragment";
     }
 }
 
@@ -234,7 +235,7 @@ static bool sniVariantAllowed(uint32_t mask, int32_t variant) {
 static std::vector<MtProxyAdaptivePolicy::RecipeCursor> buildRecipeCursorLadder(uint32_t allowedSniVariants, bool classicFallbackAllowed, MtProxyRecoveryAction action) {
     std::vector<MtProxyAdaptivePolicy::RecipeCursor> ladder;
     if (allowedSniVariants == 0) {
-        allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+        allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL);
     }
     int32_t parserLimit = serverHelloParserVariantAllowed(action)
             ? MtProxyAdaptivePolicy::PARSER_VARIANT_COUNT
@@ -281,11 +282,16 @@ MtProxyAdaptivePolicy::RecipeCursor MtProxyAdaptivePolicy::initialCursor(uint32_
     MtProxyRecoveryAction action;
     action.kind = MtProxyRecoveryActionKind::AdvanceClientHelloOnly;
     std::vector<RecipeCursor> ladder = buildRecipeCursorLadder(allowedSniVariants, false, action);
+    for (const RecipeCursor &candidate : ladder) {
+        if (candidate.family == CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT) {
+            return candidate;
+        }
+    }
     if (!ladder.empty()) {
         return ladder.front();
     }
     RecipeCursor cursor;
-    cursor.sniVariant = SNI_SANITIZED;
+    cursor.sniVariant = SNI_ORIGINAL;
     return cursor;
 }
 
@@ -323,15 +329,15 @@ bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor, const std::string &
 }
 
 static int32_t greaseProbeTlsProfile(int32_t configuredProfile, int32_t effectiveProfile) {
-    configuredProfile = normalizeMtProxyTlsProfileOption(configuredProfile);
-    effectiveProfile = normalizeMtProxyTlsProfileOption(effectiveProfile);
+    configuredProfile = mtProxyEffectiveWireTlsProfile(configuredProfile);
+    effectiveProfile = mtProxyEffectiveWireTlsProfile(effectiveProfile);
     if (MtProxyAdaptivePolicy::profileUsesGrease(configuredProfile)) {
         return configuredProfile;
     }
     if (MtProxyAdaptivePolicy::profileUsesGrease(effectiveProfile)) {
         return effectiveProfile;
     }
-    return MT_PROXY_TLS_PROFILE_ANDROID_CHROME;
+    return mtProxyDefaultTlsProfile();
 }
 
 static std::string sniForVariant(const MtProxyAdaptivePolicy::RecipeInput &input, int32_t variant) {
@@ -368,7 +374,7 @@ MtProxyAdaptivePolicy::CompatibilityRecipe MtProxyAdaptivePolicy::recipeForCurso
     recipe.startupCoverMode = normalizeMtProxyStartupCoverOption(input.startupCoverMode);
     recipe.serverHelloParserMode = parserModeForVariant(cursor.parserVariant);
     recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
-    recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_CHROME_MODERN;
+    recipe.effectiveTlsProfile = mtProxyDefaultTlsProfile();
 
     if (cursor.classicVariant != CLASSIC_NONE) {
         recipe.transportMode = "classic_obfuscated";
@@ -384,35 +390,39 @@ MtProxyAdaptivePolicy::CompatibilityRecipe MtProxyAdaptivePolicy::recipeForCurso
     recipe.transportMode = input.fakeTls ? "faketls_ee" : "classic_obfuscated";
     switch (cursor.family) {
         case CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT:
-            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_CHROME_MODERN;
+            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_YANDEX;
             recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT;
             break;
         case CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT:
-            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_CHROME_MODERN;
+            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_YANDEX;
             recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
             break;
         case CLIENT_HELLO_ANDROID_CHROME_NO_FRAGMENT:
-            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_ANDROID_CHROME;
-            recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
-            break;
-        case CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT:
             recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
             recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
             break;
+        case CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT:
+            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_FIREFOX;
+            recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
+            break;
         case CLIENT_HELLO_LEGACY_NO_GREASE_NO_MODERN_EXTENSIONS:
-        case CLIENT_HELLO_LEGACY_TLS12_MINIMAL:
             recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE;
             recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
             break;
+        case CLIENT_HELLO_LEGACY_TLS12_MINIMAL:
+            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP;
+            recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
+            break;
         default:
-            recipe.effectiveTlsProfile = MT_PROXY_TLS_PROFILE_CHROME_MODERN;
-            recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT;
+            recipe.effectiveTlsProfile = mtProxyDefaultTlsProfile();
+            recipe.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
             break;
     }
 
     if (input.probeGrease || input.greaseSupported) {
         recipe.effectiveTlsProfile = greaseProbeTlsProfile(input.configuredTlsProfile, recipe.effectiveTlsProfile);
     }
+    recipe.effectiveTlsProfile = mtProxyEffectiveWireTlsProfile(recipe.effectiveTlsProfile);
     recipe.tlsProfile = adaptiveTlsProfileName(recipe.effectiveTlsProfile);
     recipe.fragmentClientHello = recipe.clientHelloFragmentation != MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
     recipe.useGrease = profileUsesGrease(recipe.effectiveTlsProfile);
@@ -571,10 +581,7 @@ std::string MtProxyAdaptivePolicy::recipeId(const MtProxyRecipe &recipe) {
 int32_t MtProxyAdaptivePolicy::resolveEffectiveTlsProfile(int32_t profile, const std::string &key) {
     profile = normalizeMtProxyTlsProfileOption(profile);
     if (profile != MT_PROXY_TLS_PROFILE_AUTO_ROTATE) {
-        if (profile == MT_PROXY_TLS_PROFILE_AUTO) {
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
-        }
-        return profile;
+        return mtProxyEffectiveWireTlsProfile(profile);
     }
 
     pthread_mutex_lock(&mtProxyTlsAutoProfilesMutex);
@@ -582,7 +589,7 @@ int32_t MtProxyAdaptivePolicy::resolveEffectiveTlsProfile(int32_t profile, const
     if (state.profileIndex < 0) {
         state.profileIndex = autoRotateInitialIndex(key);
     }
-    int32_t result = autoRotatePoolProfile(state.profileIndex);
+    int32_t result = mtProxyEffectiveWireTlsProfile(autoRotatePoolProfile(state.profileIndex));
     pthread_mutex_unlock(&mtProxyTlsAutoProfilesMutex);
     return result;
 }
@@ -601,7 +608,7 @@ MtProxyAdaptivePolicy::RotateResult MtProxyAdaptivePolicy::rotateTlsProfileOnFai
     state.profileIndex = (state.profileIndex + 1) % MT_PROXY_ALTERNATE_PROFILE_COUNT;
     state.failures++;
     result.failures = state.failures;
-    result.nextProfile = autoRotatePoolProfile(state.profileIndex);
+    result.nextProfile = mtProxyEffectiveWireTlsProfile(autoRotatePoolProfile(state.profileIndex));
     pthread_mutex_unlock(&mtProxyTlsAutoProfilesMutex);
     result.rotated = true;
     return result;
@@ -649,18 +656,23 @@ int32_t MtProxyAdaptivePolicy::compatibilityTlsProfile(int32_t configuredProfile
 int32_t MtProxyAdaptivePolicy::adaptiveTlsProfile(int32_t configuredProfile, int32_t effectiveProfile) {
     configuredProfile = normalizeMtProxyTlsProfileOption(configuredProfile);
     if (configuredProfile != MT_PROXY_TLS_PROFILE_AUTO && configuredProfile != MT_PROXY_TLS_PROFILE_AUTO_ROTATE) {
-        return effectiveProfile;
+        return mtProxyEffectiveWireTlsProfile(effectiveProfile);
     }
     switch (normalizeMtProxyTlsProfileOption(effectiveProfile)) {
+        case MT_PROXY_TLS_PROFILE_YANDEX:
+            return MT_PROXY_TLS_PROFILE_YANDEX;
         case MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID:
             return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
+        case MT_PROXY_TLS_PROFILE_FIREFOX:
+            return MT_PROXY_TLS_PROFILE_FIREFOX;
+        case MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP:
+            return MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP;
         case MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE:
             return MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE;
         case MT_PROXY_TLS_PROFILE_CHROME_MODERN:
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
         case MT_PROXY_TLS_PROFILE_ANDROID_CHROME:
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
+            return mtProxyDefaultTlsProfile();
         default:
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
+            return mtProxyDefaultTlsProfile();
     }
 }

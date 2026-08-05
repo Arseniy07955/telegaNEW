@@ -374,7 +374,7 @@
     <string name="MtProxyStartupCoverSoft">Мягко</string>
     <string name="MtProxyStartupCoverStrict">Строго</string>
     <string name="MtProxyTlsProfile">JA4 / TLS-профиль</string>
-    <string name="MtProxyTlsProfileInfo">Авто держит один стабильный профиль для конкретного прокси и секрета. Авторотация меняет профиль только после подозрительных FakeTLS-сбоев. Ручной режим принудительно использует один профиль для всех FakeTLS-прокси.</string>
+    <string name="MtProxyTlsProfileInfo">Авто использует проверенный профиль Yandex как в tdesktop. Авторотация после подозрительных FakeTLS-сбоев перебирает только проверенные профили. Старые настройки Chromium автоматически переключаются на Авто.</string>
     <string name="MtProxyTlsProfileAuto">Авто</string>
     <string name="MtProxyTlsProfileAutoRotate">Авторотация</string>
     <string name="MtProxyTlsProfileChromeModern">Chrome+</string>
@@ -384,18 +384,9 @@
     <string name="MtProxyTlsProfileFirefox">Firefox</string>
     <string name="MtProxyTlsProfileYandex">Yandex</string>
     <string name="WssTransportHeader">Telegram WSS транспорт</string>
-    <string name="WssTransportMode">WSS режим</string>
-    <string name="WssTransportOff">Выкл</string>
+    <string name="UseWssTransport">Использовать WSS транспорт</string>
     <string name="WssTransportOfficial">Официальный</string>
-    <string name="WssTransportCustom">Свой</string>
-    <string name="WssTransportInfo">WSS — отдельный транспорт Telegram. Официальный режим использует WebSocket-релеи Telegram для DC2/DC4 и не требует VPS. Свой режим требует собственного WebSocket-шлюза.</string>
-    <string name="UseProxyWss">WSS шлюз</string>
-    <string name="UseProxyWssHost">WSS хост</string>
-    <string name="UseProxyWssPath">WSS путь</string>
-    <string name="UseProxyWssMiniApps">Mini Apps через выбранный SOCKS</string>
-    <string name="UseProxyWssInfo">Свой WSS — это не MTProxy и не SOCKS-прокси. Когда WSS включён, выбранный SOCKS5 может использоваться как upstream для WSS.</string>
-    <string name="WssSocksUpstreamHeader">SOCKS5 upstream для WSS</string>
-    <string name="WssSocksUpstreamInfo">Здесь показываются только SOCKS5. Выбранный SOCKS5 используется как upstream для WSS; MTProxy скрыты.</string>
+    <string name="WssTransportInfo">Использует WebSocket-релеи Telegram для поддерживаемых дата-центров. Это транспорт клиента, а не прокси: локальный порт и свой шлюз не нужны.</string>
     <!-- ZaStoGram — экран логов -->
     <string name="ZaLogsTitle">Логи</string>
     <string name="ZaLogsFilesHeader">Файлы логов</string>

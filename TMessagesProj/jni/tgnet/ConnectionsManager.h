@@ -77,7 +77,7 @@ public:
     uint32_t getProxyActivationGeneration();
     uint32_t getProxyConfigGeneration();
     std::string getProxyActivationOrigin();
-    void setWssTransportSettings(int32_t mode, int32_t gatewayMode, std::string host, uint16_t port, std::string path, bool miniApps, std::string socksHost, uint16_t socksPort, std::string socksUsername, std::string socksPassword, bool socksEnabled, bool enabled);
+    void setWssTransportEnabled(bool enabled);
     void setLangCode(std::string langCode);
     void setRegId(std::string regId);
     void setSystemLangCode(std::string langCode);
@@ -218,17 +218,6 @@ private:
     uint32_t proxyActivationGeneration = 0;
     uint32_t proxyConfigGeneration = 0;
     std::string proxyActivationOrigin = "active_socket";
-    int32_t wssTransportMode = 0;
-    int32_t wssGatewayMode = 0;
-    std::string wssHost = "";
-    uint16_t wssPort = 443;
-    std::string wssPath = "/apiws";
-    std::string wssSocksHost = "";
-    uint16_t wssSocksPort = 1080;
-    std::string wssSocksUsername = "";
-    std::string wssSocksPassword = "";
-    bool wssSocksEnabled = false;
-    bool wssUseForMiniApps = false;
     bool wssEnabled = false;
     int64_t transportSettingsStartupSettleUntil = 0;
     bool transportSettingsReconnectPending = false;

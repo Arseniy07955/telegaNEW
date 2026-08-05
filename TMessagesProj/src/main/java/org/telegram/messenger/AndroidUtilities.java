@@ -4604,7 +4604,7 @@ public class AndroidUtilities {
             }
             Uri data = intent.getData();
             ProxyLinkHelper.ProxyLink link = data != null ? ProxyLinkHelper.parse(data.toString()) : null;
-            if (link != null && link.type != ProxyLinkHelper.TYPE_WSS) {
+            if (link != null) {
                 if (invoked) {
                     showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret);
                 }
@@ -4618,7 +4618,7 @@ public class AndroidUtilities {
 
     public static boolean showClipboardProxyAlertIfNeeded(Activity activity) {
         ProxyLinkHelper.ProxyLink link = ProxyLinkHelper.firstFromClipboard(activity);
-        if (link == null || link.type == ProxyLinkHelper.TYPE_WSS) {
+        if (link == null) {
             lastClipboardProxyAlertKey = null;
             return false;
         }

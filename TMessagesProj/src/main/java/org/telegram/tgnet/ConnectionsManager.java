@@ -145,11 +145,6 @@ public class ConnectionsManager extends BaseController {
     public final static int MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
     public final static int MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
     public final static int MT_PROXY_CONNECTION_PATTERN_BROWSER = 4;
-    public final static int WSS_TRANSPORT_OFF = SharedConfig.TRANSPORT_LEGACY_PROXY;
-    public final static int WSS_TRANSPORT_OFFICIAL = SharedConfig.TRANSPORT_WSS_OFFICIAL;
-    public final static int WSS_TRANSPORT_CUSTOM = SharedConfig.TRANSPORT_WSS_CUSTOM;
-    public final static int WSS_TRANSPORT_SOCKS5 = SharedConfig.TRANSPORT_WSS_SOCKS5;
-
     private static final long TL_UNMAPPED_CONSTRUCTOR_LOG_INTERVAL_MS = 30_000;
     private static final long TL_UNMAPPED_SUMMARY_INTERVAL_MS = 60_000;
     private static final HashMap<Integer, UnmappedConstructorStats> unmappedConstructorStats = new HashMap<>();
@@ -187,9 +182,7 @@ public class ConnectionsManager extends BaseController {
     }
     public static final String BACKGROUND_NETWORK_ALWAYS_ON = "backgroundNetworkAlwaysOn";
 
-    private static final int MT_PROXY_TLS_PROFILE_RANDOM_COUNT = 2;
     private static final String MT_PROXY_TLS_PROFILE_PREFS = "mtproxy_tls_profile";
-    private static final String MT_PROXY_TLS_PROFILE_SALT = "profile_salt_v1";
     private static final String MT_PROXY_TLS_PROFILE_OVERRIDE = "profile_override";
     private static final String DOH_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
     private static final String DOH_GOOGLE_QUERY_ENDPOINT = "https://dns.google/resolve";
@@ -857,11 +850,15 @@ public class ConnectionsManager extends BaseController {
         String proxySecret = preferences.getString("proxy_secret", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
-        if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
+        final boolean legacyProxyEnabled = preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress);
+        if (legacyProxyEnabled) {
             int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount);
             native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
         }
-        setWssTransportSettings();
+        if (legacyProxyEnabled && SharedConfig.wssTransportEnabled) {
+            SharedConfig.setWssTransportEnabled(false);
+        }
+        setWssTransportEnabled();
         String installer = "";
         try {
             Context context = ApplicationLoader.applicationContext;
@@ -1416,6 +1413,10 @@ public class ConnectionsManager extends BaseController {
         }
 
         boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address);
+        if (hasSelectedProxy && SharedConfig.wssTransportEnabled) {
+            SharedConfig.setWssTransportEnabled(false);
+            setWssTransportEnabled();
+        }
         ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.SETTINGS_CHANGE : origin;
         int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
         MtProxyOptions enabledOptions = hasSelectedProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
@@ -1432,58 +1433,9 @@ public class ConnectionsManager extends BaseController {
         }
     }
 
-    private static int resolveWssTransportMode() {
-        int mode = SharedConfig.normalizeWssTransportMode(SharedConfig.wssTransportMode);
-        if (mode == WSS_TRANSPORT_CUSTOM) {
-            if (TextUtils.isEmpty(SharedConfig.wssHost)) {
-                return WSS_TRANSPORT_OFF;
-            }
-        }
-        return mode;
-    }
-
-    private static class WssSocksProxy {
-        String host = "";
-        int port = 1080;
-        String username = "";
-        String password = "";
-        boolean enabled;
-    }
-
-    private static WssSocksProxy resolveWssSocksProxy(int mode) {
-        WssSocksProxy proxy = new WssSocksProxy();
-        SharedConfig.loadProxyList();
-        SharedConfig.ProxyInfo selectedProxy = SharedConfig.currentWssSocksProxy;
-        if (mode == WSS_TRANSPORT_OFF || selectedProxy == null) {
-            return proxy;
-        }
-        if (!TextUtils.isEmpty(selectedProxy.secret) || TextUtils.isEmpty(selectedProxy.address)) {
-            return proxy;
-        }
-        int port = selectedProxy.port;
-        if (port <= 0 || port > 65535) {
-            return proxy;
-        }
-        proxy.host = selectedProxy.address;
-        proxy.port = port;
-        proxy.username = selectedProxy.username != null ? selectedProxy.username : "";
-        proxy.password = selectedProxy.password != null ? selectedProxy.password : "";
-        proxy.enabled = true;
-        return proxy;
-    }
-
-    public static void setWssTransportSettings() {
-        int mode = resolveWssTransportMode();
-        String host = SharedConfig.wssHost != null ? SharedConfig.wssHost : "";
-        String path = SharedConfig.normalizeWssPath(SharedConfig.wssPath);
-        int port = SharedConfig.wssPort > 0 && SharedConfig.wssPort <= 65535 ? SharedConfig.wssPort : 443;
-        boolean enabled = mode != WSS_TRANSPORT_OFF;
-        WssSocksProxy wssSocksProxy = resolveWssSocksProxy(mode);
-        String wssSocksHost = wssSocksProxy.host;
-        String wssSocksUsername = wssSocksProxy.username;
-        String wssSocksPassword = wssSocksProxy.password;
+    public static void setWssTransportEnabled() {
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            native_setWssTransportSettings(a, mode, mode, host, port, path, SharedConfig.wssUseForMiniApps, wssSocksHost, wssSocksProxy.port, wssSocksUsername, wssSocksPassword, wssSocksProxy.enabled, enabled);
+            native_setWssTransportEnabled(a, SharedConfig.wssTransportEnabled);
         }
     }
 
@@ -1532,7 +1484,14 @@ public class ConnectionsManager extends BaseController {
         if (profile == MT_PROXY_TLS_PROFILE_AUTO_ROTATE) {
             return MT_PROXY_TLS_PROFILE_AUTO_ROTATE;
         }
-        if (profile >= MT_PROXY_TLS_PROFILE_FIREFOX && profile <= MT_PROXY_TLS_PROFILE_CHROME_MODERN) {
+        if (profile == MT_PROXY_TLS_PROFILE_CHROME_MODERN
+                || profile == MT_PROXY_TLS_PROFILE_ANDROID_CHROME) {
+            return MT_PROXY_TLS_PROFILE_AUTO;
+        }
+        if (profile == MT_PROXY_TLS_PROFILE_FIREFOX
+                || profile == MT_PROXY_TLS_PROFILE_YANDEX
+                || profile == MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID
+                || profile == MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP) {
             return profile;
         }
         return MT_PROXY_TLS_PROFILE_AUTO;
@@ -1550,56 +1509,14 @@ public class ConnectionsManager extends BaseController {
     }
 
     static int resolveMtProxyTlsProfile(String address, int port, String secret) {
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences(MT_PROXY_TLS_PROFILE_PREFS, Context.MODE_PRIVATE);
         int override = getMtProxyTlsProfileOverride();
         if (override != MT_PROXY_TLS_PROFILE_AUTO) {
             return override;
         }
-
-        long salt = preferences.getLong(MT_PROXY_TLS_PROFILE_SALT, 0);
-        if (salt == 0) {
-            salt = Utilities.random.nextLong();
-            if (salt == 0) {
-                salt = 1;
-            }
-            preferences.edit().putLong(MT_PROXY_TLS_PROFILE_SALT, salt).apply();
-        }
-
-        long hash = 0xcbf29ce484222325L ^ salt;
-        hash = stableMtProxyTlsHash(hash, address);
-        hash = stableMtProxyTlsHash(hash, port);
-        hash = stableMtProxyTlsHash(hash, secret);
-
-        int bucket = Math.floorMod(hash, MT_PROXY_TLS_PROFILE_RANDOM_COUNT);
-        if (bucket == 0) {
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
-        }
+        // Keep Android on the same measured-safe default as tdesktop. Exact
+        // Chromium-shaped profiles remain available as legacy IDs only and
+        // are withheld by the native wire policy as a second line of defence.
         return MT_PROXY_TLS_PROFILE_YANDEX;
-    }
-
-    private static long stableMtProxyTlsHash(long hash, int value) {
-        for (int i = 0; i < 4; i++) {
-            hash ^= (value >> (i * 8)) & 0xff;
-            hash *= 0x100000001b3L;
-        }
-        return hash;
-    }
-
-    private static long stableMtProxyTlsHash(long hash, String value) {
-        if (value == null) {
-            return stableMtProxyTlsHash(hash, 0);
-        }
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c >= 'A' && c <= 'Z') {
-                c = (char) (c + 32);
-            }
-            hash ^= c & 0xff;
-            hash *= 0x100000001b3L;
-            hash ^= (c >> 8) & 0xff;
-            hash *= 0x100000001b3L;
-        }
-        return hash;
     }
 
     public static native void native_switchBackend(int currentAccount, boolean restart);
@@ -1627,7 +1544,7 @@ public class ConnectionsManager extends BaseController {
     public static native void native_setUserId(int currentAccount, long id);
     public static native void native_init(int currentAccount, int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, String installer, String packageId, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection, boolean hasNetwork, int networkType, int performanceClass);
     public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, MtProxyOptions options, int activationGeneration, String activationOrigin);
-    public static native void native_setWssTransportSettings(int currentAccount, int mode, int gatewayMode, String host, int port, String path, boolean miniApps, String socksHost, int socksPort, String socksUsername, String socksPassword, boolean socksEnabled, boolean enabled);
+    public static native void native_setWssTransportEnabled(int currentAccount, boolean enabled);
     public static native void native_setLangCode(int currentAccount, String langCode);
     public static native void native_setRegId(int currentAccount, String regId);
     public static native void native_setSystemLangCode(int currentAccount, String langCode);

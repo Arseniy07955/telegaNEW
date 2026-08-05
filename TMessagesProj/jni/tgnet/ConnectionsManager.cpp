@@ -35,7 +35,6 @@
 #include "Config.h"
 #include "ProxyCheckInfo.h"
 #include "Handshake.h"
-#include "WssTransport.h"
 #include "mtproxy/MtProxyProbeCoordinator.h"
 
 #ifdef ANDROID
@@ -4174,56 +4173,11 @@ std::string ConnectionsManager::getProxyActivationOrigin() {
     return proxyActivationOrigin;
 }
 
-static int32_t normalizeWssTransportMode(int32_t mode) {
-    if (mode == WssTransport::WSS_TRANSPORT_SOCKS5) {
-        return WssTransport::WSS_TRANSPORT_CUSTOM;
-    }
-    if (mode >= WssTransport::WSS_TRANSPORT_OFF && mode <= WssTransport::WSS_TRANSPORT_SOCKS5) {
-        return mode;
-    }
-    return WssTransport::WSS_TRANSPORT_OFF;
-}
-
-void ConnectionsManager::setWssTransportSettings(int32_t mode, int32_t gatewayMode, std::string host, uint16_t port, std::string path, bool miniApps, std::string socksHost, uint16_t socksPort, std::string socksUsername, std::string socksPassword, bool socksEnabled, bool enabled) {
-    scheduleTask([&, mode, gatewayMode, host, port, path, miniApps, socksHost, socksPort, socksUsername, socksPassword, socksEnabled, enabled] {
-        int32_t normalizedMode = normalizeWssTransportMode(mode);
-        int32_t normalizedGatewayMode = normalizeWssTransportMode(gatewayMode);
-        if (!enabled) {
-            normalizedMode = WssTransport::WSS_TRANSPORT_OFF;
-        }
-        std::string normalizedPath = path;
-        if (normalizedPath.empty()) {
-            normalizedPath = "/apiws";
-        } else if (normalizedPath[0] != '/') {
-            normalizedPath = "/" + normalizedPath;
-        }
-        bool effectiveSocksEnabled = socksEnabled && normalizedMode != WssTransport::WSS_TRANSPORT_OFF && !socksHost.empty();
-        bool wssTransportChanged = wssTransportMode != normalizedMode
-                || wssGatewayMode != normalizedGatewayMode
-                || wssHost != host
-                || wssPort != (port == 0 ? 443 : port)
-                || wssPath != normalizedPath
-                || wssSocksHost != socksHost
-                || wssSocksPort != (socksPort == 0 ? 1080 : socksPort)
-                || wssSocksUsername != socksUsername
-                || wssSocksPassword != socksPassword
-                || wssSocksEnabled != effectiveSocksEnabled
-                || wssUseForMiniApps != miniApps
-                || wssEnabled != enabled;
-        wssTransportMode = normalizedMode;
-        wssGatewayMode = normalizedGatewayMode;
-        wssHost = host;
-        wssPort = port == 0 ? 443 : port;
-        wssPath = normalizedPath;
-        wssSocksHost = socksHost;
-        wssSocksPort = socksPort == 0 ? 1080 : socksPort;
-        wssSocksUsername = socksUsername;
-        wssSocksPassword = socksPassword;
-        wssSocksEnabled = effectiveSocksEnabled;
-        wssUseForMiniApps = miniApps;
-        wssEnabled = enabled;
-        if (wssTransportChanged) {
-            if (LOGS_ENABLED) DEBUG_D("wss_startup settings_changed mode=%d gateway=%d host=%s port=%u path=%s socks_host=%s socks_port=%u socks_enabled=%d miniapps=%d enabled=%d", wssTransportMode, wssGatewayMode, wssHost.c_str(), (uint32_t) wssPort, wssPath.c_str(), wssSocksHost.c_str(), (uint32_t) wssSocksPort, wssSocksEnabled ? 1 : 0, wssUseForMiniApps ? 1 : 0, wssEnabled ? 1 : 0);
+void ConnectionsManager::setWssTransportEnabled(bool enabled) {
+    scheduleTask([&, enabled] {
+        if (wssEnabled != enabled) {
+            wssEnabled = enabled;
+            if (LOGS_ENABLED) DEBUG_D("wss_startup enabled=%d", wssEnabled ? 1 : 0);
             requestTransportSettingsReconnect("wss_settings_changed");
         }
     });

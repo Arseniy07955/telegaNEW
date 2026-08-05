@@ -364,8 +364,7 @@ public final class ProxyWarmupGate {
         return SharedConfig.isProxyEnabled()
                 && currentProxy != null
                 && currentProxy.secret != null
-                && currentProxy.secret.length() > 0
-                && !currentProxy.isWssTransport();
+                && currentProxy.secret.length() > 0;
     }
 
     private static String delayedBucketKeyLocked(int account, NetworkRequestClass requestClass) {

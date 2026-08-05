@@ -10,6 +10,7 @@ post-handshake data shaping layers.
 
 from pathlib import Path
 import codecs
+import hashlib
 import re
 import sys
 
@@ -21,6 +22,8 @@ MACHINE_HDR = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 PROXY_CHECK_HDR = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 MTPROXY_OPTIONS = ROOT / "TMessagesProj/jni/mtproxy/MtProxyOptions.h"
+MTPROXY_CLIENT_HELLO_POLICY_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyClientHelloPolicy.h"
+MTPROXY_CLIENT_HELLO_POLICY_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyClientHelloPolicy.cpp"
 MTPROXY_PHASE_CONTRACT_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
 MTPROXY_SECRET_DOMAIN_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxySecretDomain.h"
 MTPROXY_SECRET_DOMAIN_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxySecretDomain.cpp"
@@ -63,6 +66,8 @@ def main() -> int:
     connection_cpp = CONNECTION_CPP.read_text(encoding="utf-8")
     proxy_check_header = PROXY_CHECK_HDR.read_text(encoding="utf-8")
     mtproxy_options = MTPROXY_OPTIONS.read_text(encoding="utf-8")
+    client_hello_policy_h = MTPROXY_CLIENT_HELLO_POLICY_H.read_text(encoding="utf-8")
+    client_hello_policy_cpp = MTPROXY_CLIENT_HELLO_POLICY_CPP.read_text(encoding="utf-8")
     phase_contract = MTPROXY_PHASE_CONTRACT_H.read_text(encoding="utf-8")
     secret_domain_h = MTPROXY_SECRET_DOMAIN_H.read_text(encoding="utf-8")
     secret_domain_cpp = MTPROXY_SECRET_DOMAIN_CPP.read_text(encoding="utf-8")
@@ -141,11 +146,11 @@ def main() -> int:
                 data.extend(b"\x33" * ech_length)
             elif bare_op == "P":
                 length = len(data)
-                if length <= padding_target:
+                if length < 517:
                     data.extend(b"\x00\x15")
                     scopes.append(len(data))
                     data.extend(b"\x00\x00")
-                    data.extend(b"\x00" * (padding_target - length))
+                    data.extend(b"\x00" * max(0, 517 - 4 - length))
                     error = append_scope_end(data, scopes, name)
                     if error:
                         return bytes(data), error
@@ -167,9 +172,12 @@ def main() -> int:
         low = value & 0xff
         return high == low and (low & 0x0f) == 0x0a
 
+    def is_relay_grease_cipher(value: int) -> bool:
+        return (value & 0x0f0f) == 0x0a0a
+
     def validate_rendered_hello(name: str, data: bytes, domain: str) -> str | None:
         size = len(data)
-        if size < 100 or size > 4096:
+        if size < 517 or size > 4096:
             return f"{name}: invalid hello size={size}"
         if data[0:3] != b"\x16\x03\x01" or data[5] != 0x01 or data[9:11] != b"\x03\x03":
             return f"{name}: invalid hello prefix"
@@ -180,6 +188,8 @@ def main() -> int:
 
         pos = 11 + 32
         session_len = data[pos]
+        if session_len != 32:
+            return f"{name}: session id must be 32 bytes, got {session_len}"
         pos += 1 + session_len
         if pos + 2 > size:
             return f"{name}: missing cipher suites length"
@@ -193,7 +203,7 @@ def main() -> int:
         first_cipher = 0
         for cipher_pos in range(pos, cipher_end, 2):
             cipher = int.from_bytes(data[cipher_pos:cipher_pos + 2], "big")
-            if not is_grease_value(cipher):
+            if not is_relay_grease_cipher(cipher):
                 first_cipher = cipher
                 break
         if first_cipher not in (0x1301, 0x1302, 0x1303):
@@ -212,10 +222,8 @@ def main() -> int:
         if extensions_end != size:
             return f"{name}: invalid extensions length={extensions_len} parsed_end={extensions_end} size={size}"
 
-        domain_bytes = domain.encode("ascii")[:253]
-        if not domain_bytes or domain_bytes not in data:
-            return f"{name}: missing SNI domain"
-
+        expected_domain = domain.encode("ascii")
+        saw_exact_sni = False
         while pos < extensions_end:
             if pos + 4 > extensions_end:
                 return f"{name}: truncated extension header at offset={pos}"
@@ -224,8 +232,93 @@ def main() -> int:
             pos += 4
             if pos + extension_len > extensions_end:
                 return f"{name}: extension 0x{extension_type:04x} overruns extensions block"
+            if extension_type == 0x0000:
+                value = data[pos:pos + extension_len]
+                if len(value) < 5 or int.from_bytes(value[0:2], "big") + 2 != len(value):
+                    return f"{name}: malformed SNI extension"
+                name_length = int.from_bytes(value[3:5], "big")
+                if value[2] != 0 or 5 + name_length != len(value):
+                    return f"{name}: malformed SNI host_name"
+                if value[5:] != expected_domain:
+                    return f"{name}: SNI does not exactly match secret domain"
+                saw_exact_sni = True
             pos += extension_len
+        if not saw_exact_sni:
+            return f"{name}: missing exact SNI domain"
         return None
+
+    def sha12(value: str) -> str:
+        return hashlib.sha256(value.encode()).hexdigest()[:12] if value else "000000000000"
+
+    def ja4_for_client_hello(data: bytes) -> str:
+        position = 9
+        legacy_version = int.from_bytes(data[position:position + 2], "big")
+        position += 34
+        position += 1 + data[position]
+        cipher_length = int.from_bytes(data[position:position + 2], "big")
+        position += 2
+        ciphers = [
+            int.from_bytes(data[offset:offset + 2], "big")
+            for offset in range(position, position + cipher_length, 2)
+        ]
+        position += cipher_length
+        position += 1 + data[position]
+        extensions_length = int.from_bytes(data[position:position + 2], "big")
+        position += 2
+        extensions_end = position + extensions_length
+        extensions: list[int] = []
+        signatures: list[int] = []
+        versions: list[int] = []
+        first_alpn = b""
+        while position + 4 <= extensions_end:
+            extension = int.from_bytes(data[position:position + 2], "big")
+            length = int.from_bytes(data[position + 2:position + 4], "big")
+            value = data[position + 4:position + 4 + length]
+            position += 4 + length
+            extensions.append(extension)
+            if extension == 0x002b and value:
+                versions = [
+                    int.from_bytes(value[offset:offset + 2], "big")
+                    for offset in range(1, min(1 + value[0], len(value)), 2)
+                    if offset + 2 <= len(value)
+                ]
+            elif extension == 0x000d and len(value) >= 2:
+                signatures_length = int.from_bytes(value[0:2], "big")
+                signatures = [
+                    int.from_bytes(value[offset:offset + 2], "big")
+                    for offset in range(2, min(2 + signatures_length, len(value)), 2)
+                    if offset + 2 <= len(value)
+                ]
+            elif extension == 0x0010 and len(value) >= 3:
+                first_alpn = value[3:3 + value[2]]
+
+        clean_ciphers = [value for value in ciphers if not is_grease_value(value)]
+        clean_extensions = [value for value in extensions if not is_grease_value(value)]
+        clean_versions = [value for value in versions if not is_grease_value(value)]
+        version = max(clean_versions) if clean_versions else legacy_version
+        version_code = {0x0304: "13", 0x0303: "12", 0x0302: "11", 0x0301: "10"}.get(version, "00")
+        if not first_alpn:
+            alpn_code = "00"
+        elif chr(first_alpn[0]).isalnum() and chr(first_alpn[-1]).isalnum():
+            alpn_code = chr(first_alpn[0]) + chr(first_alpn[-1])
+        else:
+            alpn_hex = first_alpn.hex()
+            alpn_code = alpn_hex[0] + alpn_hex[-1]
+        prefix = (
+            "t" + version_code
+            + ("d" if 0x0000 in clean_extensions else "i")
+            + f"{min(len(clean_ciphers), 99):02d}"
+            + f"{min(len(clean_extensions), 99):02d}"
+            + alpn_code
+        )
+        cipher_input = ",".join(sorted(f"{value:04x}" for value in clean_ciphers))
+        extension_input = ",".join(sorted(
+            f"{value:04x}" for value in clean_extensions if value not in (0x0000, 0x0010)
+        ))
+        signature_input = ",".join(f"{value:04x}" for value in signatures if not is_grease_value(value))
+        if signature_input:
+            extension_input += "_" + signature_input
+        return "_".join((prefix, sha12(cipher_input), sha12(extension_input)))
 
     def validate_profile_rendering() -> list[str]:
         profile_errors: list[str] = []
@@ -256,18 +349,19 @@ def main() -> int:
     require("MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in java, "Java must define the Android OkHttp MTProxy TLS profile")
     require("MT_PROXY_TLS_PROFILE_AUTO_ROTATE" in java, "Java must define the auto-rotate MTProxy TLS profile")
     require("MT_PROXY_TLS_PROFILE_CHROME_MODERN" in java, "Java must define the Chrome Modern MTProxy TLS profile")
-    require("MT_PROXY_TLS_PROFILE_RANDOM_COUNT = 2" in java, "sticky MTProxy auto pool must use the stable two-profile pool")
-    require(
-        re.search(r"if \(bucket == 0\) \{\s*return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;", java)
-        and "return MT_PROXY_TLS_PROFILE_YANDEX;" in java
-        and "return MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP;" not in java,
-        "sticky MTProxy auto pool must avoid Android OkHttp until it is proven stable",
-    )
     require(
         "resolveMtProxyTlsProfile" in java
-        and "MT_PROXY_TLS_PROFILE_SALT" in java
-        and "stableMtProxyTlsHash" in java,
-        "Java must choose a sticky profile from endpoint, secret, and local salt",
+        and "return MT_PROXY_TLS_PROFILE_YANDEX;" in java
+        and "stableMtProxyTlsHash" not in java
+        and "MT_PROXY_TLS_PROFILE_SALT" not in java,
+        "Java Auto mode must use the same measured-safe Yandex default as tdesktop",
+    )
+    require(
+        "mtProxyDefaultTlsProfile" in client_hello_policy_cpp
+        and "return MT_PROXY_TLS_PROFILE_YANDEX;" in client_hello_policy_cpp
+        and "MT_PROXY_TLS_PROFILE_CHROME_MODERN" in client_hello_policy_cpp
+        and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in client_hello_policy_cpp,
+        "native wire policy must default to Yandex and withhold measured-bad Chromium profiles",
     )
     require(
         "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName)" in java
@@ -336,6 +430,22 @@ def main() -> int:
     require(balanced_scopes("getYandexDefault"), "Yandex ClientHello scopes must be balanced")
     for profile_error in validate_profile_rendering():
         require(False, profile_error)
+    yandex_body = function_body("getYandexDefault")
+    yandex_hello, yandex_error = render_profile(
+        "yandex", yandex_body, "example.com", ECH_TEST_LENGTHS[0], PADDING_TEST_TARGETS[0]
+    )
+    require(yandex_error is None, yandex_error or "Yandex ClientHello rendering failed")
+    if yandex_error is None:
+        require(
+            ja4_for_client_hello(yandex_hello) == "t13d1516h2_8daaf6152771_d8a2da3f94cd",
+            "Yandex wire template must keep the working tdesktop JA4",
+        )
+    require(
+        'Op::grease(3)' in yandex_body
+        and 'Op::string("\\x00\\x00", 2)' in yandex_body
+        and 'Op::string("\\x00\\x01\\x00", 3)' not in yandex_body,
+        "Yandex final GREASE extension must stay deliberately empty",
+    )
     require(
         not re.search(r"\bTlsHello\s+TlsHello::pickProfile\s*\(", cpp),
         "FakeTLS profile wrapper must stay out of the active transport path",
@@ -347,9 +457,14 @@ def main() -> int:
     )
     require(
         "validateServerCompatibleHello" in cpp
-        and "cipherSuitesOffset = 76" in cpp
-        and "first non-GREASE cipher" in cpp,
-        "Each selected ClientHello must pass server-compatible guard checks",
+        and "mtProxyCheckClientHelloContract" in cpp
+        and "MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES = 517" in client_hello_policy_h
+        and "MT_PROXY_MAX_RELAY_CLIENT_HELLO_BYTES = 4096" in client_hello_policy_h
+        and "mtProxyRelayGreaseCipher" in client_hello_policy_cpp
+        and "SessionIdNot32Bytes" in client_hello_policy_cpp
+        and "SniMismatch" in client_hello_policy_cpp
+        and "mtproxy/MtProxyClientHelloPolicy.cpp" in cmake,
+        "Each selected ClientHello must pass the extracted relay-contract guard",
     )
     require(
         "mtproxy_startup profile" in cpp,
@@ -538,14 +653,15 @@ def main() -> int:
         and "struct MtProxySecretDomainPlan" not in cpp
         and "struct MtProxySecretDomainPlan" in secret_domain_h
         and "buildMtProxySecretDomainPlan" in secret_domain_cpp
-        and "sanitizeMtProxySecretDomain" in secret_domain_cpp
+        and "plan.originalDomain = rawDomain" in secret_domain_cpp
+        and "SNI_OPTIONAL_NO_SNI may" in secret_domain_cpp
         and "validateMtProxySecretDomain" in secret_domain_cpp
         and "MtProxyPhase::SecretParseInvalidDomainControlChar" in secret_domain_cpp
         and "MtProxyPhase::SecretParseInvalidDomain" in secret_domain_cpp
         and 'SecretParseInvalidDomainControlChar = "secret_parse_invalid_domain_control_char"' in phase_contract
         and 'SecretParseInvalidDomain = "secret_parse_invalid_domain"' in phase_contract
         and "mtproxy/MtProxySecretDomain.cpp" in cmake,
-        "secret-domain planning helpers must live in MtProxySecretDomain and stay out of ConnectionSocket.cpp",
+        "exact secret-domain planning must live in MtProxySecretDomain and stay out of ConnectionSocket.cpp",
     )
     require(
         "mtProxyDisconnectReasonName" in cpp

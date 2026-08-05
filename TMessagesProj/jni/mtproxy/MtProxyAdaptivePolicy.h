@@ -53,7 +53,7 @@ public:
     };
 
     struct RecipeCursor {
-        int32_t family = CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT;
+        int32_t family = CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT;
         int32_t sniVariant = SNI_ORIGINAL;
         int32_t parserVariant = PARSER_STANDARD_HMAC;
         int32_t classicVariant = CLASSIC_NONE;

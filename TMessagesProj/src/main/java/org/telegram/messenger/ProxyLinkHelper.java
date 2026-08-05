@@ -20,7 +20,6 @@ public final class ProxyLinkHelper {
 
     public static final int TYPE_SOCKS5 = 0;
     public static final int TYPE_MTPROTO = 1;
-    public static final int TYPE_WSS = 2;
 
     private static final LinkPrefix[] LINK_PREFIXES = new LinkPrefix[] {
             new LinkPrefix(TYPE_SOCKS5, "t.me/socks?"),
@@ -37,10 +36,6 @@ public final class ProxyLinkHelper {
             new LinkPrefix(TYPE_MTPROTO, "tg://proxy/?"),
             new LinkPrefix(TYPE_MTPROTO, "tg:proxy?"),
             new LinkPrefix(TYPE_MTPROTO, "tg:proxy/?"),
-            new LinkPrefix(TYPE_WSS, "zastogram://wss?"),
-            new LinkPrefix(TYPE_WSS, "zastogram://wss/?"),
-            new LinkPrefix(TYPE_WSS, "tg://wss?"),
-            new LinkPrefix(TYPE_WSS, "tg://wss/?"),
     };
 
     private ProxyLinkHelper() {
@@ -106,8 +101,7 @@ public final class ProxyLinkHelper {
                 + "|" + link.port
                 + "|" + normalizeKeyPart(link.username)
                 + "|" + normalizeKeyPart(link.password)
-                + "|" + normalizeKeyPart(link.secret)
-                + "|" + normalizeKeyPart(link.wssPath);
+                + "|" + normalizeKeyPart(link.secret);
     }
 
     private static ProxyLink parseQuery(int type, String query) {
@@ -119,7 +113,6 @@ public final class ProxyLinkHelper {
         String username = "";
         String password = "";
         String secret = "";
-        String wssPath = "";
         String[] params = query.split("&");
         for (String param : params) {
             String[] pair = param.split("=", 2);
@@ -150,18 +143,13 @@ public final class ProxyLinkHelper {
                         secret = value;
                     }
                     break;
-                case "path":
-                    if (type == TYPE_WSS) {
-                        wssPath = value;
-                    }
-                    break;
             }
         }
         int port = Utilities.parseInt(portString);
         if (TextUtils.isEmpty(address) || port <= 0 || port > 65535) {
             return null;
         }
-        return new ProxyLink(type, address, port, username, password, secret, wssPath);
+        return new ProxyLink(type, address, port, username, password, secret);
     }
 
     private static String trimQuery(String query) {
@@ -215,16 +203,14 @@ public final class ProxyLinkHelper {
         public final String username;
         public final String password;
         public final String secret;
-        public final String wssPath;
 
-        ProxyLink(int type, String address, int port, String username, String password, String secret, String wssPath) {
+        ProxyLink(int type, String address, int port, String username, String password, String secret) {
             this.type = type;
             this.address = address != null ? address : "";
             this.port = port;
             this.username = username != null ? username : "";
             this.password = password != null ? password : "";
             this.secret = secret != null ? secret : "";
-            this.wssPath = wssPath != null ? wssPath : "";
         }
     }
 }

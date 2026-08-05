@@ -57,7 +57,9 @@ const ConnectionSocketStateMachine::ActionRule *ConnectionSocketStateMachine::fi
     }
     static const ActionRule rules[] = {
             {"create_wss_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"create_wss_socket", LifecycleState::WaitingGate, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"create_wss_ipv6_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"create_wss_ipv6_socket", LifecycleState::WaitingGate, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"create_proxy_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"create_direct_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"configure_socket", LifecycleState::Prepared, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
@@ -160,12 +162,6 @@ bool ConnectionSocketStateMachine::can(const char *action) const {
         return false;
     }
     if (rule->expectedTlsState >= 0 && fakeTls.tlsState != rule->expectedTlsState) {
-        return false;
-    }
-    if (rule->requireWssTransport && !wss.active) {
-        return false;
-    }
-    if (rule->requireWssReady && (wss.transport == nullptr || !wss.transport->isReady())) {
         return false;
     }
     return true;

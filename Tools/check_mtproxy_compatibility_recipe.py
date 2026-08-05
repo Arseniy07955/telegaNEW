@@ -512,19 +512,19 @@ def main() -> int:
 
     require(
         "buildMtProxySecretDomainPlan" in socket
-        and "sanitizeMtProxySecretDomain" in secret_domain
+        and "plan.originalDomain = rawDomain" in secret_domain
+        and "plan.canonicalDomain = plan.originalDomain" in secret_domain
+        and "SNI_ORIGINAL" in secret_domain
         and has_phase(secret_domain, "secret_parse_invalid_domain_control_char", native_constants)
         and "validateMtProxySecretDomain" in secret_domain,
-        "native FakeTLS setup must sanitize and validate SNI before ClientHello construction",
+        "native FakeTLS setup must preserve and validate the exact secret SNI before ClientHello construction",
         failures,
     )
     require(
-        "secretDomainSanitized" in secret_domain
-        and "domainPlan.sanitized" in socket
-        and 'publishProxyConnectionStage("secret_domain_sanitized")' in socket
-        and "recordSecretDomainSanitized" in socket
-        and "mtproxy_startup secret_domain_sanitized" in socket,
-        "native FakeTLS setup must continue with a valid sanitized control-char SNI and publish it once per endpoint",
+        "domainPlan.terminalDiagnostic != nullptr" in socket
+        and "MtProxyPhase::SecretParseInvalidDomainControlChar" in socket
+        and "closeSocket(1, -1)" in socket,
+        "native FakeTLS setup must reject an invalid/control-char secret instead of changing its wire SNI",
         failures,
     )
     require(

@@ -283,30 +283,8 @@ void setProxyActivationContext(JNIEnv *env, jclass c, jint instanceNum, jint act
     }
 }
 
-void setWssTransportSettings(JNIEnv *env, jclass c, jint instanceNum, jint mode, jint gatewayMode, jstring host, jint port, jstring path, jboolean miniApps, jstring socksHost, jint socksPort, jstring socksUsername, jstring socksPassword, jboolean socksEnabled, jboolean enabled) {
-    const char *hostStr = env->GetStringUTFChars(host, 0);
-    const char *pathStr = env->GetStringUTFChars(path, 0);
-    const char *socksHostStr = env->GetStringUTFChars(socksHost, 0);
-    const char *socksUsernameStr = env->GetStringUTFChars(socksUsername, 0);
-    const char *socksPasswordStr = env->GetStringUTFChars(socksPassword, 0);
-
-    ConnectionsManager::getInstance(instanceNum).setWssTransportSettings((int32_t) mode, (int32_t) gatewayMode, hostStr, (uint16_t) port, pathStr, miniApps != 0, socksHostStr, (uint16_t) socksPort, socksUsernameStr, socksPasswordStr, socksEnabled != 0, enabled != 0);
-
-    if (hostStr != 0) {
-        env->ReleaseStringUTFChars(host, hostStr);
-    }
-    if (pathStr != 0) {
-        env->ReleaseStringUTFChars(path, pathStr);
-    }
-    if (socksHostStr != 0) {
-        env->ReleaseStringUTFChars(socksHost, socksHostStr);
-    }
-    if (socksUsernameStr != 0) {
-        env->ReleaseStringUTFChars(socksUsername, socksUsernameStr);
-    }
-    if (socksPasswordStr != 0) {
-        env->ReleaseStringUTFChars(socksPassword, socksPasswordStr);
-    }
+void setWssTransportEnabled(JNIEnv *env, jclass c, jint instanceNum, jboolean enabled) {
+    ConnectionsManager::getInstance(instanceNum).setWssTransportEnabled(enabled != 0);
 }
 
 jint getConnectionState(JNIEnv *env, jclass c, jint instanceNum) {
@@ -659,7 +637,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_bindRequestToGuid", "(III)V", (void *) bindRequestToGuid},
         {"native_applyDatacenterAddress", "(IILjava/lang/String;I)V", (void *) applyDatacenterAddress},
         {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;ILjava/lang/String;)V", (void *) setProxySettings},
-        {"native_setWssTransportSettings", "(IIILjava/lang/String;ILjava/lang/String;ZLjava/lang/String;ILjava/lang/String;Ljava/lang/String;ZZ)V", (void *) setWssTransportSettings},
+        {"native_setWssTransportEnabled", "(IZ)V", (void *) setWssTransportEnabled},
         {"native_getConnectionState", "(I)I", (void *) getConnectionState},
         {"native_setUserId", "(IJ)V", (void *) setUserId},
         {"native_init", "(IIIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJZZZII)V", (void *) init},

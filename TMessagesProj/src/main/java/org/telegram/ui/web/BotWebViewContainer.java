@@ -76,9 +76,6 @@ import androidx.annotation.RequiresApi;
 import androidx.core.content.FileProvider;
 import androidx.core.graphics.ColorUtils;
 import androidx.core.util.Consumer;
-import androidx.webkit.ProxyConfig;
-import androidx.webkit.ProxyController;
-import androidx.webkit.WebViewFeature;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -107,7 +104,6 @@ import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
 import org.telegram.messenger.VideoEditedInfo;
-import org.telegram.messenger.WssMiniAppProxyBridge;
 import org.telegram.messenger.browser.Browser;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.SerializedData;
@@ -482,7 +478,6 @@ public abstract class BotWebViewContainer extends FrameLayout implements Notific
             settings.setDatabasePath(databaseStorage.getAbsolutePath());
         }
         GeolocationPermissions.getInstance().clearAll();
-        applyMiniAppWssProxyIfNeeded();
 
         webView.setVerticalScrollBarEnabled(false);
         if (replaceWith == null && bot) {
@@ -519,57 +514,6 @@ public abstract class BotWebViewContainer extends FrameLayout implements Notific
 
         onWebViewCreated(webView);
         firstWebView = false;
-    }
-
-    private void applyMiniAppWssProxyIfNeeded() {
-        if (!bot) {
-            return;
-        }
-        if (!SharedConfig.wssUseForMiniApps || !WssMiniAppProxyBridge.shouldUseFromSettings()) {
-            if (WssMiniAppProxyBridge.isRunning()) {
-                WssMiniAppProxyBridge.stop();
-                clearMiniAppWssProxyOverride();
-            }
-            return;
-        }
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            WssMiniAppProxyBridge.stop();
-            if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("wss_miniapp proxy_override_not_supported");
-            }
-            return;
-        }
-        int port = WssMiniAppProxyBridge.ensureStarted();
-        if (port <= 0) {
-            clearMiniAppWssProxyOverride();
-            return;
-        }
-        ProxyConfig proxyConfig = new ProxyConfig.Builder()
-                .addProxyRule("socks://127.0.0.1:" + port)
-                .addBypassRule("localhost")
-                .addBypassRule("127.0.0.1")
-                .build();
-        ProxyController.getInstance().setProxyOverride(
-                proxyConfig,
-                command -> AndroidUtilities.runOnUIThread(command),
-                () -> {
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("wss_miniapp proxy_override_applied local_port=" + port);
-                    }
-                });
-    }
-
-    private void clearMiniAppWssProxyOverride() {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            return;
-        }
-        ProxyController.getInstance().clearProxyOverride(
-                command -> AndroidUtilities.runOnUIThread(command),
-                () -> {
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("wss_miniapp proxy_override_cleared");
-                    }
-                });
     }
 
     private void onOpenUri(Uri uri) {

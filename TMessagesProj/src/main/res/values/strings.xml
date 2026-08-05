@@ -11100,7 +11100,7 @@
     <string name="MtProxyStartupCoverSoft">Soft</string>
     <string name="MtProxyStartupCoverStrict">Strict</string>
     <string name="MtProxyTlsProfile">JA4 / TLS profile</string>
-    <string name="MtProxyTlsProfileInfo">Auto keeps one stable profile per proxy and secret. Auto rotate changes the profile only after suspicious FakeTLS failures. Manual mode forces one profile for all FakeTLS proxies.</string>
+    <string name="MtProxyTlsProfileInfo">Auto uses the measured-safe tdesktop Yandex profile. Auto rotate uses only measured-safe profiles after suspicious FakeTLS failures. Legacy Chromium selections automatically fall back to Auto.</string>
     <string name="MtProxyTlsProfileAuto">Auto</string>
     <string name="MtProxyTlsProfileAutoRotate">Auto rotate</string>
     <string name="MtProxyTlsProfileChromeModern">Chrome+</string>
@@ -11110,18 +11110,9 @@
     <string name="MtProxyTlsProfileFirefox">Firefox</string>
     <string name="MtProxyTlsProfileYandex">Yandex</string>
     <string name="WssTransportHeader">Telegram WSS transport</string>
-    <string name="WssTransportMode">WSS mode</string>
-    <string name="WssTransportOff">Off</string>
+    <string name="UseWssTransport">Use WSS transport</string>
     <string name="WssTransportOfficial">Official</string>
-    <string name="WssTransportCustom">Custom</string>
-    <string name="WssTransportInfo">WSS is a separate Telegram transport. Official mode uses Telegram WebSocket relays for DC2/DC4 and does not require a VPS. Custom mode requires your own WebSocket gateway.</string>
-    <string name="UseProxyWss">WSS gateway</string>
-    <string name="UseProxyWssHost">WSS host</string>
-    <string name="UseProxyWssPath">WSS path</string>
-    <string name="UseProxyWssMiniApps">Mini Apps through selected SOCKS</string>
-    <string name="UseProxyWssInfo">Custom WSS is not MTProxy or a SOCKS proxy. When WSS is enabled, the selected SOCKS5 proxy can be used as the WSS upstream.</string>
-    <string name="WssSocksUpstreamHeader">SOCKS5 upstream for WSS</string>
-    <string name="WssSocksUpstreamInfo">Only SOCKS5 proxies are shown here. The selected SOCKS5 is used as the WSS upstream; MTProxy entries stay hidden.</string>
+    <string name="WssTransportInfo">Uses Telegram WebSocket relays for supported data centers. This is a client transport, not a proxy, and does not require a local port or custom gateway.</string>
 
     <string name="Community">Community</string>
     <string name="CommunityAddGroupToCommunity">Add Group to a Community</string>

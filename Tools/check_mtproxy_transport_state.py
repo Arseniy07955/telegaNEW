@@ -415,10 +415,8 @@ def main() -> int:
         failures,
     )
 
-    open_connection_body = method_body(socket, "void ConnectionSocket::openConnection(std::string address", "void ConnectionSocket::openConnectionInternal")
+    open_connection_body = method_body(socket, "void ConnectionSocket::openConnection(std::string address", "int32_t ConnectionSocket::checkSocketError")
     for action in (
-        "create_wss_socket",
-        "create_wss_ipv6_socket",
         "create_proxy_socket",
         "create_direct_socket",
     ):
@@ -427,6 +425,12 @@ def main() -> int:
             f"{action} must use the socket-creation transport action policy",
             failures,
         )
+    require(
+        'const char *createAction = ipv6 ? "create_wss_ipv6_socket" : "create_wss_socket"' in open_connection_body
+        and "canCreateSocket(createAction)" in open_connection_body,
+        "WSS IPv4/IPv6 socket creation must use the selected transport action policy",
+        failures,
+    )
     require(
         "NoSocket" in header_source
         and "TransportSocketPolicy::NoSocket" in state_source
@@ -1031,8 +1035,8 @@ def main() -> int:
         failures,
     )
     require(
-        "if (!canSendWssFrame())" in on_event_body
-        and "currentWssTransport->sendFrame" in on_event_body,
+        "!canSendWssFrame()" in on_event_body
+        and "currentWssTransport->write" in on_event_body,
         "WSS outbound frame send must use the transport action policy",
         failures,
     )

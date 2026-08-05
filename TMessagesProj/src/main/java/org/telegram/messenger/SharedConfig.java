@@ -53,15 +53,14 @@ public class SharedConfig {
     /**
      * V2: Ping and check time serialized
      * V3: WSS transport metadata serialized separately from SOCKS5/MTProto fields
+     * V4: Proxy rows contain proxies only; WSS is a global transport toggle
      */
     private final static int PROXY_SCHEMA_V2 = 2;
     private final static int PROXY_SCHEMA_V3 = 3;
-    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V3;
+    private final static int PROXY_SCHEMA_V4 = 4;
+    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V4;
 
-    public static final int TRANSPORT_LEGACY_PROXY = 0;
-    public static final int TRANSPORT_WSS_OFFICIAL = 1;
-    public static final int TRANSPORT_WSS_CUSTOM = 2;
-    public static final int TRANSPORT_WSS_SOCKS5 = 3;
+    private static final int TRANSPORT_LEGACY_PROXY = 0;
 
     public final static int PASSCODE_TYPE_PIN = 0,
             PASSCODE_TYPE_PASSWORD = 1;
@@ -330,12 +329,7 @@ public class SharedConfig {
     public static int mtProxyRecordSizingMode;
     public static int mtProxyTimingMode;
     public static int mtProxyStartupCoverMode;
-    public static int wssTransportMode;
-    public static String wssHost = "";
-    public static int wssPort = 443;
-    public static String wssPath = "/apiws";
-    public static boolean wssUseForMiniApps;
-    public static ProxyInfo currentWssSocksProxy;
+    public static boolean wssTransportEnabled;
     public static int messageSeenHintCount;
     public static int emojiInteractionsHintCount;
     public static int dayNightThemeSwitchHintCount;
@@ -390,23 +384,6 @@ public class SharedConfig {
         loadConfig();
     }
 
-    public static int normalizeWssTransportMode(int mode) {
-        if (mode == TRANSPORT_WSS_SOCKS5) {
-            return TRANSPORT_WSS_CUSTOM;
-        }
-        if (mode >= TRANSPORT_LEGACY_PROXY && mode <= TRANSPORT_WSS_SOCKS5) {
-            return mode;
-        }
-        return TRANSPORT_LEGACY_PROXY;
-    }
-
-    public static String normalizeWssPath(String path) {
-        if (TextUtils.isEmpty(path)) {
-            return "/apiws";
-        }
-        return path.charAt(0) == '/' ? path : "/" + path;
-    }
-
     private static int clampProxyRotationTimeout(int timeoutIndex) {
         if (timeoutIndex < 0 || timeoutIndex >= ProxyRotationController.ROTATION_TIMEOUTS.size()) {
             return ProxyRotationController.DEFAULT_TIMEOUT_INDEX;
@@ -421,12 +398,8 @@ public class SharedConfig {
         return (value > max) ? max : value;
     }
 
-    public static void setWssTransport(int mode, String host, int port, String path, boolean miniApps) {
-        wssTransportMode = normalizeWssTransportMode(mode);
-        wssHost = host != null ? host : "";
-        wssPort = port > 0 && port <= 65535 ? port : 443;
-        wssPath = normalizeWssPath(path);
-        wssUseForMiniApps = miniApps;
+    public static void setWssTransportEnabled(boolean enabled) {
+        wssTransportEnabled = enabled;
         saveConfig();
     }
 
@@ -437,11 +410,6 @@ public class SharedConfig {
         public String username;
         public String password;
         public String secret;
-        public int transportMode = TRANSPORT_LEGACY_PROXY;
-        public String wssHost = "";
-        public int wssPort = 443;
-        public String wssPath = "/apiws";
-        public boolean wssUseForMiniApps;
 
         public long proxyCheckPingId;
         public long ping;
@@ -479,21 +447,9 @@ public class SharedConfig {
             if (this.secret == null) {
                 this.secret = "";
             }
-            this.wssHost = this.address;
-            this.wssPort = this.port > 0 ? this.port : 443;
         }
 
         public String getLink() {
-            if (isWssTransport()) {
-                int mode = normalizeWssTransportMode(transportMode);
-                StringBuilder url = new StringBuilder("zastogram://wss?");
-                try {
-                    url.append("server=").append(URLEncoder.encode(wssHost, "UTF-8")).append("&").append("port=").append(wssPort);
-                    url.append("&path=").append(URLEncoder.encode(wssPath, "UTF-8"));
-                    url.append("&mode=").append(mode);
-                } catch (UnsupportedEncodingException ignored) {}
-                return url.toString();
-            }
             StringBuilder url = new StringBuilder(!TextUtils.isEmpty(secret) ? "https://t.me/proxy?" : "https://t.me/socks?");
             try {
                 url.append("server=").append(URLEncoder.encode(address, "UTF-8")).append("&").append("port=").append(port);
@@ -510,14 +466,6 @@ public class SharedConfig {
             return url.toString();
         }
 
-        public boolean isWssTransport() {
-            int mode = normalizeWssTransportMode(transportMode);
-            return mode == TRANSPORT_WSS_OFFICIAL || mode == TRANSPORT_WSS_CUSTOM;
-        }
-
-        public boolean isSocks5OverWss() {
-            return false;
-        }
     }
 
     public static ArrayList<ProxyInfo> proxyList = new ArrayList<>();
@@ -569,11 +517,7 @@ public class SharedConfig {
                 editor.putInt("mtProxyRecordSizingMode", mtProxyRecordSizingMode);
                 editor.putInt("mtProxyTimingMode", mtProxyTimingMode);
                 editor.putInt("mtProxyStartupCoverMode", mtProxyStartupCoverMode);
-                editor.putInt("wssTransportMode", wssTransportMode);
-                editor.putString("wssHost", wssHost != null ? wssHost : "");
-                editor.putInt("wssPort", wssPort);
-                editor.putString("wssPath", wssPath != null ? wssPath : "/apiws");
-                editor.putBoolean("wssUseForMiniApps", wssUseForMiniApps);
+                editor.putBoolean("wssTransportEnabled", wssTransportEnabled);
 
                 if (pendingAppUpdate != null) {
                     try {
@@ -648,26 +592,27 @@ public class SharedConfig {
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
             mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 0), 0, 2);
-            wssTransportMode = normalizeWssTransportMode(preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY));
-            // Auto-enable official Telegram WSS once on first run. Official
-            // routes are native MTProto-over-WebSocket for DC2/DC4, not a
-            // local SOCKS bridge and not a custom gateway.
-            if (!preferences.getBoolean("wss_default_applied", false)) {
-                if (wssTransportMode == TRANSPORT_LEGACY_PROXY) {
-                    wssTransportMode = TRANSPORT_WSS_OFFICIAL;
-                }
+            final boolean hasWssToggle = preferences.contains("wssTransportEnabled");
+            wssTransportEnabled = hasWssToggle
+                    ? preferences.getBoolean("wssTransportEnabled", false)
+                    : preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY) != TRANSPORT_LEGACY_PROXY;
+            if (!hasWssToggle
+                    || preferences.contains("wssTransportMode")
+                    || preferences.contains("wssHost")
+                    || preferences.contains("wssPort")
+                    || preferences.contains("wssPath")
+                    || preferences.contains("wssUseForMiniApps")
+                    || preferences.contains("wss_default_applied")) {
                 preferences.edit()
-                        .putInt("wssTransportMode", wssTransportMode)
-                        .putBoolean("wss_default_applied", true)
+                        .putBoolean("wssTransportEnabled", wssTransportEnabled)
+                        .remove("wssTransportMode")
+                        .remove("wssHost")
+                        .remove("wssPort")
+                        .remove("wssPath")
+                        .remove("wssUseForMiniApps")
+                        .remove("wss_default_applied")
                         .apply();
             }
-            wssHost = preferences.getString("wssHost", "");
-            wssPort = preferences.getInt("wssPort", 443);
-            if (wssPort <= 0 || wssPort > 65535) {
-                wssPort = 443;
-            }
-            wssPath = normalizeWssPath(preferences.getString("wssPath", "/apiws"));
-            wssUseForMiniApps = preferences.getBoolean("wssUseForMiniApps", false);
             String authKeyString = preferences.getString("pushAuthKey", null);
             if (!TextUtils.isEmpty(authKeyString)) {
                 pushAuthKey = Base64.decode(authKeyString, Base64.DEFAULT);
@@ -1553,16 +1498,6 @@ public class SharedConfig {
         LocaleController.resetImperialSystemType();
     }
 
-    private static boolean samePlainSocksProxy(ProxyInfo info, String address, int port, String username, String password) {
-        return info != null
-                && TextUtils.isEmpty(info.secret)
-                && !TextUtils.isEmpty(address)
-                && address.equals(info.address)
-                && port == info.port
-                && username.equals(info.username)
-                && password.equals(info.password);
-    }
-
     private static boolean sameProxyIdentity(ProxyInfo info, String address, int port, String username, String password, String proxySecret) {
         return info != null
                 && !TextUtils.isEmpty(address)
@@ -1583,29 +1518,9 @@ public class SharedConfig {
         String proxyPassword = preferences.getString("proxy_pass", "");
         String proxySecret = preferences.getString("proxy_secret", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
-        boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
-        String wssSocksAddress = preferences.getString("wss_socks_proxy_ip", "");
-        String wssSocksUsername = preferences.getString("wss_socks_proxy_user", "");
-        String wssSocksPassword = preferences.getString("wss_socks_proxy_pass", "");
-        int wssSocksPort = preferences.getInt("wss_socks_proxy_port", 1080);
-        if ((wssSocksPort <= 0 || wssSocksPort > 65535) && !TextUtils.isEmpty(wssSocksAddress)) {
-            wssSocksPort = 1080;
-        }
-        if (TextUtils.isEmpty(wssSocksAddress)
-                && !TextUtils.isEmpty(proxyAddress)
-                && TextUtils.isEmpty(proxySecret)
-                && !proxyEnabled
-                && wssTransportMode != TRANSPORT_LEGACY_PROXY) {
-            wssSocksAddress = proxyAddress;
-            wssSocksUsername = proxyUsername;
-            wssSocksPassword = proxyPassword;
-            wssSocksPort = proxyPort;
-        }
-
         proxyListLoaded = true;
         proxyList.clear();
         currentProxy = null;
-        currentWssSocksProxy = null;
         String list = preferences.getString("proxy_list", null);
         if (!TextUtils.isEmpty(list)) {
             byte[] bytes = Base64.decode(list, Base64.DEFAULT);
@@ -1614,7 +1529,7 @@ public class SharedConfig {
             if (count == -1) { // V2 or newer
                 int version = data.readByte(false);
 
-                if (version == PROXY_SCHEMA_V2 || version == PROXY_SCHEMA_V3) {
+                if (version == PROXY_SCHEMA_V2 || version == PROXY_SCHEMA_V3 || version == PROXY_SCHEMA_V4) {
                     count = data.readInt32(false);
 
                     for (int i = 0; i < count; i++) {
@@ -1627,23 +1542,19 @@ public class SharedConfig {
 
                         info.ping = data.readInt64(false);
                         info.availableCheckTime = data.readInt64(false);
-                        if (version >= PROXY_SCHEMA_V3) {
-                            info.transportMode = normalizeWssTransportMode(data.readInt32(false));
-                            info.wssHost = data.readString(false);
-                            info.wssPort = data.readInt32(false);
-                            info.wssPath = normalizeWssPath(data.readString(false));
-                            info.wssUseForMiniApps = data.readBool(false);
-                            if (info.wssPort <= 0 || info.wssPort > 65535) {
-                                info.wssPort = 443;
-                            }
+                        if (version == PROXY_SCHEMA_V3) {
+                            // Consume obsolete per-row WSS metadata. V4 keeps
+                            // the proxy list independent from transport mode.
+                            data.readInt32(false);
+                            data.readString(false);
+                            data.readInt32(false);
+                            data.readString(false);
+                            data.readBool(false);
                         }
 
                         proxyList.add(0, info);
                         if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
                             currentProxy = info;
-                        }
-                        if (currentWssSocksProxy == null && samePlainSocksProxy(info, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)) {
-                            currentWssSocksProxy = info;
                         }
                     }
                 } else {
@@ -1661,9 +1572,6 @@ public class SharedConfig {
                     if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
                         currentProxy = info;
                     }
-                    if (currentWssSocksProxy == null && samePlainSocksProxy(info, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)) {
-                        currentWssSocksProxy = info;
-                    }
                 }
             }
             data.cleanup();
@@ -1672,38 +1580,51 @@ public class SharedConfig {
             ProxyInfo info = currentProxy = new ProxyInfo(proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
             proxyList.add(0, info);
         }
-        if (currentWssSocksProxy == null && samePlainSocksProxy(currentProxy, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)) {
-            currentWssSocksProxy = currentProxy;
+        removeGeneratedLocalProxy(preferences);
+        if (preferences.contains("wss_socks_proxy_ip")
+                || preferences.contains("wss_socks_proxy_port")
+                || preferences.contains("wss_socks_proxy_user")
+                || preferences.contains("wss_socks_proxy_pass")) {
+            preferences.edit()
+                    .remove("wss_socks_proxy_ip")
+                    .remove("wss_socks_proxy_port")
+                    .remove("wss_socks_proxy_user")
+                    .remove("wss_socks_proxy_pass")
+                    .apply();
         }
-        if (currentWssSocksProxy == null && !TextUtils.isEmpty(wssSocksAddress)) {
-            ProxyInfo info = currentWssSocksProxy = new ProxyInfo(wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword, "");
-            proxyList.add(0, info);
-        }
-        ensureDefaultProxyEntry(preferences);
     }
 
-    // Seeds a removable default SOCKS5 entry (127.0.0.1:1353) into the proxy
-    // list once, mirroring tdesktop's ensureDefaultProxy. It is NOT selected
-    // or forced - just a convenience row the user can use (if a local bypass
-    // tool listens on 1353) or delete. WSS stays opt-in and is untouched here.
-    private static void ensureDefaultProxyEntry(SharedPreferences preferences) {
-        if (preferences.getBoolean("default_proxy_added", false)) {
+    private static void removeGeneratedLocalProxy(SharedPreferences preferences) {
+        if (!preferences.getBoolean("default_proxy_added", false)) {
             return;
         }
-        for (ProxyInfo existing : proxyList) {
-            if (existing != null
-                    && "127.0.0.1".equals(existing.address)
-                    && existing.port == 1353
-                    && TextUtils.isEmpty(existing.secret)
-                    && existing.transportMode == TRANSPORT_LEGACY_PROXY) {
-                preferences.edit().putBoolean("default_proxy_added", true).apply();
-                return;
+        boolean changed = false;
+        boolean removedActiveProxy = false;
+        for (Iterator<ProxyInfo> iterator = proxyList.iterator(); iterator.hasNext();) {
+            ProxyInfo existing = iterator.next();
+            if (existing != null && "127.0.0.1".equals(existing.address)
+                    && existing.port == 1353 && TextUtils.isEmpty(existing.secret)) {
+                if (currentProxy == existing) {
+                    currentProxy = null;
+                    removedActiveProxy = true;
+                }
+                iterator.remove();
+                changed = true;
             }
         }
-        ProxyInfo info = new ProxyInfo("127.0.0.1", 1353, "", "", "");
-        proxyList.add(0, info);
-        saveProxyList();
-        preferences.edit().putBoolean("default_proxy_added", true).apply();
+        SharedPreferences.Editor editor = preferences.edit().remove("default_proxy_added");
+        if (removedActiveProxy) {
+            editor.putBoolean("proxy_enabled", false)
+                    .putString("proxy_ip", "")
+                    .putString("proxy_user", "")
+                    .putString("proxy_pass", "")
+                    .putString("proxy_secret", "")
+                    .putInt("proxy_port", 1080);
+        }
+        editor.apply();
+        if (changed) {
+            saveProxyList();
+        }
     }
 
     public static void saveProxyList() {
@@ -1724,11 +1645,6 @@ public class SharedConfig {
 
             serializedData.writeInt64(info.ping);
             serializedData.writeInt64(info.availableCheckTime);
-            serializedData.writeInt32(normalizeWssTransportMode(info.transportMode));
-            serializedData.writeString(info.wssHost != null ? info.wssHost : "");
-            serializedData.writeInt32(info.wssPort);
-            serializedData.writeString(info.wssPath != null ? info.wssPath : "/apiws");
-            serializedData.writeBool(info.wssUseForMiniApps);
         }
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         preferences.edit().putString("proxy_list", Base64.encodeToString(serializedData.toByteArray(), Base64.NO_WRAP)).apply();
@@ -1747,36 +1663,6 @@ public class SharedConfig {
         proxyList.add(0, proxyInfo);
         saveProxyList();
         return proxyInfo;
-    }
-
-    public static void saveWssSocksProxy(ProxyInfo proxyInfo) {
-        loadProxyList();
-        if (proxyInfo == null || TextUtils.isEmpty(proxyInfo.address) || !TextUtils.isEmpty(proxyInfo.secret)) {
-            clearWssSocksProxy();
-            return;
-        }
-        if (proxyInfo.port <= 0 || proxyInfo.port > 65535) {
-            proxyInfo.port = 1080;
-        }
-        ProxyInfo savedInfo = addProxy(proxyInfo);
-        currentWssSocksProxy = savedInfo;
-        SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
-        editor.putString("wss_socks_proxy_ip", savedInfo.address);
-        editor.putString("wss_socks_proxy_pass", savedInfo.password != null ? savedInfo.password : "");
-        editor.putString("wss_socks_proxy_user", savedInfo.username != null ? savedInfo.username : "");
-        editor.putInt("wss_socks_proxy_port", savedInfo.port);
-        editor.apply();
-        saveProxyList();
-    }
-
-    public static void clearWssSocksProxy() {
-        currentWssSocksProxy = null;
-        SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
-        editor.putString("wss_socks_proxy_ip", "");
-        editor.putString("wss_socks_proxy_pass", "");
-        editor.putString("wss_socks_proxy_user", "");
-        editor.putInt("wss_socks_proxy_port", 1080);
-        editor.apply();
     }
 
     public static boolean isProxyEnabled() {
@@ -1800,10 +1686,6 @@ public class SharedConfig {
             if (enabled) {
                 ConnectionsManager.setProxySettings(false, "", 0, "", "", "", ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
             }
-        }
-        if (currentWssSocksProxy == proxyInfo) {
-            clearWssSocksProxy();
-            ConnectionsManager.setWssTransportSettings();
         }
         proxyList.remove(proxyInfo);
         saveProxyList();

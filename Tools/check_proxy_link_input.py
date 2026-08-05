@@ -60,7 +60,6 @@ def main() -> int:
         "public static final class ProxyLink",
         "public static final int TYPE_SOCKS5",
         "public static final int TYPE_MTPROTO",
-        "public static final int TYPE_WSS",
     ):
         if needle not in proxy_link_helper:
             fail(f"ProxyLinkHelper missing {needle}")
@@ -72,11 +71,12 @@ def main() -> int:
         "t.me/proxy?",
         "tg://proxy?",
         "tg:proxy?",
-        "zastogram://wss?",
-        "tg://wss?",
     ):
         if link_marker not in proxy_link_helper:
             fail(f"shared parser must recognize {link_marker}")
+    for forbidden in ("TYPE_WSS", "zastogram://wss?", "tg://wss?"):
+        if forbidden in proxy_link_helper:
+            fail(f"WSS must not be parsed as proxy link data: {forbidden}")
     if "android.content.ClipboardManager" not in proxy_link_helper or "getPrimaryClip()" not in proxy_link_helper:
         fail("shared helper must own safe clipboard extraction")
     if "URLDecoder.decode" not in proxy_link_helper:
@@ -103,7 +103,7 @@ def main() -> int:
     for assignment in (
         "inputFields[i].setText(proxyLinkField(parsedProxyLink, i));",
         "setProxyType(parsedProxyLink.type, animated",
-        "inputFields[focusField].setSelection(inputFields[focusField].length());",
+        "inputFields[FIELD_IP].setSelection(inputFields[FIELD_IP].length());",
         "AndroidUtilities.hideKeyboard(inputFieldsContainer.findFocus());",
     ):
         if assignment not in apply_body:

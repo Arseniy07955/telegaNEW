@@ -61,37 +61,6 @@ bool mtProxyIsBlockedZeroAddress(const std::string &ip) {
             && memcmp(&parsedIpv6Address, &anyIpv6Address, sizeof(parsedIpv6Address)) == 0;
 }
 
-static const char *sanitizeMtProxySecretDomain(const std::string &rawDomain, std::string *sanitizedDomain, bool *secretDomainSanitized) {
-    std::string trimmed = trimMtProxySecretDomain(rawDomain);
-    bool hasControl = false;
-    if (secretDomainSanitized != nullptr) {
-        *secretDomainSanitized = false;
-    }
-    for (unsigned char c : trimmed) {
-        if (std::iscntrl(c)) {
-            hasControl = true;
-            break;
-        }
-    }
-    if (sanitizedDomain != nullptr) {
-        sanitizedDomain->clear();
-        sanitizedDomain->reserve(trimmed.size());
-        for (unsigned char c : trimmed) {
-            if (!std::iscntrl(c)) {
-                sanitizedDomain->push_back((char) std::tolower(c));
-            }
-        }
-    }
-    const std::string &domain = sanitizedDomain != nullptr ? *sanitizedDomain : trimmed;
-    if (!validateMtProxySecretDomain(domain)) {
-        return hasControl ? MtProxyPhase::SecretParseInvalidDomainControlChar : MtProxyPhase::SecretParseInvalidDomain;
-    }
-    if (hasControl && secretDomainSanitized != nullptr) {
-        *secretDomainSanitized = true;
-    }
-    return nullptr;
-}
-
 static bool mtProxyUtf8ToCodepoints(const std::string &value, std::vector<uint32_t> *codepoints) {
     if (codepoints == nullptr) {
         return false;
@@ -302,34 +271,24 @@ MtProxySecretDomainPlan buildMtProxySecretDomainPlan(const std::string &rawDomai
     MtProxySecretDomainPlan plan;
     std::string trimmed = trimMtProxySecretDomain(rawDomain);
     bool removedControl = false;
-    plan.originalDomain = trimmed;
+    plan.originalDomain = rawDomain;
     plan.sanitizedDomain = mtProxyLowercaseAsciiNoControl(trimmed, &removedControl);
     plan.lowercaseAsciiDomain = mtProxyLowercaseAsciiNoControl(trimmed, nullptr);
     plan.noTrailingDotDomain = mtProxyNoTrailingDot(plan.lowercaseAsciiDomain);
     mtProxyPunycodeDomain(plan.sanitizedDomain, &plan.punycodeDomain);
-    plan.sanitized = removedControl && validateMtProxySecretDomain(plan.sanitizedDomain);
 
-    auto addVariant = [&](int32_t variant, const std::string &value) {
-        if (validateMtProxySecretDomain(value)) {
-            plan.allowedSniVariants |= MtProxyAdaptivePolicy::sniVariantMask(variant);
-            if (plan.canonicalDomain.empty()) {
-                plan.canonicalDomain = value;
-            }
-        }
-    };
-
-    if (!removedControl) {
-        addVariant(MtProxyAdaptivePolicy::SNI_ORIGINAL, plan.originalDomain);
-    }
-    addVariant(MtProxyAdaptivePolicy::SNI_SANITIZED, plan.sanitizedDomain);
-    addVariant(MtProxyAdaptivePolicy::SNI_LOWERCASE_ASCII, plan.lowercaseAsciiDomain);
-    addVariant(MtProxyAdaptivePolicy::SNI_NO_TRAILING_DOT, plan.noTrailingDotDomain);
-    addVariant(MtProxyAdaptivePolicy::SNI_PUNYCODE, plan.punycodeDomain);
-
-    if (plan.canonicalDomain.empty()) {
-        plan.terminalDiagnostic = removedControl ? MtProxyPhase::SecretParseInvalidDomainControlChar : MtProxyPhase::SecretParseInvalidDomain;
+    // FakeTLS relays compare SNI with the domain embedded in the ee secret.
+    // Lowercasing, trimming, punycode conversion, or SNI_OPTIONAL_NO_SNI may
+    // look like useful recovery variants but route a valid hello to camouflage.
+    // Keep the derived fields for diagnostics only; the wire value is exact.
+    if (validateMtProxySecretDomain(plan.originalDomain)) {
+        plan.canonicalDomain = plan.originalDomain;
+        plan.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(
+                MtProxyAdaptivePolicy::SNI_ORIGINAL);
     } else {
-        plan.allowedSniVariants |= MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_OPTIONAL_NO_SNI);
+        plan.terminalDiagnostic = removedControl
+                ? MtProxyPhase::SecretParseInvalidDomainControlChar
+                : MtProxyPhase::SecretParseInvalidDomain;
     }
     return plan;
 }
