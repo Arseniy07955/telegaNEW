@@ -6881,9 +6881,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     selectWithStableId = true;
                 }
                 filterTabsView.removeTabs();
+                boolean hideAllChatsTab = ZaStoPrivacy.HIDE_ALL_CHATS && filters.size() > 1;
                 for (int a = 0, N = filters.size(); a < N; a++) {
                     if (filters.get(a).isDefault()) {
-                        if (!ZaStoPrivacy.HIDE_ALL_CHATS) {
+                        if (!hideAllChatsTab) {
                             filterTabsView.addTab(a, 0, LocaleController.getString(R.string.FilterAllChats), null, false, true, filters.get(a).locked);
                         }
                     } else {
@@ -6891,7 +6892,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                         filterTabsView.addTab(a, filter.localId, filter.name, filter.entities, filter.title_noanimate, false, filters.get(a).locked);
                     }
                 }
-                if (ZaStoPrivacy.HIDE_ALL_CHATS && stableId <= 0) {
+                if (hideAllChatsTab && stableId <= 0) {
                     id = filterTabsView.getFirstTabId();
                     updateCurrentTab = true;
                     viewPages[0].selectedType = id;
