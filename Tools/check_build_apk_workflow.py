@@ -110,8 +110,12 @@ def check_gradle(gradle_text: str) -> list[str]:
         if "AndroidManifest_standalone.xml" not in block:
             errors.append(f"Flavor {flavor} must keep the standalone manifest")
 
-    if "output.versionCodeOverride = defaultConfig.versionCode * 100 + variant.productFlavors.get(0).abiVersionCode" not in gradle_text:
-        errors.append("Gradle version-code derivation must stay centralized on abiVersionCode with a two-digit ABI suffix")
+    if "output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit" not in gradle_text:
+        errors.append("Gradle version-code derivation must include the GitHub build number and ABI digit")
+
+    for literal in ("ZASTO_BUILD_NUMBER", "zastoBuildNumber", "abiVersionDigit"):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing GitHub version-code contract literal: {literal}")
 
     if "standaloneBuildFlavors = [\"afat\", \"arm64\", \"armv7\", \"x86\", \"x64\"]" not in gradle_text:
         errors.append("variantFilter must keep an explicit allow-list for afat and the ABI standalone flavors")
@@ -189,7 +193,12 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_logs_activity_compile_contract.py",
         "python3 Tools/check_runtime_resilience.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
+        "python3 Tools/check_github_update_contract.py",
         "-PzastoAbiFilter=${{ matrix.abi }}",
+        "ZASTO_UPDATE_CHANNEL: dev",
+        "ZASTO_RELEASE_TAG: zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}",
+        "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
+        "ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}",
         "release:",
         "needs: build",
         "actions/download-artifact@v4",

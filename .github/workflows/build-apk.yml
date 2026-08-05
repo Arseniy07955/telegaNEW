@@ -169,6 +169,9 @@ jobs:
       - name: Check ZaSto edit-history guards
         run: python3 Tools/check_zasto_edit_history_contract.py
 
+      - name: Check GitHub updater contract
+        run: python3 Tools/check_github_update_contract.py
+
       - name: Reset ccache stats
         run: ccache -z || true
 
@@ -185,6 +188,12 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          # Every workflow build belongs to the development update channel and
+          # identifies the exact prerelease which will be created by the release job.
+          ZASTO_UPDATE_CHANNEL: dev
+          ZASTO_RELEASE_TAG: zastogram-apk-${{ github.run_number }}-${{ github.run_attempt }}
+          ZASTO_BUILD_NUMBER: ${{ github.run_number }}
+          ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           chmod +x ./gradlew
           SIGN_ARGS=""

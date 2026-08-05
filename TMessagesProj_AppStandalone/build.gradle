@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+def zastoBuildNumberText = (project.findProperty("zastoBuildNumber") ?: System.getenv("ZASTO_BUILD_NUMBER") ?: "0").toString().trim()
+if (!(zastoBuildNumberText ==~ /\d+/) || zastoBuildNumberText.toInteger() > 9999) {
+    throw new GradleException("Invalid ZaStoGram build number '${zastoBuildNumberText}'. Expected an integer from 0 to 9999")
+}
+def zastoBuildNumber = zastoBuildNumberText.toInteger()
+
 repositories {
     mavenCentral()
     google()
@@ -153,7 +159,12 @@ android {
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             outputFileName = "app.apk"
-            output.versionCodeOverride = defaultConfig.versionCode * 100 + variant.productFlavors.get(0).abiVersionCode
+            // Reserve five decimal digits per upstream Telegram version: four for the
+            // GitHub Actions run and one for the ABI. A newer dev prerelease can then
+            // be installed over the previous prerelease even when APP_VERSION_CODE did
+            // not change between workflow runs.
+            def abiVersionDigit = variant.productFlavors.get(0).abiVersionCode % 10
+            output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit
         }
     }
 

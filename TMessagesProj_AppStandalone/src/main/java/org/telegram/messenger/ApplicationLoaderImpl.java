@@ -23,9 +23,10 @@ import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.Components.AlertsCreator;
 import org.telegram.ui.Components.BulletinFactory;
+import org.telegram.ui.Components.GitHubUpdateAlertDialog;
+import org.telegram.ui.Components.GitHubUpdateLayout;
 import org.telegram.ui.Components.ItemOptions;
 import org.telegram.ui.Components.UpdateAppAlertDialog;
-import org.telegram.ui.Components.UpdateLayout;
 import org.telegram.ui.IUpdateLayout;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.SMSStatsActivity;
@@ -109,8 +110,58 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     }
 
     @Override
+    public boolean isCustomUpdate() {
+        return true;
+    }
+
+    @Override
+    public void checkUpdate(boolean force, Runnable whenDone) {
+        GitHubUpdaterController.getInstance().checkForUpdate(force, whenDone);
+    }
+
+    @Override
+    public BetaUpdate getUpdate() {
+        return GitHubUpdaterController.getInstance().getUpdate();
+    }
+
+    @Override
+    public void downloadUpdate() {
+        GitHubUpdaterController.getInstance().downloadUpdate();
+    }
+
+    @Override
+    public void cancelDownloadingUpdate() {
+        GitHubUpdaterController.getInstance().cancelDownloadingUpdate();
+    }
+
+    @Override
+    public boolean isDownloadingUpdate() {
+        return GitHubUpdaterController.getInstance().isDownloading();
+    }
+
+    @Override
+    public float getDownloadingUpdateProgress() {
+        return GitHubUpdaterController.getInstance().getDownloadingProgress();
+    }
+
+    @Override
+    public File getDownloadedUpdateFile() {
+        return GitHubUpdaterController.getInstance().getDownloadedFile();
+    }
+
+    @Override
+    public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
+        try {
+            GitHubUpdateAlertDialog.show(context, update);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return true;
+    }
+
+    @Override
     public IUpdateLayout takeUpdateLayout(Activity activity, ViewGroup sideMenuContainer) {
-        return new UpdateLayout(activity, sideMenuContainer);
+        return new GitHubUpdateLayout(activity, sideMenuContainer);
     }
 
     @Override
