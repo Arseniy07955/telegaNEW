@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
 WSS_CPP = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.cpp"
+CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
+CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
+FILE_LOADER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileLoadOperation.java"
 
 
 def require(condition: bool, message: str) -> None:
@@ -19,6 +22,9 @@ def main() -> None:
     shared_config = SHARED_CONFIG.read_text(encoding="utf-8", errors="replace")
     proxy_list = PROXY_LIST.read_text(encoding="utf-8", errors="replace")
     wss_cpp = WSS_CPP.read_text(encoding="utf-8", errors="replace")
+    connection_cpp = CONNECTION_CPP.read_text(encoding="utf-8", errors="replace")
+    connections_java = CONNECTIONS_JAVA.read_text(encoding="utf-8", errors="replace")
+    file_loader = FILE_LOADER.read_text(encoding="utf-8", errors="replace")
 
     require('preferences.getBoolean("wssTransportEnabled", false)' in shared_config,
             "WSS must be opt-in by default")
@@ -28,12 +34,23 @@ def main() -> None:
             "custom gateway keys must be removed during migration")
     require("UseWssTransport" in proxy_list and "wssTransportEnabled" in proxy_list,
             "the official transport must be exposed as a normal checkbox")
-    require('prefix = dcId == 4 ? "kws4" : "kws2"' in wss_cpp,
-            "official WSS must target Telegram DC2/DC4 relay names")
+    require('prefix = "kws" + std::to_string(dcId)' in wss_cpp,
+            "official WSS must generate Telegram DC1-DC5 relay names")
+    for dc_id in range(1, 6):
+        require(f"case {dc_id}:" in wss_cpp,
+                f"official WSS relay catalog must include DC{dc_id}")
     require('mediaConnection ? "-1.web.telegram.org"' in wss_cpp,
             "official WSS must select the media relay variant")
-    require("dcId != 2 && dcId != 4" in wss_cpp and "testBackend" in wss_cpp,
+    require("const bool wssMediaRoute = isMediaConnectionType(connectionType)" in connection_cpp
+            and "connectionType & ConnectionTypeUpload" in connection_cpp,
+            "download/upload traffic must select media WSS independently of media-only IP options")
+    require("relayIp == nullptr" in wss_cpp and "testBackend" in wss_cpp,
             "unsupported/test DCs must stay on their normal transport")
+    require("supportsCdnFileRedirects()" in connections_java
+            and "return !SharedConfig.wssTransportEnabled" in connections_java,
+            "network layer must disable CDN redirects when WSS cannot route CDN DC ids")
+    require("req.cdn_supported = ConnectionsManager.supportsCdnFileRedirects()" in file_loader,
+            "file downloads must advertise the active transport's CDN capability")
 
     print("WSS official route guard passed.")
 

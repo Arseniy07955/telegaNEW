@@ -2435,7 +2435,7 @@ public class FileLoadOperation {
                     req.location = location;
                     req.offset = downloadOffset;
                     req.limit = currentDownloadChunkSize;
-                    req.cdn_supported = true;
+                    req.cdn_supported = ConnectionsManager.supportsCdnFileRedirects();
                     request = req;
                 }
             }

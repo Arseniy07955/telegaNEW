@@ -1439,6 +1439,13 @@ public class ConnectionsManager extends BaseController {
         }
     }
 
+    public static boolean supportsCdnFileRedirects() {
+        // Public Telegram WebSocket relays address the five regular DCs, not
+        // the separate CDN DC ids. With WSS selected, ask the source DC to
+        // serve the file through its media relay instead of redirecting it.
+        return !SharedConfig.wssTransportEnabled;
+    }
+
     static int resolveMtProxyClientHelloFragmentationMode() {
         return SharedConfig.mtProxyClientHelloFragmentation
                 ? MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT

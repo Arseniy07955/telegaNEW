@@ -26,7 +26,8 @@ struct Route {
     bool viaFallback = false;
 };
 
-// Telegram's public web relays exist only for production DC2/DC4.
+// Telegram's public web relays cover production DC1-DC5. Media connections
+// use the corresponding -1 relay, matching Telegram Web's transport catalog.
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *route);
 
 class Socket final : public transport::Socket {

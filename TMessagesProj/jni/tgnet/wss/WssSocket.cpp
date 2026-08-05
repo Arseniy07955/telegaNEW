@@ -31,7 +31,6 @@ namespace tgnet {
 namespace wss {
 namespace {
 
-constexpr const char *kOfficialRelayIp = "149.154.167.220";
 constexpr const char *kOfficialPath = "/apiws";
 constexpr uint32_t kMaxFrame = 2 * 1024 * 1024;
 constexpr size_t kMaxHttpHeader = 32 * 1024;
@@ -176,17 +175,36 @@ void setDiagnostic(std::string *diagnostic, const char *value) {
     }
 }
 
+const char *officialRelayIpForDc(int32_t dcId) {
+    // Telegram Web publishes one WSS hostname per production DC. Keep a
+    // direct official relay address as the DNS-independent first attempt;
+    // the hostname below remains the fallback and TLS identity.
+    switch (dcId) {
+        case 1:
+        case 3:
+            return "149.154.174.100";
+        case 2:
+        case 4:
+            return "149.154.167.220";
+        case 5:
+            return "149.154.170.100";
+        default:
+            return nullptr;
+    }
+}
+
 } // namespace
 
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *route) {
-    if (route == nullptr || testBackend || (dcId != 2 && dcId != 4)) {
+    const char *relayIp = officialRelayIpForDc(dcId);
+    if (route == nullptr || testBackend || relayIp == nullptr) {
         return false;
     }
     Route result;
-    result.relayHost = kOfficialRelayIp;
+    result.relayHost = relayIp;
     result.relayPort = 443;
     result.path = kOfficialPath;
-    const std::string prefix = dcId == 4 ? "kws4" : "kws2";
+    const std::string prefix = "kws" + std::to_string(dcId);
     result.domain = prefix + (mediaConnection ? "-1.web.telegram.org" : ".web.telegram.org");
     result.relayHostFallback = result.domain;
     result.viaFallback = preferFallback(result);

@@ -480,7 +480,12 @@ void Connection::connect() {
         }
         setMtProxyHandshakePriority(mtProxyHandshakePriority);
     }
-    openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), isMediaConnection);
+    // WSS relay selection follows the traffic class, not whether this DC
+    // happened to publish a media_only IP address. Telegram Web routes both
+    // downloads and uploads through the per-DC -1 endpoint.
+    const bool wssMediaRoute = isMediaConnectionType(connectionType)
+            || (connectionType & ConnectionTypeUpload) != 0;
+    openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), wssMediaRoute);
     if (connectionType == ConnectionTypeProxy) {
         setTimeout(5);
     } else if (connectionType == ConnectionTypePush) {

@@ -15,6 +15,7 @@ MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+SOCKET_STATE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 TRANSPORT_H = ROOT / "TMessagesProj/jni/tgnet/transport/TransportSocket.h"
 WSS_H = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.h"
 WSS_CPP = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.cpp"
@@ -46,6 +47,7 @@ def main() -> None:
     manager_h = text(MANAGER_H)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    socket_state_h = text(SOCKET_STATE_H)
     transport_h = text(TRANSPORT_H)
     wss_h = text(WSS_H)
     wss_cpp = text(WSS_CPP)
@@ -100,18 +102,18 @@ def main() -> None:
             "WSS module must perform a real binary WebSocket upgrade")
     require("kws2.web.telegram.org" not in wss_cpp or '"kws2"' in wss_cpp,
             "official DC2 route must be generated inside the WSS module")
-    require('prefix = dcId == 4 ? "kws4" : "kws2"' in wss_cpp and '"/apiws"' in wss_cpp,
-            "WSS module must use the official DC2/DC4 relay catalog")
+    require('prefix = "kws" + std::to_string(dcId)' in wss_cpp and '"/apiws"' in wss_cpp,
+            "WSS module must use the official DC1-DC5 relay catalog")
     require("relayHostFallback" in wss_cpp and "kFallbackPreferenceTtlMs" in wss_cpp,
             "WSS module must own relay fallback policy")
     for forbidden in ("buildSocks5Greeting", "upstreamSocksEnabled", "customRoute"):
         require(forbidden not in wss_cpp + wss_h,
                 f"WSS socket must not contain proxy/gateway feature {forbidden}")
 
-    require('#include "wss/WssSocket.h"' in socket_h,
-            "ConnectionSocket must depend on the dedicated WSS socket")
-    require("std::unique_ptr<tgnet::transport::Socket> currentWssTransport" in socket_h,
-            "ConnectionSocket must hold WSS through the transport abstraction")
+    require('#include "wss/WssSocket.h"' in socket_h + socket_state_h,
+            "ConnectionSocket state must depend on the dedicated WSS socket")
+    require("std::unique_ptr<tgnet::transport::Socket>" in socket_h + socket_state_h,
+            "ConnectionSocket state must hold WSS through the transport abstraction")
     require("tgnet::wss::OfficialRoute" in socket_cpp and "tgnet::wss::CreateSocket" in socket_cpp,
             "ConnectionSocket must select and instantiate the WSS module")
     require("manager.wssEnabled" in socket_cpp and "proxyAddress->empty()" in socket_cpp,
