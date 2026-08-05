@@ -598,7 +598,13 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
 
     uint8_t useSecret = 0;
     if (!firstPacketSent) {
-        if (!overrideProxyAddress.empty()) {
+        if (isCurrentTransportWss()) {
+            // WSS has its own official route and never inherits the secret of
+            // the TCP dcOption that happened to be selected before transport
+            // dispatch. Otherwise a direct WSS connection is accidentally
+            // encoded as MTProxy and media auth fails on every affected DC.
+            useSecret = 0;
+        } else if (!overrideProxyAddress.empty()) {
             if (!overrideProxySecret.empty()) {
                 useSecret = 1;
             } else if (!secret.empty()) {
@@ -668,6 +674,7 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
         buffer2 = nullptr;
     }
     uint8_t *bytes = buffer->bytes();
+    const uint32_t wssHandshakePrefixSize = !firstPacketSent && isCurrentTransportWss() ? 64 : 0;
 
     if (!firstPacketSent) {
         buffer->position(64);
@@ -766,15 +773,13 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     }
 
     buffer->rewind();
-    writeBuffer(buffer);
     buff->rewind();
     AES_ctr128_encrypt(buff->bytes(), buff->bytes(), buff->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
-    writeBuffer(buff);
     if (buffer2 != nullptr) {
         AES_ctr128_encrypt(buffer2->bytes(), buffer2->bytes(), buffer2->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
-        writeBuffer(buffer2);
     }
-    return !isClosingOrClosedForWrites();
+    return writeTransportPacket(buffer, buff, buffer2, wssHandshakePrefixSize)
+            && !isClosingOrClosedForWrites();
 }
 
 inline std::string *Connection::getCurrentSecret(uint8_t secretType) {

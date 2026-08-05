@@ -36,9 +36,8 @@ def main() -> None:
             "the official transport must be exposed as a normal checkbox")
     require('prefix = "kws" + std::to_string(dcId)' in wss_cpp,
             "official WSS must generate Telegram DC1-DC5 relay names")
-    for dc_id in range(1, 6):
-        require(f"case {dc_id}:" in wss_cpp,
-                f"official WSS relay catalog must include DC{dc_id}")
+    require("dcId < 1 || dcId > 5" in wss_cpp,
+            "official WSS relay catalog must cover exactly DC1-DC5")
     require('mediaConnection ? "-1.web.telegram.org"' in wss_cpp,
             "official WSS must select the media relay variant")
     require("const bool wssMediaRoute = isMediaConnectionType(connectionType)" in connection_cpp
@@ -47,8 +46,14 @@ def main() -> None:
     require("forceProxyLikeInitForWss" not in connection_cpp
             and "if (useSecret != 0)" in connection_cpp,
             "direct WSS must not inject the MTProxy-only DC marker")
-    require("relayIp == nullptr" in wss_cpp and "testBackend" in wss_cpp,
+    require("dcId < 1 || dcId > 5" in wss_cpp and "testBackend" in wss_cpp,
             "unsupported/test DCs must stay on their normal transport")
+    require("officialRelayIpForDc" not in wss_cpp
+            and "result.connectHost = result.domain" in wss_cpp,
+            "official WSS must resolve its hostname instead of inheriting a TCP relay IP")
+    require("if (isCurrentTransportWss())" in connection_cpp
+            and "useSecret = 0" in connection_cpp,
+            "direct WSS must not inherit a TCP dcOption or MTProxy secret")
     require("supportsCdnFileRedirects()" in connections_java
             and "return !SharedConfig.wssTransportEnabled" in connections_java,
             "network layer must disable CDN redirects when WSS cannot route CDN DC ids")

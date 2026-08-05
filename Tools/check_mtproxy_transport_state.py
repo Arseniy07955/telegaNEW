@@ -1034,9 +1034,11 @@ def main() -> int:
         "canSendWssFrame must delegate WSS mode/ready/fd/epoll checks to the action policy",
         failures,
     )
+    flush_wss_body = method_body(socket, "bool ConnectionSocket::flushWssMessages", "void ConnectionSocket::clearWssMessages")
     require(
-        "!canSendWssFrame()" in on_event_body
-        and "currentWssTransport->write" in on_event_body,
+        "!canSendWssFrame()" in flush_wss_body
+        and "currentWssTransport->write" in flush_wss_body
+        and "flushWssMessages" in on_event_body,
         "WSS outbound frame send must use the transport action policy",
         failures,
     )

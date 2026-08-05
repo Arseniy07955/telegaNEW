@@ -17,13 +17,10 @@ namespace tgnet {
 namespace wss {
 
 struct Route {
-    std::string relayHost;
-    std::string relayHostFallback;
     std::string connectHost;
     uint16_t relayPort = 443;
     std::string domain;
     std::string path = "/apiws";
-    bool viaFallback = false;
 };
 
 // Telegram's public web relays cover production DC1-DC5. Media connections
@@ -68,9 +65,6 @@ private:
     bool parseHttpResponse(std::string *diagnostic);
     bool parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::string *diagnostic);
     bool queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std::string *diagnostic);
-    void noteAttemptFailed();
-    void noteUpgradeSucceeded();
-
     Route routeConfig;
     SSL *ssl = nullptr;
     int socketFd = -1;
@@ -81,7 +75,6 @@ private:
     std::vector<uint8_t> inputBuffer;
     std::string secWebSocketKey;
     bool fragmentedMessage = false;
-    bool failureRecorded = false;
 };
 
 std::unique_ptr<transport::Socket> CreateSocket(Route route);

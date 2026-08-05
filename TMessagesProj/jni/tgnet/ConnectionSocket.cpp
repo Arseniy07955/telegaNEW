@@ -151,6 +151,8 @@
 #define currentMediaConnection stateMachine.wss.mediaConnection
 #define currentWssRoute stateMachine.wss.route
 #define currentWssTransport stateMachine.wss.transport
+#define outgoingWssMessages stateMachine.wss.outgoingMessages
+#define outgoingWssBytes stateMachine.wss.outgoingBytes
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -188,6 +190,7 @@ static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
+static constexpr size_t WSS_MAX_QUEUED_MESSAGES_BYTES = 4 * 1024 * 1024;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_CHANGE_CIPHER_SPEC = 0x14;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_ALERT = 0x15;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_APPLICATION_DATA = 0x17;
@@ -3733,7 +3736,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     }
     if (LOGS_ENABLED && !isCurrentDirectConnection()) {
         if (currentTransportWss) {
-            DEBUG_D("connection(%p) wss_startup connect_start relay=%s:%u domain=%s path=%s target=%s:%u fallback=%d", this, currentWssRoute.connectHost.c_str(), (unsigned int) currentWssRoute.relayPort, currentWssRoute.domain.c_str(), currentWssRoute.path.c_str(), currentAddress.c_str(), (unsigned int) currentPort, currentWssRoute.viaFallback ? 1 : 0);
+            DEBUG_D("connection(%p) wss_startup connect_start relay=%s:%u domain=%s path=%s target=%s:%u", this, currentWssRoute.connectHost.c_str(), (unsigned int) currentWssRoute.relayPort, currentWssRoute.domain.c_str(), currentWssRoute.path.c_str(), currentAddress.c_str(), (unsigned int) currentPort);
         } else {
             DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d secret_kind=%s is_faketls=%d domain_len=%d profile=%s effective_profile=%s clienthello_fragment=%d server_hello_parser=%s connection_pattern=%s record_sizing=%d timing=%d startup_cover=%d address=%s port=%u", this, (int) proxyAuthState, currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), mtProxyTlsProfileName(currentEffectiveProxyTlsProfile), currentClientHelloFragmentation, mtProxyServerHelloParserName(currentServerHelloParserMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), currentRecordSizingMode, currentTimingMode, currentStartupCoverMode, currentAddress.c_str(), (unsigned int) currentPort);
         }
@@ -3913,6 +3916,41 @@ bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &pa
         }
     }
     return true;
+}
+
+bool ConnectionSocket::flushWssMessages(std::string *diagnostic) {
+    while (isCurrentTransportWss()
+            && currentWssTransport->isReady()
+            && !outgoingWssMessages.empty()) {
+        std::vector<uint8_t> &message = outgoingWssMessages.front();
+        if (!canSendWssFrame()
+                || !currentWssTransport->write(message.data(), (uint32_t) message.size(), diagnostic)) {
+            return false;
+        }
+        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+            ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent(
+                    (int32_t) message.size(), currentNetworkType, instanceNum);
+        }
+        outgoingWssBytes -= message.size();
+        outgoingWssMessages.pop_front();
+
+        std::vector<std::vector<uint8_t>> payloads;
+        if (!currentWssTransport->onEvent(EPOLLOUT, payloads, diagnostic)) {
+            return false;
+        }
+        if (!dispatchWssPayloads(payloads)) {
+            return false;
+        }
+        if (currentWssTransport->wantsWrite()) {
+            break;
+        }
+    }
+    return true;
+}
+
+void ConnectionSocket::clearWssMessages() {
+    outgoingWssMessages.clear();
+    outgoingWssBytes = 0;
 }
 
 void ConnectionSocket::publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength) {
@@ -4319,6 +4357,7 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     currentTransportWss = false;
     currentWssTransport.reset();
     currentWssRoute = tgnet::wss::Route();
+    clearWssMessages();
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -4367,33 +4406,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
         if (!dispatchWssPayloads(payloads)) {
             return;
         }
-        if (currentWssTransport->isReady()) {
-            NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
-            buffer->clear();
-            outgoingByteStream->get(buffer);
-            buffer->flip();
-            const uint32_t remaining = buffer->remaining();
-            if (remaining) {
-                if (!canSendWssFrame()
-                        || !currentWssTransport->write(buffer->bytes(), remaining, &diagnostic)) {
-                    if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup queue write failed diagnostic=%s", this, diagnostic.c_str());
-                    closeSocket(1, -1);
-                    return;
-                }
-                if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                    ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) remaining, currentNetworkType, instanceNum);
-                }
-                outgoingByteStream->discard(remaining);
-                payloads.clear();
-                if (!currentWssTransport->onEvent(EPOLLOUT, payloads, &diagnostic)) {
-                    if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup write failed diagnostic=%s", this, diagnostic.c_str());
-                    closeSocket(1, -1);
-                    return;
-                }
-                if (!dispatchWssPayloads(payloads)) {
-                    return;
-                }
-            }
+        if (currentWssTransport->isReady() && !flushWssMessages(&diagnostic)) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup write failed diagnostic=%s", this, diagnostic.c_str());
+            closeSocket(1, -1);
+            return;
         }
         adjustWriteOp();
         return;
@@ -4921,6 +4937,71 @@ void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
     queueAdjustWriteOpAfterOutboundAppend("writeBuffer");
 }
 
+bool ConnectionSocket::writeTransportPacket(
+        NativeByteBuffer *header,
+        NativeByteBuffer *payload,
+        NativeByteBuffer *padding,
+        uint32_t handshakePrefixSize) {
+    if (!isCurrentTransportWss()) {
+        writeBuffer(header);
+        writeBuffer(payload);
+        if (padding != nullptr) {
+            writeBuffer(padding);
+        }
+        return !isClosingOrClosedForWrites();
+    }
+
+    auto reuseParts = [&] {
+        if (header != nullptr) {
+            header->reuse();
+        }
+        if (payload != nullptr) {
+            payload->reuse();
+        }
+        if (padding != nullptr) {
+            padding->reuse();
+        }
+    };
+    if (!canQueueOutboundBuffer("writeTransportPacket") || header == nullptr || payload == nullptr
+            || handshakePrefixSize > header->remaining()) {
+        reuseParts();
+        return false;
+    }
+
+    const size_t packetSize = header->remaining() - handshakePrefixSize
+            + payload->remaining()
+            + (padding != nullptr ? padding->remaining() : 0);
+    const size_t queuedSize = handshakePrefixSize + packetSize;
+    if (packetSize == 0 || queuedSize > WSS_MAX_QUEUED_MESSAGES_BYTES
+            || outgoingWssBytes > WSS_MAX_QUEUED_MESSAGES_BYTES - queuedSize) {
+        if (LOGS_ENABLED) DEBUG_E("connection(%p) WSS message queue full queued=%u packet=%u", this,
+                (unsigned int) outgoingWssBytes, (unsigned int) queuedSize);
+        reuseParts();
+        closeSocket(1, ENOBUFS);
+        return false;
+    }
+
+    const uint8_t *headerBytes = header->bytes() + header->position();
+    if (handshakePrefixSize != 0) {
+        outgoingWssMessages.emplace_back(headerBytes, headerBytes + handshakePrefixSize);
+    }
+
+    std::vector<uint8_t> packet;
+    packet.reserve(packetSize);
+    packet.insert(packet.end(), headerBytes + handshakePrefixSize, headerBytes + header->remaining());
+    packet.insert(packet.end(), payload->bytes() + payload->position(),
+            payload->bytes() + payload->position() + payload->remaining());
+    if (padding != nullptr) {
+        packet.insert(packet.end(), padding->bytes() + padding->position(),
+                padding->bytes() + padding->position() + padding->remaining());
+    }
+    outgoingWssMessages.push_back(std::move(packet));
+    outgoingWssBytes += queuedSize;
+    reuseParts();
+    queueAdjustWriteOpAfterOutboundAppend("writeTransportPacket");
+    return true;
+}
+
 void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend(const char *reason) {
     if (!waitingForHostResolve.empty()) {
         setAdjustWriteOpAfterResolve(true, reason);
@@ -4944,7 +5025,8 @@ void ConnectionSocket::adjustWriteOp() {
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
     bool hasPendingClientHello = pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize;
     bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
-    bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr && currentWssTransport->wantsWrite();
+    bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr
+            && (currentWssTransport->wantsWrite() || !outgoingWssMessages.empty());
     if ((proxyAuthState == 0 && (hasPendingTlsFrame || hasPendingWssWrite || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
         eventMask.events |= EPOLLOUT;
     }

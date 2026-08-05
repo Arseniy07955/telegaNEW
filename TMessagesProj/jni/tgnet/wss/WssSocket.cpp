@@ -20,12 +20,9 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
-#include <map>
-#include <mutex>
 
 namespace tgnet {
 namespace wss {
@@ -36,74 +33,6 @@ constexpr uint32_t kMaxFrame = 2 * 1024 * 1024;
 constexpr size_t kMaxHttpHeader = 32 * 1024;
 constexpr size_t kMaxPendingOutput = 4 * 1024 * 1024;
 constexpr size_t kMaxPendingInput = 4 * 1024 * 1024;
-constexpr int64_t kFallbackPreferenceTtlMs = 30 * 60 * 1000;
-
-struct RelayPreference {
-    bool preferFallback = false;
-    int64_t until = 0;
-};
-
-std::mutex relayPreferencesMutex;
-std::map<std::string, RelayPreference> relayPreferences;
-
-int64_t monotonicMillis() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-std::string relayPreferenceKey(const Route &route) {
-    return route.relayHost + ":" + std::to_string(route.relayPort) + ":" + route.domain;
-}
-
-bool hasFallback(const Route &route) {
-    return !route.relayHostFallback.empty() && route.relayHostFallback != route.relayHost;
-}
-
-bool preferFallback(const Route &route) {
-    if (!hasFallback(route)) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    auto it = relayPreferences.find(relayPreferenceKey(route));
-    if (it == relayPreferences.end()) {
-        return false;
-    }
-    if (it->second.until <= monotonicMillis()) {
-        relayPreferences.erase(it);
-        return false;
-    }
-    return it->second.preferFallback;
-}
-
-void recordAttemptFailed(const Route &route) {
-    if (!hasFallback(route)) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    if (route.viaFallback) {
-        relayPreferences.erase(relayPreferenceKey(route));
-    } else {
-        relayPreferences[relayPreferenceKey(route)] = {
-                true,
-                monotonicMillis() + kFallbackPreferenceTtlMs,
-        };
-    }
-}
-
-void recordUpgradeSucceeded(const Route &route) {
-    if (!hasFallback(route)) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    if (route.viaFallback) {
-        relayPreferences[relayPreferenceKey(route)] = {
-                true,
-                monotonicMillis() + kFallbackPreferenceTtlMs,
-        };
-    } else {
-        relayPreferences.erase(relayPreferenceKey(route));
-    }
-}
 
 std::string base64Encode(const uint8_t *data, size_t length) {
     static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -175,40 +104,20 @@ void setDiagnostic(std::string *diagnostic, const char *value) {
     }
 }
 
-const char *officialRelayIpForDc(int32_t dcId) {
-    // Telegram Web publishes one WSS hostname per production DC. Keep a
-    // direct official relay address as the DNS-independent first attempt;
-    // the hostname below remains the fallback and TLS identity.
-    switch (dcId) {
-        case 1:
-        case 3:
-            return "149.154.174.100";
-        case 2:
-        case 4:
-            return "149.154.167.220";
-        case 5:
-            return "149.154.170.100";
-        default:
-            return nullptr;
-    }
-}
-
 } // namespace
 
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *route) {
-    const char *relayIp = officialRelayIpForDc(dcId);
-    if (route == nullptr || testBackend || relayIp == nullptr) {
+    if (route == nullptr || testBackend || dcId < 1 || dcId > 5) {
         return false;
     }
     Route result;
-    result.relayHost = relayIp;
     result.relayPort = 443;
     result.path = kOfficialPath;
     const std::string prefix = "kws" + std::to_string(dcId);
     result.domain = prefix + (mediaConnection ? "-1.web.telegram.org" : ".web.telegram.org");
-    result.relayHostFallback = result.domain;
-    result.viaFallback = preferFallback(result);
-    result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
+    // The hostname is both the route owner and the TLS identity. Do not let a
+    // TCP dcOption IP or a hand-maintained relay table leak into WSS routing.
+    result.connectHost = result.domain;
     *route = std::move(result);
     return true;
 }
@@ -240,27 +149,20 @@ bool Socket::open(const struct sockaddr *address, socklen_t addressLength, std::
     }
     state = State::TcpConnecting;
     phase = transport::HandshakePhase::None;
-    failureRecorded = false;
     const int result = ::connect(socketFd, address, addressLength);
     if (result == 0) {
-        const bool connected = finishTcpConnect(diagnostic);
-        if (!connected) {
-            noteAttemptFailed();
-        }
-        return connected;
+        return finishTcpConnect(diagnostic);
     }
     if (errno != EINPROGRESS) {
         setDiagnostic(diagnostic, "wss_tcp_connect_failed");
-        noteAttemptFailed();
         close();
         return false;
     }
     if (LOGS_ENABLED) {
-        DEBUG_D("wss_socket connect relay=%s:%u domain=%s fallback=%d",
+        DEBUG_D("wss_socket connect relay=%s:%u domain=%s",
                 routeConfig.connectHost.c_str(),
                 static_cast<uint32_t>(routeConfig.relayPort),
-                routeConfig.domain.c_str(),
-                routeConfig.viaFallback ? 1 : 0);
+                routeConfig.domain.c_str());
     }
     return true;
 }
@@ -277,7 +179,6 @@ bool Socket::finishTcpConnect(std::string *diagnostic) {
     socklen_t length = sizeof(error);
     if (getsockopt(socketFd, SOL_SOCKET, SO_ERROR, &error, &length) != 0 || error != 0) {
         setDiagnostic(diagnostic, "wss_tcp_connect_failed");
-        noteAttemptFailed();
         return false;
     }
     phase = transport::HandshakePhase::TcpConnected;
@@ -313,7 +214,6 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
     }
     if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
         setDiagnostic(diagnostic, "wss_socket_closed");
-        noteAttemptFailed();
         return false;
     }
     if (state == State::TcpConnecting && (events & (EPOLLIN | EPOLLOUT))) {
@@ -322,16 +222,13 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
         }
     }
     if (state == State::TlsHandshake && !pumpTls(diagnostic)) {
-        noteAttemptFailed();
         return false;
     }
     if ((events & (EPOLLIN | EPOLLOUT)) && !flushPending(diagnostic)) {
-        noteAttemptFailed();
         return false;
     }
     if ((events & EPOLLIN) && (state == State::HttpRead || state == State::Ready)) {
         if (!readIntoBuffer(diagnostic)) {
-            noteAttemptFailed();
             return false;
         }
     }
@@ -340,7 +237,6 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
         if (parseHttpResponse(&parseDiagnostic)) {
             state = State::Ready;
             phase = transport::HandshakePhase::WebSocketReady;
-            noteUpgradeSucceeded();
             if (LOGS_ENABLED) {
                 DEBUG_D("wss_socket upgrade_ok domain=%s", routeConfig.domain.c_str());
             }
@@ -348,7 +244,6 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
             if (diagnostic != nullptr) {
                 *diagnostic = parseDiagnostic;
             }
-            noteAttemptFailed();
             return false;
         }
     }
@@ -654,21 +549,6 @@ const char *Socket::transportName() const {
 }
 
 void Socket::timedOut() {
-    if (!isReady()) {
-        noteAttemptFailed();
-    }
-}
-
-void Socket::noteAttemptFailed() {
-    if (!failureRecorded && state != State::Ready) {
-        failureRecorded = true;
-        recordAttemptFailed(routeConfig);
-    }
-}
-
-void Socket::noteUpgradeSucceeded() {
-    failureRecorded = false;
-    recordUpgradeSucceeded(routeConfig);
 }
 
 void Socket::close() {

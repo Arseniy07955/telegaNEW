@@ -16,6 +16,7 @@ MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 SOCKET_STATE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
+CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 TRANSPORT_H = ROOT / "TMessagesProj/jni/tgnet/transport/TransportSocket.h"
 WSS_H = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.h"
 WSS_CPP = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.cpp"
@@ -48,6 +49,7 @@ def main() -> None:
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
     socket_state_h = text(SOCKET_STATE_H)
+    connection_cpp = text(CONNECTION_CPP)
     transport_h = text(TRANSPORT_H)
     wss_h = text(WSS_H)
     wss_cpp = text(WSS_CPP)
@@ -104,8 +106,9 @@ def main() -> None:
             "official DC2 route must be generated inside the WSS module")
     require('prefix = "kws" + std::to_string(dcId)' in wss_cpp and '"/apiws"' in wss_cpp,
             "WSS module must use the official DC1-DC5 relay catalog")
-    require("relayHostFallback" in wss_cpp and "kFallbackPreferenceTtlMs" in wss_cpp,
-            "WSS module must own relay fallback policy")
+    require("result.connectHost = result.domain" in wss_cpp
+            and "relayHostFallback" not in wss_h,
+            "WSS module must use the official hostname as its route owner")
     for forbidden in ("buildSocks5Greeting", "upstreamSocksEnabled", "customRoute"):
         require(forbidden not in wss_cpp + wss_h,
                 f"WSS socket must not contain proxy/gateway feature {forbidden}")
@@ -122,6 +125,10 @@ def main() -> None:
             and "currentWssTransport->onEvent" in socket_cpp
             and "currentWssTransport->write" in socket_cpp,
             "ConnectionSocket must delegate WSS I/O to the socket module")
+    require("writeTransportPacket" in socket_cpp
+            and "outgoingWssMessages" in socket_cpp
+            and "wssHandshakePrefixSize" in connection_cpp,
+            "WSS must preserve init and MTProto packet message boundaries")
     for forbidden in ("wssSocksHost", "wssFallbackProxy", "WssRouteConfig"):
         require(forbidden not in socket_cpp + socket_h,
                 f"ConnectionSocket must not contain obsolete WSS proxy field {forbidden}")

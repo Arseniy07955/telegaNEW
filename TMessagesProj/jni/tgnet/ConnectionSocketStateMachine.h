@@ -11,8 +11,10 @@
 #include <netinet/in.h>
 #include <stdint.h>
 #include <time.h>
+#include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 #include "mtproxy/MtProxyStartupTimeline.h"
 #include "wss/WssSocket.h"
 
@@ -144,6 +146,11 @@ public:
         bool mediaConnection = false;
         tgnet::wss::Route route;
         std::unique_ptr<tgnet::transport::Socket> transport;
+        // Unlike TCP, WebSocket is message-oriented. Keep complete encrypted
+        // MTProto packets here so ConnectionSocket never destroys their
+        // boundaries by flattening them into outgoingByteStream.
+        std::deque<std::vector<uint8_t>> outgoingMessages;
+        size_t outgoingBytes = 0;
     };
 
     struct AdmissionSubstate {

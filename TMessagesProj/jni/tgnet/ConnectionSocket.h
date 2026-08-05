@@ -70,6 +70,11 @@ protected:
     virtual void onDisconnected(int32_t reason, int32_t error) = 0;
     virtual void onConnected() = 0;
     virtual bool hasPendingRequests() = 0;
+    bool writeTransportPacket(
+            NativeByteBuffer *header,
+            NativeByteBuffer *payload,
+            NativeByteBuffer *padding,
+            uint32_t handshakePrefixSize);
 
     std::string overrideProxyUser = "";
     std::string overrideProxyPassword = "";
@@ -178,6 +183,8 @@ private:
     void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
+    bool flushWssMessages(std::string *diagnostic);
+    void clearWssMessages();
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);
     void scheduleProxyHandshakeAdmissionTimer(uint32_t delay, int32_t mode, bool ipv6);
     void grantProxyHandshakeAdmission(bool ipv6, uint32_t generation, uint32_t delay, int32_t timerMode, const char *reason);
