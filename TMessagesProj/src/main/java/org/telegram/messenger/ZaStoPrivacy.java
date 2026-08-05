@@ -4,12 +4,12 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
- * ZaStoGram privacy/retention overrides.
+ * ZaStoGram local feature overrides.
  *
- * Runtime toggles (default ON) backed by a SharedPreferences file. Feature code reads the static
- * fields directly (e.g. {@code if (ZaStoPrivacy.KEEP_DELETED)}); the settings screen flips them via
- * {@link #set}. Call {@link #load} once at app startup so saved values are applied. Fields stay
- * {@code true} (current behaviour) until/unless the user turns something off.
+ * Runtime toggles backed by a SharedPreferences file. Feature code reads the static
+ * fields directly (e.g. {@code if (ZaStoPrivacy.KEEP_DELETED)}); settings screens flip them via
+ * {@link #set}. Call {@link #load} once at app startup so saved values are applied. Privacy
+ * overrides default to enabled, while opt-in interface changes default to disabled.
  */
 public final class ZaStoPrivacy {
 
@@ -22,6 +22,7 @@ public final class ZaStoPrivacy {
     public static final String KEY_ALLOW_SCREENSHOTS = "ALLOW_SCREENSHOTS";
     public static final String KEY_MUTE_SCREENSHOT_PING = "MUTE_SCREENSHOT_PING";
     public static final String KEY_DISABLE_ADS = "DISABLE_ADS";
+    public static final String KEY_HIDE_ALL_CHATS = "HIDE_ALL_CHATS";
 
     /** Keep messages that the remote side deletes (anti-delete), marked instead of removed. */
     public static boolean KEEP_DELETED = true;
@@ -44,11 +45,14 @@ public final class ZaStoPrivacy {
     /** Disable Telegram/client sponsored messages, sponsored peers, video ads, and promo dialogs. */
     public static boolean DISABLE_ADS = true;
 
+    /** Hide the built-in "All Chats" tab when at least one custom chat folder exists. */
+    public static boolean HIDE_ALL_CHATS = false;
+
     private static SharedPreferences prefs() {
         return ApplicationLoader.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** Apply saved values (default ON). Safe to call early; on any error fields keep their defaults. */
+    /** Apply saved values. Safe to call early; on any error fields keep their defaults. */
     public static void load() {
         try {
             SharedPreferences p = prefs();
@@ -59,6 +63,7 @@ public final class ZaStoPrivacy {
             ALLOW_SCREENSHOTS = p.getBoolean(KEY_ALLOW_SCREENSHOTS, true);
             MUTE_SCREENSHOT_PING = p.getBoolean(KEY_MUTE_SCREENSHOT_PING, true);
             DISABLE_ADS = p.getBoolean(KEY_DISABLE_ADS, true);
+            HIDE_ALL_CHATS = p.getBoolean(KEY_HIDE_ALL_CHATS, false);
         } catch (Exception ignore) {
         }
     }
@@ -72,6 +77,7 @@ public final class ZaStoPrivacy {
             case KEY_ALLOW_SCREENSHOTS: return ALLOW_SCREENSHOTS;
             case KEY_MUTE_SCREENSHOT_PING: return MUTE_SCREENSHOT_PING;
             case KEY_DISABLE_ADS: return DISABLE_ADS;
+            case KEY_HIDE_ALL_CHATS: return HIDE_ALL_CHATS;
         }
         return false;
     }
@@ -85,6 +91,7 @@ public final class ZaStoPrivacy {
             case KEY_ALLOW_SCREENSHOTS: ALLOW_SCREENSHOTS = value; break;
             case KEY_MUTE_SCREENSHOT_PING: MUTE_SCREENSHOT_PING = value; break;
             case KEY_DISABLE_ADS: DISABLE_ADS = value; break;
+            case KEY_HIDE_ALL_CHATS: HIDE_ALL_CHATS = value; break;
             default: return;
         }
         try {
