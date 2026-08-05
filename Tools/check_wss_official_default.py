@@ -44,6 +44,9 @@ def main() -> None:
     require("const bool wssMediaRoute = isMediaConnectionType(connectionType)" in connection_cpp
             and "connectionType & ConnectionTypeUpload" in connection_cpp,
             "download/upload traffic must select media WSS independently of media-only IP options")
+    require("forceProxyLikeInitForWss" not in connection_cpp
+            and "if (useSecret != 0)" in connection_cpp,
+            "direct WSS must not inject the MTProxy-only DC marker")
     require("relayIp == nullptr" in wss_cpp and "testBackend" in wss_cpp,
             "unsupported/test DCs must stay on their normal transport")
     require("supportsCdnFileRedirects()" in connections_java

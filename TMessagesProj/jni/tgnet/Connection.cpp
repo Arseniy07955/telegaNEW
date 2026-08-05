@@ -597,7 +597,6 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     uint32_t packetLength;
 
     uint8_t useSecret = 0;
-    bool forceProxyLikeInitForWss = isCurrentTransportWss();
     if (!firstPacketSent) {
         if (!overrideProxyAddress.empty()) {
             if (!overrideProxySecret.empty()) {
@@ -685,7 +684,11 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
                     bytes[56] = bytes[57] = bytes[58] = bytes[59] = 0xee;
                 }
 
-                if (useSecret != 0 || forceProxyLikeInitForWss) {
+                // The official WebSocket hostname already selects both the
+                // datacenter and the traffic class (kwsN / kwsN-1). Match
+                // Telegram Web and keep bytes 60..61 random for direct WSS;
+                // a DC marker belongs only to MTProxy secret transports.
+                if (useSecret != 0) {
                     int16_t datacenterId;
                     if (isMediaConnection) {
                         if (ConnectionsManager::getInstance(currentDatacenter->instanceNum).testBackend) {
