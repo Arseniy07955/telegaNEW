@@ -7,6 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 CHECKS = [
+    "check_direct_transport_isolation.py",
     "check_connection_socket_state_machine_rewrite.py",
     "check_tgnet_network_type_access.py",
     "check_mtproxy_module_boundary.py",

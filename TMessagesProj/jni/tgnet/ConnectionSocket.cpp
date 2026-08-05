@@ -2419,12 +2419,18 @@ void ConnectionSocket::setTlsState(int8_t next, const char *reason) {
 }
 
 void ConnectionSocket::logTransportSnapshot(const char *event, const char *reason) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
     if (NETWORK_DEBUG_LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport snapshot event=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, event != nullptr ? event : "unknown", reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
 }
 
 void ConnectionSocket::logTransportInvariant(const char *action, const char *reason) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
     if (LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport transport_invariant action=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, action != nullptr ? action : "unknown", reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
@@ -2439,6 +2445,12 @@ bool ConnectionSocket::isTransportStateAllowedForAction(const char *action) {
 }
 
 bool ConnectionSocket::checkTransportActionRequirements(const char *action) {
+    // A disabled proxy means stock tgnet semantics. Direct sockets still use
+    // the syscall wrapper, but none of the MTProxy lifecycle policy can veto
+    // their socket, epoll, notification, receive, or write operations.
+    if (isCurrentDirectConnection()) {
+        return true;
+    }
     const TransportActionRule *rule = findTransportActionRule(action);
     if (rule == nullptr) {
         logTransportInvariant(action, "invalid_state");
@@ -2895,6 +2907,9 @@ bool ConnectionSocket::canSendWssFrame() {
 }
 
 bool ConnectionSocket::canQueueOutboundBuffer(const char *action) {
+    if (isCurrentDirectConnection()) {
+        return true;
+    }
     if (isClosingOrClosedForWrites()) {
         logTransportInvariant(action, "dead_for_writes");
         if (LOGS_ENABLED) {
@@ -3815,8 +3830,10 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
     }
 
-    publishProxyConnectionStage("connect_start");
-    if (LOGS_ENABLED) {
+    if (!isCurrentDirectConnection()) {
+        publishProxyConnectionStage("connect_start");
+    }
+    if (LOGS_ENABLED && !isCurrentDirectConnection()) {
         if (currentTransportWss) {
             DEBUG_D("connection(%p) wss_startup connect_start mode=%d gateway=%d relay=%s:%u domain=%s path=%s target=%s:%u upstream_socks=%s:%u upstream_enabled=%d", this, (int) currentWssRoute.mode, (int) currentWssRoute.gatewayMode, currentWssRoute.relayIp.c_str(), (unsigned int) currentWssRoute.relayPort, currentWssRoute.domain.c_str(), currentWssRoute.path.c_str(), currentAddress.c_str(), (unsigned int) currentPort, currentWssRoute.upstreamSocksAddress.c_str(), (unsigned int) currentWssRoute.upstreamSocksPort, currentWssRoute.upstreamSocksEnabled ? 1 : 0);
         } else {
@@ -3864,12 +3881,15 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         return;
     }
 
-    finishMtProxyPreTcpWait("socket_connect_start");
-    publishProxyConnectionStage("socket_connect_start");
+    const bool directTransport = isCurrentDirectConnection();
+    if (!directTransport) {
+        finishMtProxyPreTcpWait("socket_connect_start");
+        publishProxyConnectionStage("socket_connect_start");
+        setMtProxyTcpConnectAttemptStarted(true, "socket_connect_start");
+        proxyCheckDiagnostic = MtProxyPhase::TcpNotConnected;
+    }
     setTransportState(TransportState::TcpConnecting, "socket_connect_start");
-    setMtProxyTcpConnectAttemptStarted(true, "socket_connect_start");
-    proxyCheckDiagnostic = MtProxyPhase::TcpNotConnected;
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
+    if (LOGS_ENABLED && !directTransport) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
     if (!canStartTcpConnect()) {
         closeSocket(1, -1);
         return;
@@ -3926,6 +3946,14 @@ bool ConnectionSocket::isCurrentMtProxyConnection() {
            && strcmp(currentSecretKind, "none") != 0
            && strcmp(currentSecretKind, "socks") != 0
            && strcmp(currentSecretKind, "wss") != 0;
+}
+
+bool ConnectionSocket::isCurrentDirectConnection() const {
+    return stateMachine.diagnostics.transportMode == TransportMode::Direct;
+}
+
+bool ConnectionSocket::hasMtProxyOverride() const {
+    return !overrideProxyAddress.empty() && !overrideProxySecret.empty();
 }
 
 bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads) {
@@ -4270,6 +4298,9 @@ ConnectionSocket::CloseDiagnosticResolution ConnectionSocket::closeStepResolveDi
 // [close-step 4/8] Observability: the mtproxy_disconnect snapshot and the
 // suppressed/rotate branch log the RESOLVED diagnostic from step 3.
 void ConnectionSocket::closeStepLogDisconnect(int32_t reason, int32_t error, const CloseDiagnosticResolution &resolution) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d is_wss=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d first_plain_sent=%d first_plain_recv=%d tls_frames_completed=%u", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, currentTransportWss ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0, mtproxyFirstPlainDataSentLogged ? 1 : 0, mtproxyFirstPlainDataReceivedLogged ? 1 : 0, mtproxyTlsFrameCompletedCount);
     if (resolution.suppress) {
         proxyCloseDiagnosticSuppressed = true;
@@ -5044,6 +5075,17 @@ int32_t ConnectionSocket::getCurrentNetworkType() const {
 }
 
 bool ConnectionSocket::checkTimeout(int64_t now) {
+    if (isCurrentDirectConnection()) {
+        if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
+            if (!onConnectedSent || hasPendingRequests()) {
+                closeSocket(2, 0);
+                return true;
+            }
+            lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, no requests", this);
+        }
+        return false;
+    }
     if (isCurrentMtProxyConnection()
         && currentSecretIsFakeTls
         && mtproxyFirstTlsFrameSentLogged

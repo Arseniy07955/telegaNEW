@@ -962,17 +962,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void resumeNetworkMaybe() {
-        publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE);
         native_resumeNetwork(currentAccount, true);
-    }
-
-    private void publishProxyActivationContext(ProxyConnectionEvent.Origin origin) {
-        if (!SharedConfig.isProxyEnabled()) {
-            return;
-        }
-        ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin;
-        int activationGeneration = ProxyRuntimeStateStore.noteProxyLifecycleActivation(currentAccount, activationOrigin);
-        native_setProxyActivationContext(currentAccount, activationGeneration, activationOrigin.wireName);
     }
 
     public void updateDcSettings() {
@@ -1065,8 +1055,6 @@ public class ConnectionsManager extends BaseController {
                 getContactsController().checkContacts();
             }
             lastPauseTime = 0;
-            ProxyRuntimeStateStore.noteResumeForeground();
-            publishProxyActivationContext(ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
             native_resumeNetwork(currentAccount, false);
         }
     }
@@ -1077,7 +1065,6 @@ public class ConnectionsManager extends BaseController {
         }
         if (isBackgroundNetworkAlwaysOn()) {
             lastPauseTime = 0;
-            publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE);
             native_resumeNetwork(currentAccount, false);
             return;
         }
@@ -1162,6 +1149,9 @@ public class ConnectionsManager extends BaseController {
     // along with the event, so the Java layer never re-derives hold windows.
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs) {
         AndroidUtilities.runOnUIThread(() -> {
+            if (!SharedConfig.isProxyEnabled()) {
+                return;
+            }
             ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
             ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event);
             String normalizedDiagnostic = event.phase;
@@ -1425,11 +1415,12 @@ public class ConnectionsManager extends BaseController {
             secret = "";
         }
 
+        boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address);
         ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.SETTINGS_CHANGE : origin;
-        int activationGeneration = ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin);
-        MtProxyOptions enabledOptions = enabled && !TextUtils.isEmpty(address) ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
+        int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
+        MtProxyOptions enabledOptions = hasSelectedProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            if (enabled && !TextUtils.isEmpty(address)) {
+            if (hasSelectedProxy) {
                 native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName);
             } else {
                 native_setProxySettings(a, "", 1080, "", "", "", MtProxyOptions.disabled(), activationGeneration, activationOrigin.wireName);

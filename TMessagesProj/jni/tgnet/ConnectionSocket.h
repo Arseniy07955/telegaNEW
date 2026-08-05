@@ -40,6 +40,8 @@ public:
     int32_t getCurrentNetworkType() const;
     bool isDisconnected();
     bool isCurrentMtProxyConnection();
+    bool isCurrentDirectConnection() const;
+    bool hasMtProxyOverride() const;
     void dropConnection();
     void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);

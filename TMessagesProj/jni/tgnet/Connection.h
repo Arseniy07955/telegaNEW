@@ -34,6 +34,7 @@ public:
     void suspendConnection(bool idle);
     bool sendData(NativeByteBuffer *buffer, bool reportAck, bool encrypted);
     bool canSendRequestData(const char *reason);
+    bool isMtProxyRouteActive() const;
     bool hasUsefullData();
     void setHasUsefullData();
     bool allowsCustomPadding();

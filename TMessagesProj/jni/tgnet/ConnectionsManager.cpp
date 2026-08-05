@@ -2592,7 +2592,8 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
         return false;
     }
 
-    if (!connection->canSendRequestData("sendMessages_pre_create")) {
+    const bool mtProxyRouteActive = connection->isMtProxyRouteActive();
+    if (mtProxyRouteActive && !connection->canSendRequestData("sendMessages_pre_create")) {
         if (requeueOnDeadConnection) {
             requeueMessagesForDeadConnection(messages, connection, "sendMessages_pre_create");
         } else {
@@ -2641,7 +2642,7 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     }
                 }
 
-                if (!connection->canSendRequestData("sendMessages_post_create")) {
+                if (mtProxyRouteActive && !connection->canSendRequestData("sendMessages_post_create")) {
                     removeQuickAckMappingForMessages(quickAckId, currentMessages);
                     transportData->reuse();
                     for (uint32_t b = a + 1; b < count; b++) {
@@ -2657,7 +2658,8 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     messages.clear();
                     return sentAny;
                 }
-                if (!connection->sendData(transportData, reportAck, true)) {
+                const bool accepted = connection->sendData(transportData, reportAck, true);
+                if (mtProxyRouteActive && !accepted) {
                     removeQuickAckMappingForMessages(quickAckId, currentMessages);
                     for (uint32_t b = a + 1; b < count; b++) {
                         if (messages[b] != nullptr) {
@@ -2672,7 +2674,10 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     messages.clear();
                     return sentAny;
                 }
-                sentAny = true;
+                // Before MTProxy write gating was introduced, direct sendData
+                // owned rejection/retry itself and returned void. Preserve that
+                // behavior instead of feeding direct requests into proxy requeue.
+                sentAny = accepted || !mtProxyRouteActive;
             } else {
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) connection data is empty", connection);
             }
@@ -2928,7 +2933,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             iter++;
             continue;
         }
-        if (!connection->canSendRequestData("process_running_request")) {
+        if (connection->isMtProxyRouteActive() && !connection->canSendRequestData("process_running_request")) {
             iter++;
             continue;
         }
@@ -3204,7 +3209,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             iter++;
             continue;
         }
-        if (!connection->canSendRequestData("process_queued_request")) {
+        if (connection->isMtProxyRouteActive() && !connection->canSendRequestData("process_queued_request")) {
             iter++;
             continue;
         }
