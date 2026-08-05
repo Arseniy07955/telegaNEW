@@ -117,6 +117,16 @@ def check_gradle(gradle_text: str) -> list[str]:
         if literal not in gradle_text:
             errors.append(f"Standalone Gradle file is missing GitHub version-code contract literal: {literal}")
 
+    for literal in (
+        "ZASTO_RELEASE_KEYSTORE",
+        "ZASTO_RELEASE_STORE_PASSWORD_FILE",
+        "ZASTO_RELEASE_KEY_PASSWORD_FILE",
+        "ZASTO_RELEASE_KEY_ALIAS_FILE",
+        "zastoExternalSigningValues.any { it } && !zastoExternalSigningValues.every { it }",
+    ):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing secure local signing contract literal: {literal}")
+
     if "standaloneBuildFlavors = [\"afat\", \"arm64\", \"armv7\", \"x86\", \"x64\"]" not in gradle_text:
         errors.append("variantFilter must keep an explicit allow-list for afat and the ABI standalone flavors")
 
