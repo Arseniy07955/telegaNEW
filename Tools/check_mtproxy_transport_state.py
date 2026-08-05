@@ -1098,7 +1098,8 @@ def main() -> int:
         and "epoll_ctl_del" in action_table_body
         and "close_native_socket" in action_table_body
         and "releaseProxyHandshakeAdmission" in action_table_body
-        and "writeBufferRaw" in action_table_body,
+        and "writeBufferRaw" in action_table_body
+        and action_table_body.count('{"writeTransportPacket"') >= 5,
         "transport action states must be table-driven through allowedActionStates",
         failures,
     )

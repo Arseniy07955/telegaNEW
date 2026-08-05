@@ -49,6 +49,7 @@ def main() -> None:
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
     socket_state_h = text(SOCKET_STATE_H)
+    socket_state_cpp = text(ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.cpp")
     connection_cpp = text(CONNECTION_CPP)
     transport_h = text(TRANSPORT_H)
     wss_h = text(WSS_H)
@@ -106,9 +107,11 @@ def main() -> None:
             "official DC2 route must be generated inside the WSS module")
     require('prefix = "kws" + std::to_string(dcId)' in wss_cpp and '"/apiws"' in wss_cpp,
             "WSS module must use the official DC1-DC5 relay catalog")
-    require("result.connectHost = result.domain" in wss_cpp
-            and "relayHostFallback" not in wss_h,
-            "WSS module must use the official hostname as its route owner")
+    require("officialRelayIpForDc" in wss_cpp
+            and "result.relayHostFallback = result.domain" in wss_cpp
+            and "result.connectHost = result.viaFallback" in wss_cpp
+            and "bool viaFallback = false" in wss_h,
+            "WSS module must own direct Telegram ingress and hostname fallback routing")
     for forbidden in ("buildSocks5Greeting", "upstreamSocksEnabled", "customRoute"):
         require(forbidden not in wss_cpp + wss_h,
                 f"WSS socket must not contain proxy/gateway feature {forbidden}")
@@ -139,7 +142,8 @@ def main() -> None:
             "WSS diagnostics must identify TCP, TLS, and timeout phases")
     require("writeTransportPacket" in socket_cpp
             and "outgoingWssMessages" in socket_cpp
-            and "wssHandshakePrefixSize" in connection_cpp,
+            and "wssHandshakePrefixSize" in connection_cpp
+            and socket_state_cpp.count('{"writeTransportPacket"') >= 5,
             "WSS must preserve init and MTProto packet message boundaries")
     for forbidden in ("wssSocksHost", "wssFallbackProxy", "WssRouteConfig"):
         require(forbidden not in socket_cpp + socket_h,

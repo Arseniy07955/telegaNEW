@@ -48,9 +48,11 @@ def main() -> None:
             "direct WSS must not inject the MTProxy-only DC marker")
     require("dcId < 1 || dcId > 5" in wss_cpp and "testBackend" in wss_cpp,
             "unsupported/test DCs must stay on their normal transport")
-    require("officialRelayIpForDc" not in wss_cpp
-            and "result.connectHost = result.domain" in wss_cpp,
-            "official WSS must resolve its hostname instead of inheriting a TCP relay IP")
+    require("officialRelayIpForDc" in wss_cpp
+            and 'return "149.154.167.220"' in wss_cpp
+            and "result.relayHostFallback = result.domain" in wss_cpp
+            and "result.viaFallback = preferFallback(result)" in wss_cpp,
+            "official WSS must use direct Telegram ingress with an automatic hostname fallback")
     require("if (isCurrentTransportWss())" in connection_cpp
             and "useSecret = 0" in connection_cpp,
             "direct WSS must not inherit a TCP dcOption or MTProxy secret")
