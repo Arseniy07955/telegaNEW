@@ -13,8 +13,9 @@ ZaStoGram — экспериментальный форк официальног
 - встроенные stable/dev-обновления из GitHub Releases.
 
 Это не новый мессенджер, не VPN и не отдельный протокол. Текущая база —
-Telegram Android `12.9.2`, package id — `org.zastogram.messenger`, минимальная
-версия Android — 7.0 (`minSdk 24`).
+Telegram Android `12.9.2`, минимальная версия Android — 7.0 (`minSdk 24`).
+Stable и dev используют разные package id, поэтому устанавливаются параллельно:
+`org.zastogram.messenger` и `org.zastogram.messenger.dev` соответственно.
 
 ## Скачать
 
@@ -31,7 +32,7 @@ Telegram Android `12.9.2`, package id — `org.zastogram.messenger`, миним�
 | `x86_64` | 64-битные эмуляторы и редкие x86-устройства |
 | `x86` | Старые 32-битные эмуляторы |
 
-Стабильный релиз `1.1.0` собран для всех четырёх ABI, подписан релизным ключом
+Стабильный релиз `1.1.1` собран для всех четырёх ABI, подписан релизным ключом
 ZaStoGram и использует канал обновлений `stable`.
 
 ## Транспортная архитектура
@@ -263,10 +264,10 @@ Chaquopy. Установка:
 В APK встраиваются канал, GitHub tag и build number. Updater выбирает asset по
 `Build.SUPPORTED_ABIS` и не предлагает уже установленный тег.
 
-| Канал | GitHub Release | Логи | Назначение |
-| --- | --- | --- | --- |
-| `stable` | Обычный release с semver-тегом, например `1.1.0` | Выключены по умолчанию | Повседневная установка |
-| `dev` | Prerelease `zastogram-apk-<run>-<attempt>` | MTProxy network logs включены | Диагностика и тестирование |
+| Канал | Package ID / имя | GitHub Release | Логи | Назначение |
+| --- | --- | --- | --- | --- |
+| `stable` | `org.zastogram.messenger` / ZaStoGram | Обычный release с semver-тегом, например `1.1.1` | Выключены по умолчанию | Повседневная установка |
+| `dev` | `org.zastogram.messenger.dev` / ZaStoGram Dev | Prerelease `zastogram-apk-<run>-<attempt>` | MTProxy network logs включены | Диагностика и тестирование |
 
 Android `versionName` следует версии upstream Telegram, а версия ZaStoGram
 задаётся встроенным release tag. `versionCode` включает upstream code, номер
@@ -300,6 +301,16 @@ export ANDROID_HOME=/opt/android-sdk
 export ANDROID_SDK_ROOT=/opt/android-sdk
 
 ./gradlew --build-cache \
+  -PzastoAbiFilter=arm64-v8a \
+  :TMessagesProj_AppStandalone:assembleArm64Standalone
+```
+
+По умолчанию собирается stable. Для параллельно устанавливаемой dev-сборки
+передайте `ZASTO_UPDATE_CHANNEL=dev`; package id, Android label и встроенный
+update-channel переключатся вместе:
+
+```sh
+ZASTO_UPDATE_CHANNEL=dev ./gradlew --build-cache \
   -PzastoAbiFilter=arm64-v8a \
   :TMessagesProj_AppStandalone:assembleArm64Standalone
 ```

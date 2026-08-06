@@ -1,10 +1,13 @@
 apply plugin: 'com.android.application'
 
-def zastoBuildNumberText = (project.findProperty("zastoBuildNumber") ?: System.getenv("ZASTO_BUILD_NUMBER") ?: "0").toString().trim()
-if (!(zastoBuildNumberText ==~ /\d+/) || zastoBuildNumberText.toInteger() > 9999) {
-    throw new GradleException("Invalid ZaStoGram build number '${zastoBuildNumberText}'. Expected an integer from 0 to 9999")
+def zastoReleaseIdentity = rootProject.ext.zastoReleaseIdentity
+def zastoUpdateChannel = zastoReleaseIdentity.updateChannel
+def zastoBuildNumber = zastoReleaseIdentity.buildNumber
+def zastoApplicationId = zastoUpdateChannel == "dev" ? "${APP_PACKAGE}.dev" : APP_PACKAGE
+def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"
+def zastoJavaString = { String value ->
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
-def zastoBuildNumber = zastoBuildNumberText.toInteger()
 
 def zastoReadSigningSecret = { String envName ->
     def secretPath = System.getenv(envName)?.trim()
@@ -64,7 +67,7 @@ android {
     compileSdkVersion 35
     buildToolsVersion '35.0.0'
 
-    defaultConfig.applicationId = APP_PACKAGE
+    defaultConfig.applicationId = zastoApplicationId
 
     sourceSets.main.jniLibs.srcDirs = ['../TMessagesProj/jni/']
 
@@ -213,6 +216,14 @@ android {
         targetSdkVersion 35
         versionName APP_VERSION_NAME
         ndkVersion "27.2.12479018"
+
+        // Stable and dev are independent installed applications. Keep their
+        // package, visible label and updater channel derived from one identity.
+        resValue "string", "ZastoApplicationName", zastoApplicationName
+        buildConfigField "String", "ZASTO_UPDATE_CHANNEL", zastoJavaString(zastoUpdateChannel)
+        buildConfigField "String", "ZASTO_RELEASE_TAG", zastoJavaString(zastoReleaseIdentity.releaseTag)
+        buildConfigField "String", "ZASTO_GITHUB_REPOSITORY", zastoJavaString(zastoReleaseIdentity.githubRepository)
+        buildConfigField "int", "ZASTO_BUILD_NUMBER", zastoBuildNumber.toString()
 
         multiDexEnabled true
 

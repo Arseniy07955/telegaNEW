@@ -7,9 +7,9 @@ import android.text.TextUtils;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BetaUpdate;
-import org.telegram.messenger.BuildConfig;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
+import org.telegram.messenger.web.BuildConfig;
 import org.telegram.ui.ActionBar.AlertDialog;
 
 import java.io.File;

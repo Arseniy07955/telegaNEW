@@ -19,3 +19,27 @@ buildscript {
 repositories {
     google()
 }
+
+// ZaStoGram release identity is a single build-wide input. The standalone
+// application derives both its install identity and updater channel from these
+// values, so a dev APK can never accidentally replace the stable application.
+def zastoUpdateChannelValue = (findProperty("zastoUpdateChannel") ?: System.getenv("ZASTO_UPDATE_CHANNEL") ?: "stable").toString().trim().toLowerCase()
+if (!(zastoUpdateChannelValue in ["dev", "stable"])) {
+    throw new GradleException("Unsupported ZaStoGram update channel '${zastoUpdateChannelValue}'. Expected dev or stable")
+}
+def zastoReleaseTagValue = (findProperty("zastoReleaseTag") ?: System.getenv("ZASTO_RELEASE_TAG") ?: "").toString().trim()
+def zastoGithubRepositoryValue = (findProperty("zastoGithubRepository") ?: System.getenv("ZASTO_GITHUB_REPOSITORY") ?: "youtubediscord/ZaStoGram").toString().trim()
+if (!(zastoGithubRepositoryValue ==~ /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/)) {
+    throw new GradleException("Invalid ZaStoGram GitHub repository '${zastoGithubRepositoryValue}'. Expected owner/repository")
+}
+def zastoBuildNumberValue = (findProperty("zastoBuildNumber") ?: System.getenv("ZASTO_BUILD_NUMBER") ?: "0").toString().trim()
+if (!(zastoBuildNumberValue ==~ /\d+/) || zastoBuildNumberValue.toInteger() > 9999) {
+    throw new GradleException("Invalid ZaStoGram build number '${zastoBuildNumberValue}'. Expected an integer from 0 to 9999")
+}
+
+ext.zastoReleaseIdentity = [
+        updateChannel: zastoUpdateChannelValue,
+        releaseTag: zastoReleaseTagValue,
+        githubRepository: zastoGithubRepositoryValue,
+        buildNumber: zastoBuildNumberValue.toInteger(),
+]

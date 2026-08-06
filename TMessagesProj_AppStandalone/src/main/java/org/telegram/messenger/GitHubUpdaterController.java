@@ -9,6 +9,7 @@ import android.text.TextUtils;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.telegram.messenger.web.BuildConfig;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.web.HttpGetFileTask;
 import org.telegram.ui.web.HttpGetTask;
