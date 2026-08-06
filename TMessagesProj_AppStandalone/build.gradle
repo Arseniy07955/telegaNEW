@@ -195,7 +195,7 @@ android {
         variant.outputs.all { output ->
             outputFileName = "app.apk"
             // Reserve five decimal digits per upstream Telegram version: four for the
-            // GitHub Actions run and one for the ABI. A newer dev prerelease can then
+            // Forgejo Actions run and one for the ABI. A newer dev prerelease can then
             // be installed over the previous prerelease even when APP_VERSION_CODE did
             // not change between workflow runs.
             def abiVersionDigit = variant.productFlavors.get(0).abiVersionCode % 10
@@ -222,7 +222,7 @@ android {
         resValue "string", "ZastoApplicationName", zastoApplicationName
         buildConfigField "String", "ZASTO_UPDATE_CHANNEL", zastoJavaString(zastoUpdateChannel)
         buildConfigField "String", "ZASTO_RELEASE_TAG", zastoJavaString(zastoReleaseIdentity.releaseTag)
-        buildConfigField "String", "ZASTO_GITHUB_REPOSITORY", zastoJavaString(zastoReleaseIdentity.githubRepository)
+        buildConfigField "String", "ZASTO_FORGEJO_REPOSITORY", zastoJavaString(zastoReleaseIdentity.forgejoRepository)
         buildConfigField "int", "ZASTO_BUILD_NUMBER", zastoBuildNumber.toString()
 
         multiDexEnabled true

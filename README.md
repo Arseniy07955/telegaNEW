@@ -10,7 +10,7 @@ ZaStoGram — экспериментальный форк официальног
 - отдельный нативный WSS-транспорт через официальные WebSocket-релеи Telegram;
 - клиентские функции приватности, локальную историю правок и UX-настройки;
 - Python-плагины, совместимые с реализованной частью API exteraGram;
-- встроенные stable/dev-обновления из GitHub Releases.
+- встроенные stable/dev-обновления из Forgejo Releases.
 
 Это не новый мессенджер, не VPN и не отдельный протокол. Текущая база —
 Telegram Android `12.9.2`, минимальная версия Android — 7.0 (`minSdk 24`).
@@ -19,9 +19,9 @@ Stable и dev используют разные package id, поэтому ус�
 
 ## Скачать
 
-- [Последний стабильный релиз](https://github.com/youtubediscord/ZaStoGram/releases/latest)
-- [Все релизы и dev-сборки](https://github.com/youtubediscord/ZaStoGram/releases)
-- [Исходный код](https://github.com/youtubediscord/ZaStoGram)
+- [Последний стабильный релиз](https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram/releases/latest)
+- [Все релизы и dev-сборки](https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram/releases)
+- [Исходный код](https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram)
 
 Выбирайте APK по архитектуре устройства:
 
@@ -261,25 +261,26 @@ Chaquopy. Установка:
 
 ## Обновления и релизы
 
-В APK встраиваются канал, GitHub tag и build number. Updater выбирает asset по
+В APK встраиваются канал, тег Forgejo и номер сборки. Обновлятор выбирает файл по
 `Build.SUPPORTED_ABIS` и не предлагает уже установленный тег.
 
-| Канал | Package ID / имя | GitHub Release | Логи | Назначение |
+| Канал | Package ID / имя | Forgejo Release | Логи | Назначение |
 | --- | --- | --- | --- | --- |
 | `stable` | `org.zastogram.messenger` / ZaStoGram | Обычный release с semver-тегом, например `1.1.1` | Выключены по умолчанию | Повседневная установка |
 | `dev` | `org.zastogram.messenger.dev` / ZaStoGram Dev | Prerelease `zastogram-apk-<run>-<attempt>` | MTProxy network logs включены | Диагностика и тестирование |
 
 Android `versionName` следует версии upstream Telegram, а версия ZaStoGram
 задаётся встроенным release tag. `versionCode` включает upstream code, номер
-GitHub Actions run и ABI-цифру, поэтому новые сборки устанавливаются поверх
+сборки Forgejo Actions и ABI-цифру, поэтому новые сборки устанавливаются поверх
 старых в правильном порядке.
 
-Push в `master` запускает dev-сборку. Ручной запуск workflow
-`Build ZaStoGram APK` позволяет выбрать `stable` и указать semver. Stable
-workflow создаёт обычный GitHub Release, dev workflow — отдельный prerelease.
+Push в `master` запускает фоновую проверочную сборку всех четырёх ABI в Forgejo
+Actions. Публикация stable/dev-релиза остаётся локальным процессом: он собирает
+и проверяет все четыре APK, подписанные восстановленным production-ключом, и
+загружает именно эти файлы в Forgejo Releases.
 
-GitHub Actions использует API id/hash и приватный keystore из repository
-secrets. Если собрать проект локально без своих параметров подписи, будет
+Forgejo Actions использует API id/hash из repository secrets, если они заданы.
+Если собрать проект локально без своих параметров подписи, будет
 использован публичный dummy key из репозитория; такой APK не заменит сборку,
 подписанную production-ключом.
 
@@ -289,7 +290,7 @@ secrets. Если собрать проект локально без своих
 `3.10.2.4988404`.
 
 ```sh
-git clone --recursive https://github.com/youtubediscord/ZaStoGram.git
+git clone --recursive https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram.git
 cd ZaStoGram
 git submodule update --init --recursive --depth=1
 ```
@@ -339,7 +340,7 @@ python3 Tools/check_mtproxy_all.py
 python3 Tools/check_wss_transport_mode.py
 python3 Tools/check_wss_official_default.py
 python3 Tools/check_build_apk_workflow.py
-python3 Tools/check_github_update_contract.py
+python3 Tools/check_forgejo_update_contract.py
 python3 Tools/check_plugin_client_utils_contract.py
 python3 Tools/check_plugin_python_deps.py
 python3 Tools/check_runtime_resilience.py

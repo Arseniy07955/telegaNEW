@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GRADLE_PATH = ROOT / "TMessagesProj_AppStandalone" / "build.gradle"
 LIB_GRADLE_PATH = ROOT / "TMessagesProj" / "build.gradle"
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-apk.yml"
+WORKFLOW_PATH = ROOT / ".forgejo" / "workflows" / "build-apk.yml"
 
 
 ABI_FLAVORS = {
@@ -111,11 +111,11 @@ def check_gradle(gradle_text: str) -> list[str]:
             errors.append(f"Flavor {flavor} must keep the standalone manifest")
 
     if "output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit" not in gradle_text:
-        errors.append("Gradle version-code derivation must include the GitHub build number and ABI digit")
+        errors.append("Gradle version-code derivation must include the Forgejo build number and ABI digit")
 
     for literal in ("ZASTO_BUILD_NUMBER", "zastoBuildNumber", "abiVersionDigit"):
         if literal not in gradle_text:
-            errors.append(f"Standalone Gradle file is missing GitHub version-code contract literal: {literal}")
+            errors.append(f"Standalone Gradle file is missing Forgejo version-code contract literal: {literal}")
 
     for literal in (
         "ZASTO_RELEASE_KEYSTORE",
@@ -185,7 +185,6 @@ def check_workflow(workflow_text: str) -> list[str]:
     errors: list[str] = []
 
     required_literals = [
-        "contents: write",
         "fail-fast: false",
         '":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone"',
         "TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone",
@@ -203,27 +202,15 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_logs_activity_compile_contract.py",
         "python3 Tools/check_runtime_resilience.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
-        "python3 Tools/check_github_update_contract.py",
+        "python3 Tools/check_forgejo_update_contract.py",
         "-PzastoAbiFilter=${{ matrix.abi }}",
-        "release_channel:",
-        "stable_version:",
-        "Stable version must use x.y.z format",
-        "needs: prepare",
-        "ZASTO_UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}",
-        "ZASTO_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}",
+        "ZASTO_UPDATE_CHANNEL: dev",
+        "ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}",
         "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
-        "ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}",
-        "release:",
-        "needs: [prepare, build]",
-        "if: ${{ success() && github.event_name == 'workflow_dispatch' }}",
-        "actions/download-artifact@v4",
-        "pattern: ZaStoGram-standalone-*",
-        "merge-multiple: true",
+        "ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}",
+        "https://data.forgejo.org/forgejo/upload-artifact@v4",
         "github.run_number",
         "github.run_attempt",
-        "gh release create \"$RELEASE_TAG\" dist-release/*.apk",
-        "--prerelease",
-        "--target \"$GITHUB_SHA\"",
     ]
     for literal in required_literals:
         if literal not in workflow_text:
@@ -235,14 +222,8 @@ def check_workflow(workflow_text: str) -> list[str]:
     if re.search(r"(?m)tag(_name)?\s*:\s*(latest|nightly|prerelease|standalone|apk)\s*$", workflow_text):
         errors.append("Workflow must not publish to a shared rolling release tag")
 
-    if "gh release upload" in workflow_text and "--clobber" in workflow_text:
-        errors.append("Workflow must not clobber release assets; each run needs a fresh prerelease tag")
-
-    if re.search(
-        r"(?ms)^  release:\n.*?^    if: \$\{\{ success\(\) \}\}",
-        workflow_text,
-    ):
-        errors.append("Push-triggered background builds must not publish GitHub releases")
+    if "forgejo-release" in workflow_text or "direction: upload" in workflow_text:
+        errors.append("Background Forgejo builds must not publish releases; verified local APKs remain authoritative")
 
     for expected in ABI_FLAVORS.values():
         matrix_literals = [
@@ -250,9 +231,8 @@ def check_workflow(workflow_text: str) -> list[str]:
             f"flavor_dir: {expected['flavor_dir']}",
             f"abi: {expected['abi']}",
             f"artifact: {expected['artifact']}",
-            f"ccache_key: {expected['ccache_key']}",
             f"name: ${{{{ matrix.artifact }}}}",
-            f"path: dist/${{{{ matrix.artifact }}}}.apk",
+            f"dist/${{{{ matrix.artifact }}}}.apk",
         ]
         for literal in matrix_literals:
             if literal not in workflow_text:

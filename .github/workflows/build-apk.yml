@@ -224,7 +224,7 @@ jobs:
         run: python3 Tools/check_zasto_edit_history_contract.py
 
       - name: Check GitHub updater contract
-        run: python3 Tools/check_github_update_contract.py
+        run: python3 Tools/check_forgejo_update_contract.py
 
       - name: Reset ccache stats
         run: ccache -z || true
@@ -247,7 +247,7 @@ jobs:
           ZASTO_UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}
           ZASTO_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           ZASTO_BUILD_NUMBER: ${{ github.run_number }}
-          ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}
+          ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}
         run: |
           chmod +x ./gradlew
           SIGN_ARGS=""

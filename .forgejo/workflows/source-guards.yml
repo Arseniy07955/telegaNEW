@@ -37,7 +37,7 @@ jobs:
             Tools/check_logs_activity_compile_contract.py
             Tools/check_runtime_resilience.py
             Tools/check_zasto_edit_history_contract.py
-            Tools/check_github_update_contract.py
+            Tools/check_forgejo_update_contract.py
           )
           for check in "${checks[@]}"; do
             echo "Running $check"

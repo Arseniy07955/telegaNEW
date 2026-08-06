@@ -20,24 +20,24 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * ZaStoGram Standalone updater backed by public GitHub Releases.
+ * ZaStoGram Standalone updater backed by public Forgejo Releases.
  *
  * The update channel is immutable for a built APK: dev builds accept only
  * prereleases, while stable builds accept only regular releases. Drafts and
  * assets for a different CPU architecture are never offered.
  */
-public final class GitHubUpdaterController {
+public final class ForgejoUpdaterController {
 
     private static final long CHECK_INTERVAL_PAUSED = 24L * 60L * 60L * 1000L;
     private static final long CHECK_INTERVAL = 20L * 60L * 1000L;
     private static final long MAX_APK_BYTES = 512L * 1024L * 1024L;
     private static final Pattern DEV_RELEASE_TAG = Pattern.compile("^zastogram-apk-(\\d+)-(\\d+)$");
 
-    private static GitHubUpdaterController instance;
+    private static ForgejoUpdaterController instance;
 
-    public static GitHubUpdaterController getInstance() {
+    public static ForgejoUpdaterController getInstance() {
         if (instance == null) {
-            instance = new GitHubUpdaterController();
+            instance = new ForgejoUpdaterController();
         }
         return instance;
     }
@@ -64,7 +64,7 @@ public final class GitHubUpdaterController {
     private float downloadingProgress;
     private HttpGetFileTask downloadingTask;
 
-    private GitHubUpdaterController() {
+    private ForgejoUpdaterController() {
         load();
     }
 
@@ -102,7 +102,7 @@ public final class GitHubUpdaterController {
             installedReleaseTag = embeddedReleaseTag;
         } else if (currentVersionCode != previousInstalledVersionCode && !TextUtils.isEmpty(releaseTag)) {
             // App data survives an APK update. This also identifies a release installed
-            // through the updater when an older build did not embed its GitHub tag.
+            // through the updater when an older build did not embed its release tag.
             installedReleaseTag = releaseTag;
         }
 
@@ -199,7 +199,7 @@ public final class GitHubUpdaterController {
             boolean changed = false;
             try {
                 if (result == null) {
-                    throw new IllegalStateException("GitHub returned no response");
+                    throw new IllegalStateException("Forgejo returned no response");
                 }
                 ReleaseCandidate candidate = isDevChannel()
                         ? parseNewestPrerelease(new JSONArray(result))
@@ -215,15 +215,14 @@ public final class GitHubUpdaterController {
                 scheduleNextCheck();
             }
         }))
-                .setHeader("Accept", "application/vnd.github+json")
-                .setHeader("X-GitHub-Api-Version", "2022-11-28")
+                .setHeader("Accept", "application/json")
                 .setHeader("User-Agent", "ZaStoGram-Android-Updater")
                 .execute(url);
     }
 
     private static String getReleasesUrl() {
-        String base = "https://api.github.com/repos/" + BuildConfig.ZASTO_GITHUB_REPOSITORY + "/releases";
-        return isDevChannel() ? base + "?per_page=100" : base + "/latest";
+        String base = "https://git.zapret.moe/api/v1/repos/" + BuildConfig.ZASTO_FORGEJO_REPOSITORY + "/releases";
+        return isDevChannel() ? base + "?limit=100" : base + "/latest";
     }
 
     private ReleaseCandidate parseNewestPrerelease(JSONArray releases) throws Exception {
@@ -243,11 +242,11 @@ public final class GitHubUpdaterController {
     private ReleaseCandidate parseStableRelease(JSONObject release) throws Exception {
         if (release == null || !release.has("tag_name")) {
             if (release != null && "Not Found".equals(release.optString("message", ""))) {
-                // GitHub returns 404 from /releases/latest when a repository has no
+                // Forgejo returns 404 from /releases/latest when a repository has no
                 // regular release yet. For a stable build that simply means no update.
                 return null;
             }
-            throw new IllegalStateException("GitHub latest-release response has no tag_name");
+            throw new IllegalStateException("Forgejo latest-release response has no tag_name");
         }
         return parseRelease(release, false);
     }
@@ -544,19 +543,19 @@ public final class GitHubUpdaterController {
             // Some HTTP stacks report a clean EOF instead of throwing when the
             // connection disappears. This is still a resumable partial file.
             downloadingProgress = getCachedDownloadProgress();
-            FileLog.d("GitHub update download paused at " + (int) (downloadingProgress * 100) + "%");
+            FileLog.d("Forgejo update download paused at " + (int) (downloadingProgress * 100) + "%");
         } else if (downloadedFile != null) {
             downloadingProgress = 0.0f;
             deleteFile(downloadedFile);
-            FileLog.e("Downloaded GitHub release asset is not a valid ZaStoGram APK");
+            FileLog.e("Downloaded Forgejo release asset is not a valid ZaStoGram APK");
         } else {
             // Network failures leave the deterministic .part file in cache. A
             // later attempt, including after app restart, resumes that file.
             downloadingProgress = getCachedDownloadProgress();
             if (downloadingProgress > 0.0f) {
-                FileLog.d("GitHub update download paused at " + (int) (downloadingProgress * 100) + "%");
+                FileLog.d("Forgejo update download paused at " + (int) (downloadingProgress * 100) + "%");
             } else {
-                FileLog.e("Failed to download GitHub release asset");
+                FileLog.e("Failed to download Forgejo release asset");
             }
         }
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);

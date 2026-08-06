@@ -6,11 +6,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTROLLER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/GitHubUpdaterController.java"
+CONTROLLER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ForgejoUpdaterController.java"
 HTTP_GET_FILE_TASK = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/web/HttpGetFileTask.java"
 LOADER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ApplicationLoaderImpl.java"
-LAYOUT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/GitHubUpdateLayout.java"
-ALERT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/GitHubUpdateAlertDialog.java"
+LAYOUT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/ForgejoUpdateLayout.java"
+ALERT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/ForgejoUpdateAlertDialog.java"
 LAUNCH = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java"
 BETA_UPDATE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/BetaUpdate.java"
 LIB_GRADLE = ROOT / "TMessagesProj/build.gradle"
@@ -18,7 +18,7 @@ APP_GRADLE = ROOT / "TMessagesProj_AppStandalone/build.gradle"
 ROOT_GRADLE = ROOT / "build.gradle"
 STANDALONE_MANIFEST = ROOT / "TMessagesProj/config/release/AndroidManifest_standalone.xml"
 GOOGLE_SERVICES = ROOT / "TMessagesProj_AppStandalone/google-services.json"
-WORKFLOW = ROOT / ".github/workflows/build-apk.yml"
+WORKFLOW = ROOT / ".forgejo/workflows/build-apk.yml"
 
 
 def read(path: Path) -> str:
@@ -53,15 +53,16 @@ def main() -> int:
     for literal in (
         "public boolean isCustomUpdate()",
         "return true;",
-        "GitHubUpdaterController.getInstance().checkForUpdate(force, whenDone)",
-        "GitHubUpdaterController.getInstance().downloadUpdate()",
-        "new GitHubUpdateLayout(activity, sideMenuContainer)",
-        "GitHubUpdateAlertDialog.show(context, update)",
+        "ForgejoUpdaterController.getInstance().checkForUpdate(force, whenDone)",
+        "ForgejoUpdaterController.getInstance().downloadUpdate()",
+        "new ForgejoUpdateLayout(activity, sideMenuContainer)",
+        "ForgejoUpdateAlertDialog.show(context, update)",
     ):
         require(loader, literal, "Standalone loader must fully own app updates", failures)
 
     for literal in (
-        'return isDevChannel() ? base + "?per_page=100" : base + "/latest";',
+        'String base = "https://git.zapret.moe/api/v1/repos/" + BuildConfig.ZASTO_FORGEJO_REPOSITORY + "/releases";',
+        'return isDevChannel() ? base + "?limit=100" : base + "/latest";',
         'release.optBoolean("draft", false)',
         'release.optBoolean("prerelease", false) != expectPrerelease',
         'asset.optString("browser_download_url", "")',
@@ -75,10 +76,10 @@ def main() -> int:
         '.setDestFile(partialFile)',
         '.setResumeExistingFile(true)',
         '.setKeepPartialFileOnCancel(true)',
-        'setHeader("X-GitHub-Api-Version", "2022-11-28")',
+        'setHeader("Accept", "application/json")',
         'setHeader("User-Agent", "ZaStoGram-Android-Updater")',
     ):
-        require(controller, literal, "GitHub updater channel/asset safety contract", failures)
+        require(controller, literal, "Forgejo updater channel/asset safety contract", failures)
 
     for literal in (
         'urlConnection.setRequestProperty("Range", "bytes=" + downloadedSize + "-")',
@@ -90,8 +91,8 @@ def main() -> int:
     ):
         require(http_get_file_task, literal, "HTTP file resume contract", failures)
 
-    if "github.token" in controller.lower() or "authorization" in controller.lower():
-        failures.append("Android updater must use the public GitHub Releases API without embedding credentials")
+    if "authorization" in controller.lower():
+        failures.append("Android updater must use the public Forgejo Releases API without embedding credentials")
 
     custom_branch = launch.find("if (ApplicationLoader.applicationLoaderInstance.isCustomUpdate())")
     telegram_request = launch.find("new TLRPC.TL_help_getAppUpdate()", custom_branch)
@@ -113,7 +114,7 @@ def main() -> int:
         'resValue "string", "ZastoApplicationName", zastoApplicationName',
         'buildConfigField "String", "ZASTO_UPDATE_CHANNEL"',
         'buildConfigField "String", "ZASTO_RELEASE_TAG"',
-        'buildConfigField "String", "ZASTO_GITHUB_REPOSITORY"',
+        'buildConfigField "String", "ZASTO_FORGEJO_REPOSITORY"',
         'buildConfigField "int", "ZASTO_BUILD_NUMBER"',
     ):
         require(app_gradle, literal, "Standalone package/update identity", failures)
@@ -124,9 +125,9 @@ def main() -> int:
     require(google_services, '"package_name": "org.zastogram.messenger.dev"', "Dev Google services package mapping", failures)
 
     for text, description in (
-        (controller, "GitHub updater controller"),
-        (layout, "GitHub update drawer UI"),
-        (alert, "GitHub update alert UI"),
+        (controller, "Forgejo updater controller"),
+        (layout, "Forgejo update drawer UI"),
+        (alert, "Forgejo update alert UI"),
     ):
         require(text, "org.telegram.messenger.web.BuildConfig", description, failures)
 
@@ -138,20 +139,18 @@ def main() -> int:
     )
 
     for literal in (
-        "python3 Tools/check_github_update_contract.py",
-        "release_channel:",
-        "stable_version:",
-        "ZASTO_UPDATE_CHANNEL: ${{ needs.prepare.outputs.channel }}",
-        "ZASTO_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}",
+        "python3 Tools/check_forgejo_update_contract.py",
+        "ZASTO_UPDATE_CHANNEL: dev",
+        "ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}",
         "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
-        "ZASTO_GITHUB_REPOSITORY: ${{ github.repository }}",
-        "--prerelease",
+        "ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}",
+        "https://data.forgejo.org/forgejo/upload-artifact@v4",
     ):
-        require(workflow, literal, "GitHub Actions dev/stable release identity", failures)
+        require(workflow, literal, "Forgejo Actions background build identity", failures)
 
     for text, description in (
-        (layout, "GitHub update drawer UI"),
-        (alert, "GitHub update alert UI"),
+        (layout, "Forgejo update drawer UI"),
+        (alert, "Forgejo update alert UI"),
     ):
         require(text, "BuildConfig.ZASTO_UPDATE_CHANNEL", description, failures)
         require(text, '"ZaStoGram.apk"', description, failures)
@@ -165,12 +164,12 @@ def main() -> int:
         require(target, literal, "Release ordering must not depend on Telegram APP_VERSION_CODE", failures)
 
     if failures:
-        print("GitHub updater contract failed:", file=sys.stderr)
+        print("Forgejo updater contract failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
 
-    print("GitHub updater contract passed.")
+    print("Forgejo updater contract passed.")
     return 0
 
 

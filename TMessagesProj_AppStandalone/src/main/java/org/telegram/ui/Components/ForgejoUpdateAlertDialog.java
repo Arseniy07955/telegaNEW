@@ -14,10 +14,10 @@ import org.telegram.ui.ActionBar.AlertDialog;
 
 import java.io.File;
 
-/** A compact release dialog shared by GitHub dev and stable update channels. */
-public final class GitHubUpdateAlertDialog {
+/** A compact release dialog shared by Forgejo dev and stable update channels. */
+public final class ForgejoUpdateAlertDialog {
 
-    private GitHubUpdateAlertDialog() {
+    private ForgejoUpdateAlertDialog() {
     }
 
     public static void show(Context context, BetaUpdate update) {

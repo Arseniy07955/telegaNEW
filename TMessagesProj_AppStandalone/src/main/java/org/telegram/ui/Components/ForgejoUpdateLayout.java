@@ -21,8 +21,8 @@ import org.telegram.ui.IUpdateLayout;
 
 import java.io.File;
 
-/** Navigation-drawer update row for APKs downloaded from GitHub Releases. */
-public class GitHubUpdateLayout extends IUpdateLayout {
+/** Navigation-drawer update row for APKs downloaded from Forgejo Releases. */
+public class ForgejoUpdateLayout extends IUpdateLayout {
 
     private FrameLayout updateLayout;
     private RadialProgress2 updateLayoutIcon;
@@ -31,7 +31,7 @@ public class GitHubUpdateLayout extends IUpdateLayout {
     private final Activity activity;
     private final ViewGroup sideMenuContainer;
 
-    public GitHubUpdateLayout(Activity activity, ViewGroup sideMenuContainer) {
+    public ForgejoUpdateLayout(Activity activity, ViewGroup sideMenuContainer) {
         super(activity, sideMenuContainer);
         this.activity = activity;
         this.sideMenuContainer = sideMenuContainer;

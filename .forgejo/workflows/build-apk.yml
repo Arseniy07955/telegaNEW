@@ -1,0 +1,121 @@
+name: Build four ZaStoGram APKs
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: zastogram-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: android
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: Arm64
+            flavor_dir: arm64
+            abi: arm64-v8a
+            artifact: ZaStoGram-standalone-arm64-v8a
+          - flavor: Armv7
+            flavor_dir: armv7
+            abi: armeabi-v7a
+            artifact: ZaStoGram-standalone-armeabi-v7a
+          - flavor: X86
+            flavor_dir: x86
+            abi: x86
+            artifact: ZaStoGram-standalone-x86
+          - flavor: X64
+            flavor_dir: x64
+            abi: x86_64
+            artifact: ZaStoGram-standalone-x86_64
+    steps:
+      - name: Checkout with submodules
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Restore native compiler cache
+        uses: https://data.forgejo.org/actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: zastogram-ccache-${{ matrix.abi }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'TMessagesProj/build.gradle') }}
+
+      - name: Prepare Android build compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_SDK_ROOT/build-tools"
+          cp "$BT/30.0.3/dx" "$BT/35.0.0/dx"
+          cp "$BT/30.0.3/lib/dx.jar" "$BT/35.0.0/lib/dx.jar"
+
+      - name: Inject optional Telegram API credentials
+        shell: bash
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          set -euo pipefail
+          build_vars=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          if [ -n "$TELEGRAM_API_ID" ] && [ -n "$TELEGRAM_API_HASH" ]; then
+            sed -i "s/public static int APP_ID = .*/public static int APP_ID = ${TELEGRAM_API_ID};/" "$build_vars"
+            sed -i "s#public static String APP_HASH = .*#public static String APP_HASH = \"${TELEGRAM_API_HASH}\";#" "$build_vars"
+          else
+            echo '::warning::Forgejo secrets TELEGRAM_API_ID and TELEGRAM_API_HASH are absent; compile proof uses the public test identity.'
+          fi
+
+      - name: Run release guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Tools/check_mtproxy_all.py
+          python3 Tools/check_plugin_client_utils_contract.py
+          python3 Tools/check_plugin_android_utils_contract.py
+          python3 Tools/check_plugin_text_formatting_contract.py
+          python3 Tools/check_plugin_structured_settings.py
+          python3 Tools/check_plugin_exteragram_ui_bridge.py
+          python3 Tools/check_plugin_java_package_shims.py
+          python3 Tools/check_plugin_python_deps.py
+          python3 Tools/check_plugin_utils_javadoc.py
+          python3 Tools/check_android_string_format_contract.py
+          python3 Tools/check_logs_activity_compile_contract.py
+          python3 Tools/check_runtime_resilience.py
+          python3 Tools/check_zasto_edit_history_contract.py
+          python3 Tools/check_forgejo_update_contract.py
+
+      - name: Build standalone APK for ${{ matrix.abi }}
+        shell: bash
+        env:
+          USE_CCACHE: '1'
+          CCACHE_COMPILERCHECK: content
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          ZASTO_UPDATE_CHANNEL: dev
+          ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}
+          ZASTO_BUILD_NUMBER: ${{ github.run_number }}
+          ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --build-cache --profile -PzastoAbiFilter=${{ matrix.abi }} ":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone" --stacktrace
+          mkdir -p dist
+          apk_dir="TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone"
+          apk="$(find "$apk_dir" -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          cp "$apk" "dist/${{ matrix.artifact }}.apk"
+          sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
+
+      - name: Upload compile proof
+        uses: https://data.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/${{ matrix.artifact }}.apk
+            dist/${{ matrix.artifact }}.apk.sha256
+            **/build/reports/profile/*.html

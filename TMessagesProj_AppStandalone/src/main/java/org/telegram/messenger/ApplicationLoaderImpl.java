@@ -23,8 +23,8 @@ import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.Components.AlertsCreator;
 import org.telegram.ui.Components.BulletinFactory;
-import org.telegram.ui.Components.GitHubUpdateAlertDialog;
-import org.telegram.ui.Components.GitHubUpdateLayout;
+import org.telegram.ui.Components.ForgejoUpdateAlertDialog;
+import org.telegram.ui.Components.ForgejoUpdateLayout;
 import org.telegram.ui.Components.ItemOptions;
 import org.telegram.ui.Components.UpdateAppAlertDialog;
 import org.telegram.ui.IUpdateLayout;
@@ -116,43 +116,43 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void checkUpdate(boolean force, Runnable whenDone) {
-        GitHubUpdaterController.getInstance().checkForUpdate(force, whenDone);
+        ForgejoUpdaterController.getInstance().checkForUpdate(force, whenDone);
     }
 
     @Override
     public BetaUpdate getUpdate() {
-        return GitHubUpdaterController.getInstance().getUpdate();
+        return ForgejoUpdaterController.getInstance().getUpdate();
     }
 
     @Override
     public void downloadUpdate() {
-        GitHubUpdaterController.getInstance().downloadUpdate();
+        ForgejoUpdaterController.getInstance().downloadUpdate();
     }
 
     @Override
     public void cancelDownloadingUpdate() {
-        GitHubUpdaterController.getInstance().cancelDownloadingUpdate();
+        ForgejoUpdaterController.getInstance().cancelDownloadingUpdate();
     }
 
     @Override
     public boolean isDownloadingUpdate() {
-        return GitHubUpdaterController.getInstance().isDownloading();
+        return ForgejoUpdaterController.getInstance().isDownloading();
     }
 
     @Override
     public float getDownloadingUpdateProgress() {
-        return GitHubUpdaterController.getInstance().getDownloadingProgress();
+        return ForgejoUpdaterController.getInstance().getDownloadingProgress();
     }
 
     @Override
     public File getDownloadedUpdateFile() {
-        return GitHubUpdaterController.getInstance().getDownloadedFile();
+        return ForgejoUpdaterController.getInstance().getDownloadedFile();
     }
 
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
         try {
-            GitHubUpdateAlertDialog.show(context, update);
+            ForgejoUpdateAlertDialog.show(context, update);
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -161,7 +161,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public IUpdateLayout takeUpdateLayout(Activity activity, ViewGroup sideMenuContainer) {
-        return new GitHubUpdateLayout(activity, sideMenuContainer);
+        return new ForgejoUpdateLayout(activity, sideMenuContainer);
     }
 
     @Override
