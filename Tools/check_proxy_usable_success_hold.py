@@ -491,6 +491,15 @@ def main() -> int:
         "MTProxy connected status must require a fresh data-path success phase",
         failures,
     )
+    successful_check = method_body(diagnostics_text, "private static boolean hasFreshSuccessfulProxyCheck")
+    require(
+        "proxyInfo.available" in successful_check
+        and "ProxyCheckScheduler.isFresh(proxyInfo)" in successful_check
+        and "OK.equals(normalize(proxyInfo.lastCheckDiagnostic))" in successful_check
+        and "hasFreshSuccessfulProxyCheck(proxyInfo)" in diagnostics_text,
+        "a fresh successful proxy-path check must also satisfy MTProxy connected status",
+        failures,
+    )
 
     rotation_stage = rotation[rotation.find("NotificationCenter.proxyConnectionStageChanged"):]
     require(

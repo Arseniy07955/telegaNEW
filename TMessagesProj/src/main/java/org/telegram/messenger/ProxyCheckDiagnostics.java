@@ -228,14 +228,26 @@ public class ProxyCheckDiagnostics {
         return proxyInfo != null && !TextUtils.isEmpty(proxyInfo.secret);
     }
 
+    private static boolean hasFreshSuccessfulProxyCheck(SharedConfig.ProxyInfo proxyInfo) {
+        return proxyInfo != null
+                && proxyInfo.available
+                && ProxyCheckScheduler.isFresh(proxyInfo)
+                && OK.equals(normalize(proxyInfo.lastCheckDiagnostic));
+    }
+
     private static boolean currentConnectionIsUsableForStatus(SharedConfig.ProxyInfo proxyInfo, int currentConnectionState) {
         boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected
                 || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
         if (!connected) {
             return false;
         }
+        // A connected MTProxy still needs concrete proxy-path evidence. Besides a live socket
+        // receive phase, a fresh successful TL_ping from checkProxy proves the same endpoint is
+        // usable. Generic connection-state updates do not refresh availableCheckTime, so they
+        // cannot satisfy this fallback on their own.
         return !isMtProxy(proxyInfo)
-                || (hasFreshLivePhase(proxyInfo) && isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic));
+                || (hasFreshLivePhase(proxyInfo) && isProxyUsableSuccessPhase(proxyInfo.lastCheckDiagnostic))
+                || hasFreshSuccessfulProxyCheck(proxyInfo);
     }
 
     public static boolean shouldAccelerateProxyRotation(String diagnostic) {

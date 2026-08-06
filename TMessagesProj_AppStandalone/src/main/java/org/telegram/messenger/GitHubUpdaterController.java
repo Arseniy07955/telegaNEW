@@ -47,6 +47,7 @@ public final class GitHubUpdaterController {
     private String changelog;
     private String releaseTag;
     private long releaseId;
+    private long assetId;
     private long updateOrder;
     private String fileUrl;
     private long assetSize;
@@ -86,6 +87,7 @@ public final class GitHubUpdaterController {
         changelog = prefs.getString("changelog", null);
         releaseTag = prefs.getString("releaseTag", null);
         releaseId = prefs.getLong("releaseId", 0L);
+        assetId = prefs.getLong("assetId", 0L);
         updateOrder = prefs.getLong("updateOrder", 0L);
         fileUrl = prefs.getString("fileUrl", null);
         assetSize = prefs.getLong("assetSize", 0L);
@@ -111,6 +113,16 @@ public final class GitHubUpdaterController {
         if (!TextUtils.isEmpty(path) && !new File(path).exists()) {
             path = null;
         }
+        File partialFile = getPartialDownloadFile();
+        if (partialFile != null && partialFile.isFile() && assetSize > 0L) {
+            if (partialFile.length() > assetSize) {
+                deleteFile(partialFile);
+            } else if (TextUtils.isEmpty(path) && partialFile.length() == assetSize && isDownloadedApkValid(partialFile)) {
+                // Recover a download if the process stopped after the last byte was
+                // written but before the completed path reached SharedPreferences.
+                path = partialFile.getAbsolutePath();
+            }
+        }
         if (!TextUtils.isEmpty(releaseTag) && releaseTag.equals(getInstalledReleaseTag())) {
             clearPendingUpdate(true);
         }
@@ -131,6 +143,7 @@ public final class GitHubUpdaterController {
         putString(editor, "installedReleaseTag", installedReleaseTag);
         putInt(editor, "displayVersionCode", displayVersionCode);
         putLong(editor, "releaseId", releaseId);
+        putLong(editor, "assetId", assetId);
         putLong(editor, "updateOrder", updateOrder);
         putLong(editor, "assetSize", assetSize);
         putLong(editor, "lastCheck", lastCheck);
@@ -256,8 +269,9 @@ public final class GitHubUpdaterController {
             return null;
         }
         String downloadUrl = asset.optString("browser_download_url", "");
+        long assetId = asset.optLong("id", 0L);
         long size = asset.optLong("size", 0L);
-        if (!downloadUrl.startsWith("https://") || size <= 0L || size > MAX_APK_BYTES) {
+        if (!downloadUrl.startsWith("https://") || assetId == 0L || size <= 0L || size > MAX_APK_BYTES) {
             return null;
         }
 
@@ -278,6 +292,7 @@ public final class GitHubUpdaterController {
         candidate.changelog = TextUtils.isEmpty(body) ? null : body;
         candidate.releaseTag = tag;
         candidate.releaseId = id;
+        candidate.assetId = assetId;
         candidate.updateOrder = order;
         candidate.fileUrl = downloadUrl;
         candidate.assetSize = size;
@@ -339,9 +354,15 @@ public final class GitHubUpdaterController {
         }
 
         if (candidate.releaseId == releaseId && candidate.releaseTag.equals(releaseTag)) {
+            if ((assetId != 0L && candidate.assetId != assetId)
+                    || candidate.assetSize != assetSize
+                    || !TextUtils.equals(candidate.fileUrl, fileUrl)) {
+                clearDownloadedUpdateFiles();
+            }
             version = candidate.version;
             displayVersionCode = candidate.displayVersionCode;
             changelog = candidate.changelog;
+            assetId = candidate.assetId;
             updateOrder = candidate.updateOrder;
             fileUrl = candidate.fileUrl;
             assetSize = candidate.assetSize;
@@ -354,6 +375,7 @@ public final class GitHubUpdaterController {
         changelog = candidate.changelog;
         releaseTag = candidate.releaseTag;
         releaseId = candidate.releaseId;
+        assetId = candidate.assetId;
         updateOrder = candidate.updateOrder;
         fileUrl = candidate.fileUrl;
         assetSize = candidate.assetSize;
@@ -367,22 +389,51 @@ public final class GitHubUpdaterController {
     }
 
     private void clearPendingUpdate(boolean deleteFile) {
-        if (deleteFile && !TextUtils.isEmpty(path)) {
-            try {
-                new File(path).delete();
-            } catch (Exception e) {
-                FileLog.e(e);
-            }
+        if (deleteFile) {
+            clearDownloadedUpdateFiles();
         }
         version = null;
         displayVersionCode = 0;
         changelog = null;
         releaseTag = null;
         releaseId = 0L;
+        assetId = 0L;
         updateOrder = 0L;
         fileUrl = null;
         assetSize = 0L;
         path = null;
+    }
+
+    private void clearDownloadedUpdateFiles() {
+        File partialFile = getPartialDownloadFile();
+        if (!TextUtils.isEmpty(path)) {
+            File downloadedFile = new File(path);
+            deleteFile(downloadedFile);
+            if (partialFile != null && downloadedFile.equals(partialFile)) {
+                partialFile = null;
+            }
+        }
+        deleteFile(partialFile);
+        path = null;
+    }
+
+    private File getPartialDownloadFile() {
+        if (releaseId == 0L || assetId == 0L) {
+            return null;
+        }
+        return new File(ApplicationLoader.applicationContext.getCacheDir(),
+                "zastogram-update-" + releaseId + "-" + assetId + ".apk.part");
+    }
+
+    private static void deleteFile(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        try {
+            file.delete();
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     private void finishCheck(boolean changed) {
@@ -434,36 +485,79 @@ public final class GitHubUpdaterController {
             return;
         }
 
+        File partialFile = getPartialDownloadFile();
+        if (partialFile == null) {
+            if (!refreshedRelease) {
+                checkForUpdate(true, () -> downloadUpdate(true));
+            }
+            return;
+        }
+        if (partialFile.isFile() && assetSize > 0L && partialFile.length() >= assetSize) {
+            if (partialFile.length() == assetSize && isDownloadedApkValid(partialFile)) {
+                path = partialFile.getAbsolutePath();
+                downloadingProgress = 1.0f;
+                save();
+                NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
+                return;
+            }
+            deleteFile(partialFile);
+        }
+
         downloading = true;
-        downloadingProgress = 0.0f;
+        downloadingProgress = getCachedDownloadProgress();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateLoading);
+        final long requestedReleaseId = releaseId;
+        final long requestedAssetId = assetId;
         downloadingTask = new HttpGetFileTask(
-                downloadedFile -> AndroidUtilities.runOnUIThread(() -> onDownloadFinished(downloadedFile)),
+                downloadedFile -> AndroidUtilities.runOnUIThread(() ->
+                        onDownloadFinished(downloadedFile, requestedReleaseId, requestedAssetId)),
                 progress -> {
+                    if (!downloading || releaseId != requestedReleaseId || assetId != requestedAssetId) {
+                        return;
+                    }
                     downloadingProgress = progress;
                     NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateLoading);
                 }
-        ).setOverrideExtension("apk").setMaxSize(MAX_APK_BYTES);
+        ).setOverrideExtension("apk")
+                .setDestFile(partialFile)
+                .setResumeExistingFile(true)
+                .setKeepPartialFileOnCancel(true)
+                .setMaxSize(Math.min(MAX_APK_BYTES, assetSize));
         downloadingTask.execute(fileUrl);
     }
 
-    private void onDownloadFinished(File downloadedFile) {
+    private void onDownloadFinished(File downloadedFile, long requestedReleaseId, long requestedAssetId) {
         downloading = false;
         downloadingTask = null;
+        if (releaseId != requestedReleaseId || assetId != requestedAssetId) {
+            deleteFile(downloadedFile);
+            downloadingProgress = getCachedDownloadProgress();
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
+            return;
+        }
         if (downloadedFile != null && isDownloadedApkValid(downloadedFile)) {
             path = downloadedFile.getAbsolutePath();
             downloadingProgress = 1.0f;
             save();
-        } else {
+        } else if (downloadedFile != null && downloadedFile.isFile()
+                && assetSize > 0L && downloadedFile.length() < assetSize) {
+            // Some HTTP stacks report a clean EOF instead of throwing when the
+            // connection disappears. This is still a resumable partial file.
+            downloadingProgress = getCachedDownloadProgress();
+            FileLog.d("GitHub update download paused at " + (int) (downloadingProgress * 100) + "%");
+        } else if (downloadedFile != null) {
             downloadingProgress = 0.0f;
-            if (downloadedFile != null) {
-                try {
-                    downloadedFile.delete();
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-            }
+            deleteFile(downloadedFile);
             FileLog.e("Downloaded GitHub release asset is not a valid ZaStoGram APK");
+        } else {
+            // Network failures leave the deterministic .part file in cache. A
+            // later attempt, including after app restart, resumes that file.
+            downloadingProgress = getCachedDownloadProgress();
+            if (downloadingProgress > 0.0f) {
+                FileLog.d("GitHub update download paused at " + (int) (downloadingProgress * 100) + "%");
+            } else {
+                FileLog.e("Failed to download GitHub release asset");
+            }
         }
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
     }
@@ -487,11 +581,11 @@ public final class GitHubUpdaterController {
             return;
         }
         if (downloadingTask != null) {
-            downloadingTask.cancel(false);
+            downloadingTask.cancel(true);
             downloadingTask = null;
         }
         downloading = false;
-        downloadingProgress = 0.0f;
+        downloadingProgress = getCachedDownloadProgress();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
     }
 
@@ -501,6 +595,14 @@ public final class GitHubUpdaterController {
 
     public float getDownloadingProgress() {
         return downloadingProgress;
+    }
+
+    private float getCachedDownloadProgress() {
+        File partialFile = getPartialDownloadFile();
+        if (partialFile == null || !partialFile.isFile() || assetSize <= 0L) {
+            return 0.0f;
+        }
+        return Math.max(0.0f, Math.min(1.0f, (float) partialFile.length() / assetSize));
     }
 
     public File getDownloadedFile() {
@@ -532,6 +634,7 @@ public final class GitHubUpdaterController {
         private String changelog;
         private String releaseTag;
         private long releaseId;
+        private long assetId;
         private long updateOrder;
         private String fileUrl;
         private long assetSize;

@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/GitHubUpdaterController.java"
+HTTP_GET_FILE_TASK = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/web/HttpGetFileTask.java"
 LOADER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ApplicationLoaderImpl.java"
 LAYOUT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/GitHubUpdateLayout.java"
 ALERT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/GitHubUpdateAlertDialog.java"
@@ -35,6 +36,7 @@ def require(text: str, literal: str, description: str, failures: list[str]) -> N
 
 def main() -> int:
     controller = read(CONTROLLER)
+    http_get_file_task = read(HTTP_GET_FILE_TASK)
     loader = read(LOADER)
     layout = read(LAYOUT)
     alert = read(ALERT)
@@ -68,10 +70,25 @@ def main() -> int:
         'candidate.releaseTag.equals(getInstalledReleaseTag())',
         'ApplicationLoader.getApplicationId().equals(packageInfo.packageName)',
         'file.length() != assetSize',
+        'asset.optLong("id", 0L)',
+        '"zastogram-update-" + releaseId + "-" + assetId + ".apk.part"',
+        '.setDestFile(partialFile)',
+        '.setResumeExistingFile(true)',
+        '.setKeepPartialFileOnCancel(true)',
         'setHeader("X-GitHub-Api-Version", "2022-11-28")',
         'setHeader("User-Agent", "ZaStoGram-Android-Updater")',
     ):
         require(controller, literal, "GitHub updater channel/asset safety contract", failures)
+
+    for literal in (
+        'urlConnection.setRequestProperty("Range", "bytes=" + downloadedSize + "-")',
+        'status == HttpURLConnection.HTTP_PARTIAL',
+        'parseContentRangeStart(urlConnection.getHeaderField("Content-Range"))',
+        'new FileOutputStream(file, resuming)',
+        'downloadedSize != totalSize',
+        'keepPartialFileOnCancel',
+    ):
+        require(http_get_file_task, literal, "HTTP file resume contract", failures)
 
     if "github.token" in controller.lower() or "authorization" in controller.lower():
         failures.append("Android updater must use the public GitHub Releases API without embedding credentials")
