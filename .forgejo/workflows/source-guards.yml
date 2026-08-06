@@ -1,0 +1,45 @@
+name: ZaStoGram source guards
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guards:
+    runs-on: android
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate source whitespace
+        run: git diff --check
+
+      - name: Run architecture and compatibility guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          checks=(
+            Tools/check_mtproxy_all.py
+            Tools/check_plugin_client_utils_contract.py
+            Tools/check_plugin_android_utils_contract.py
+            Tools/check_plugin_text_formatting_contract.py
+            Tools/check_plugin_structured_settings.py
+            Tools/check_plugin_exteragram_ui_bridge.py
+            Tools/check_plugin_java_package_shims.py
+            Tools/check_plugin_python_deps.py
+            Tools/check_plugin_utils_javadoc.py
+            Tools/check_android_string_format_contract.py
+            Tools/check_logs_activity_compile_contract.py
+            Tools/check_runtime_resilience.py
+            Tools/check_zasto_edit_history_contract.py
+            Tools/check_github_update_contract.py
+          )
+          for check in "${checks[@]}"; do
+            echo "Running $check"
+            python3 "$check"
+          done
