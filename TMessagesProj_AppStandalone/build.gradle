@@ -5,9 +5,6 @@ def zastoUpdateChannel = zastoReleaseIdentity.updateChannel
 def zastoBuildNumber = zastoReleaseIdentity.buildNumber
 def zastoApplicationId = zastoUpdateChannel == "dev" ? "${APP_PACKAGE}.dev" : APP_PACKAGE
 def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"
-def zastoJavaString = { String value ->
-    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
-}
 
 def zastoReadSigningSecret = { String envName ->
     def secretPath = System.getenv(envName)?.trim()
@@ -220,10 +217,12 @@ android {
         // Stable and dev are independent installed applications. Keep their
         // package, visible label and updater channel derived from one identity.
         resValue "string", "ZastoApplicationName", zastoApplicationName
-        buildConfigField "String", "ZASTO_UPDATE_CHANNEL", zastoJavaString(zastoUpdateChannel)
-        buildConfigField "String", "ZASTO_RELEASE_TAG", zastoJavaString(zastoReleaseIdentity.releaseTag)
-        buildConfigField "String", "ZASTO_FORGEJO_REPOSITORY", zastoJavaString(zastoReleaseIdentity.forgejoRepository)
-        buildConfigField "int", "ZASTO_BUILD_NUMBER", zastoBuildNumber.toString()
+        // Keep identity in resources rather than BuildConfig. BuildConfig always embeds the
+        // changing VERSION_CODE, which would invalidate the expensive R8 output each release.
+        resValue "string", "ZastoUpdateChannel", zastoUpdateChannel
+        resValue "string", "ZastoReleaseTag", zastoReleaseIdentity.releaseTag
+        resValue "string", "ZastoForgejoRepository", zastoReleaseIdentity.forgejoRepository
+        resValue "integer", "ZastoBuildNumber", zastoBuildNumber.toString()
 
         multiDexEnabled true
 
@@ -238,7 +237,7 @@ android {
     }
 
     buildFeatures {
-        buildConfig = true
+        buildConfig = false
     }
     namespace 'org.telegram.messenger.web'
 

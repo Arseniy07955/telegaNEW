@@ -7,9 +7,9 @@ import android.text.TextUtils;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BetaUpdate;
+import org.telegram.messenger.ForgejoUpdaterController;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
-import org.telegram.messenger.web.BuildConfig;
 import org.telegram.ui.ActionBar.AlertDialog;
 
 import java.io.File;
@@ -22,7 +22,7 @@ public final class ForgejoUpdateAlertDialog {
 
     public static void show(Context context, BetaUpdate update) {
         File downloadedFile = ApplicationLoader.applicationLoaderInstance.getDownloadedUpdateFile();
-        String title = LocaleController.getString("dev".equalsIgnoreCase(BuildConfig.ZASTO_UPDATE_CHANNEL)
+        String title = LocaleController.getString(ForgejoUpdaterController.isDevChannel()
                 ? R.string.AppUpdateBeta
                 : R.string.AppUpdate);
         String message = LocaleController.formatString(

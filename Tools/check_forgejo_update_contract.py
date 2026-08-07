@@ -61,7 +61,8 @@ def main() -> int:
         require(loader, literal, "Standalone loader must fully own app updates", failures)
 
     for literal in (
-        'String base = "https://git.zapret.moe/api/v1/repos/" + BuildConfig.ZASTO_FORGEJO_REPOSITORY + "/releases";',
+        'org.telegram.messenger.web.R.string.ZastoForgejoRepository',
+        'String base = "https://git.zapret.moe/api/v1/repos/" + repository + "/releases";',
         'return isDevChannel() ? base + "?limit=100" : base + "/latest";',
         'release.optBoolean("draft", false)',
         'release.optBoolean("prerelease", false) != expectPrerelease',
@@ -112,24 +113,45 @@ def main() -> int:
         'def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"',
         "defaultConfig.applicationId = zastoApplicationId",
         'resValue "string", "ZastoApplicationName", zastoApplicationName',
-        'buildConfigField "String", "ZASTO_UPDATE_CHANNEL"',
-        'buildConfigField "String", "ZASTO_RELEASE_TAG"',
-        'buildConfigField "String", "ZASTO_FORGEJO_REPOSITORY"',
-        'buildConfigField "int", "ZASTO_BUILD_NUMBER"',
+        'resValue "string", "ZastoUpdateChannel", zastoUpdateChannel',
+        'resValue "string", "ZastoReleaseTag", zastoReleaseIdentity.releaseTag',
+        'resValue "string", "ZastoForgejoRepository", zastoReleaseIdentity.forgejoRepository',
+        'resValue "integer", "ZastoBuildNumber", zastoBuildNumber.toString()',
+        "buildConfig = false",
     ):
         require(app_gradle, literal, "Standalone package/update identity", failures)
 
+    for literal in (
+        "getEmbeddedReleaseTag()",
+        "org.telegram.messenger.web.R.string.ZastoReleaseTag",
+        "getEmbeddedBuildNumber()",
+        "org.telegram.messenger.web.R.integer.ZastoBuildNumber",
+    ):
+        require(controller, literal, "Cacheable per-release resource identity", failures)
+
+    release_identity_sources = "\n".join((app_gradle, controller, loader, layout, alert))
+    for forbidden in (
+        'buildConfigField "String", "ZASTO_RELEASE_TAG"',
+        'buildConfigField "int", "ZASTO_BUILD_NUMBER"',
+        'buildConfigField "String", "ZASTO_UPDATE_CHANNEL"',
+        'buildConfigField "String", "ZASTO_FORGEJO_REPOSITORY"',
+        "BuildConfig.ZASTO_RELEASE_TAG",
+        "BuildConfig.ZASTO_BUILD_NUMBER",
+        "BuildConfig.ZASTO_UPDATE_CHANNEL",
+        "BuildConfig.ZASTO_FORGEJO_REPOSITORY",
+    ):
+        if forbidden in release_identity_sources:
+            failures.append(f"Per-release value must not invalidate R8 through BuildConfig: {forbidden!r}")
+
+    if "org.telegram.messenger.web.BuildConfig" in release_identity_sources:
+        failures.append("Standalone release identity must not import the app BuildConfig")
+
     if "ZASTO_UPDATE_CHANNEL" in lib_gradle:
-        failures.append("Update-channel identity belongs to the standalone application BuildConfig, not the shared library")
+        failures.append("Update-channel identity belongs to standalone application resources, not the shared library")
     require(standalone_manifest, 'android:label="@string/ZastoApplicationName"', "Channel-specific Android app label", failures)
     require(google_services, '"package_name": "org.zastogram.messenger.dev"', "Dev Google services package mapping", failures)
 
-    for text, description in (
-        (controller, "Forgejo updater controller"),
-        (layout, "Forgejo update drawer UI"),
-        (alert, "Forgejo update alert UI"),
-    ):
-        require(text, "org.telegram.messenger.web.BuildConfig", description, failures)
+    require(loader, "return getPackageName();", "Standalone package id must not depend on BuildConfig", failures)
 
     require(
         app_gradle,
@@ -155,7 +177,7 @@ def main() -> int:
         (layout, "Forgejo update drawer UI"),
         (alert, "Forgejo update alert UI"),
     ):
-        require(text, "BuildConfig.ZASTO_UPDATE_CHANNEL", description, failures)
+        require(text, "ForgejoUpdaterController.isDevChannel()", description, failures)
         require(text, '"ZaStoGram.apk"', description, failures)
 
     for literal in (

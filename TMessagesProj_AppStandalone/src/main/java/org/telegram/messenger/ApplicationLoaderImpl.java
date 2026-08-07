@@ -14,7 +14,6 @@ import android.view.ViewGroup;
 import androidx.core.content.FileProvider;
 
 import org.json.JSONObject;
-import org.telegram.messenger.web.BuildConfig;
 import org.telegram.messenger.web.R;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TL_smsjobs;
@@ -37,7 +36,7 @@ import java.io.File;
 public class ApplicationLoaderImpl extends ApplicationLoader {
     @Override
     protected String onGetApplicationId() {
-        return BuildConfig.APPLICATION_ID;
+        return getPackageName();
     }
 
     @Override

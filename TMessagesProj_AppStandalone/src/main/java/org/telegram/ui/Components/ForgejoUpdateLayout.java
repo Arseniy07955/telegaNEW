@@ -13,9 +13,9 @@ import android.widget.FrameLayout;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.ForgejoUpdaterController;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
-import org.telegram.messenger.web.BuildConfig;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.IUpdateLayout;
 
@@ -152,7 +152,7 @@ public class ForgejoUpdateLayout extends IUpdateLayout {
     }
 
     private static String getUpdateTitle() {
-        return LocaleController.getString("dev".equalsIgnoreCase(BuildConfig.ZASTO_UPDATE_CHANNEL)
+        return LocaleController.getString(ForgejoUpdaterController.isDevChannel()
                 ? R.string.AppUpdateBeta
                 : R.string.AppUpdate);
     }

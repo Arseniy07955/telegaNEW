@@ -9,7 +9,6 @@ import android.text.TextUtils;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.telegram.messenger.web.BuildConfig;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.web.HttpGetFileTask;
 import org.telegram.ui.web.HttpGetTask;
@@ -72,8 +71,9 @@ public final class ForgejoUpdaterController {
         return ApplicationLoader.applicationContext.getSharedPreferences("forgejo_updater", Activity.MODE_PRIVATE);
     }
 
-    private static boolean isDevChannel() {
-        return "dev".equalsIgnoreCase(BuildConfig.ZASTO_UPDATE_CHANNEL);
+    public static boolean isDevChannel() {
+        return "dev".equalsIgnoreCase(ApplicationLoader.applicationContext.getString(
+                org.telegram.messenger.web.R.string.ZastoUpdateChannel));
     }
 
     private static String getChannel() {
@@ -97,7 +97,7 @@ public final class ForgejoUpdaterController {
 
         int currentVersionCode = getCurrentVersionCode();
         int previousInstalledVersionCode = prefs.getInt("installedVersionCode", currentVersionCode);
-        String embeddedReleaseTag = BuildConfig.ZASTO_RELEASE_TAG;
+        String embeddedReleaseTag = getEmbeddedReleaseTag();
         if (!TextUtils.isEmpty(embeddedReleaseTag)) {
             installedReleaseTag = embeddedReleaseTag;
         } else if (currentVersionCode != previousInstalledVersionCode && !TextUtils.isEmpty(releaseTag)) {
@@ -221,7 +221,9 @@ public final class ForgejoUpdaterController {
     }
 
     private static String getReleasesUrl() {
-        String base = "https://git.zapret.moe/api/v1/repos/" + BuildConfig.ZASTO_FORGEJO_REPOSITORY + "/releases";
+        String repository = ApplicationLoader.applicationContext.getString(
+                org.telegram.messenger.web.R.string.ZastoForgejoRepository);
+        String base = "https://git.zapret.moe/api/v1/repos/" + repository + "/releases";
         return isDevChannel() ? base + "?limit=100" : base + "/latest";
     }
 
@@ -342,7 +344,7 @@ public final class ForgejoUpdaterController {
                 // Fall through to a compact, non-zero display value.
             }
         }
-        return Math.max(1, BuildConfig.ZASTO_BUILD_NUMBER + 1);
+        return Math.max(1, getEmbeddedBuildNumber() + 1);
     }
 
     private boolean applyCandidate(ReleaseCandidate candidate) {
@@ -382,9 +384,18 @@ public final class ForgejoUpdaterController {
     }
 
     private String getInstalledReleaseTag() {
-        return !TextUtils.isEmpty(BuildConfig.ZASTO_RELEASE_TAG)
-                ? BuildConfig.ZASTO_RELEASE_TAG
+        String embeddedReleaseTag = getEmbeddedReleaseTag();
+        return !TextUtils.isEmpty(embeddedReleaseTag)
+                ? embeddedReleaseTag
                 : installedReleaseTag;
+    }
+
+    private static String getEmbeddedReleaseTag() {
+        return ApplicationLoader.applicationContext.getString(org.telegram.messenger.web.R.string.ZastoReleaseTag);
+    }
+
+    private static int getEmbeddedBuildNumber() {
+        return ApplicationLoader.applicationContext.getResources().getInteger(org.telegram.messenger.web.R.integer.ZastoBuildNumber);
     }
 
     private void clearPendingUpdate(boolean deleteFile) {

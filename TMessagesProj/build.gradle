@@ -97,9 +97,19 @@ dependencies {
 
 def isWindows = String.valueOf(DefaultNativePlatform.currentOperatingSystem.toFamilyName() == OperatingSystemFamily.WINDOWS)
 def zastoAllNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
-def zastoRequestedAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
-if (zastoRequestedAbiFilter && !zastoAllNativeAbis.contains(zastoRequestedAbiFilter)) {
-    throw new GradleException("Unsupported zastoAbiFilter '${zastoRequestedAbiFilter}'. Expected one of: ${zastoAllNativeAbis.join(', ')}")
+def zastoSingleAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
+def zastoMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
+if (zastoSingleAbiFilter && zastoMultiAbiFilters) {
+    throw new GradleException("Use only one of zastoAbiFilter or zastoAbiFilters")
+}
+def zastoRequestedAbiFilters = (zastoMultiAbiFilters ?: zastoSingleAbiFilter ?: "")
+        .split(",")
+        .collect { it.trim() }
+        .findAll { !it.isEmpty() }
+        .unique()
+def zastoUnsupportedAbis = zastoRequestedAbiFilters.findAll { !zastoAllNativeAbis.contains(it) }
+if (!zastoUnsupportedAbis.isEmpty()) {
+    throw new GradleException("Unsupported ZaStoGram ABI filters '${zastoUnsupportedAbis.join(', ')}'. Expected only: ${zastoAllNativeAbis.join(', ')}")
 }
 
 android {
@@ -137,20 +147,19 @@ android {
 
         multiDexEnabled true
 
-        // ZaStoGram: CI matrix jobs pass one ABI so the library module does not rebuild
-        // all native outputs before packaging a single-ABI APK. Without the property, keep
-        // the universal fallback for local builds and afat.
+        // CI matrix jobs pass one ABI. Local release builds pass the complete selected ABI
+        // set so shared Java/Python work runs once while native compilation remains filtered.
+        // Without either property, keep the universal fallback for afat and legacy builds.
         ndk {
-            abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))
+            abiFilters(*(zastoRequestedAbiFilters ?: zastoAllNativeAbis))
         }
 
         externalNativeBuild {
             cmake {
                 version '3.10.2'
                 def cmakeArgs = ['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21'] //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
-                // CI speedup: route NDK compiles through ccache so unchanged native sources
-                // (webrtc/openh264/ffmpeg/boringssl) reuse cached object files across runs.
-                // Enabled only when USE_CCACHE=1 (GitHub Actions); local builds are unaffected.
+                // Route NDK compiles through ccache when the caller has configured a persistent
+                // cache. This is used by both Forgejo Actions and local release scripts.
                 if (System.getenv('USE_CCACHE') == '1') {
                     cmakeArgs << '-DCMAKE_C_COMPILER_LAUNCHER=ccache' << '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'
                 }

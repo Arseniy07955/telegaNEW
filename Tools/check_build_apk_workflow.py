@@ -47,6 +47,8 @@ ABI_FLAVORS = {
     },
 }
 
+WORKFLOW_FLAVORS = ("arm64", "armv7", "x86")
+
 
 def read_text(path: Path) -> str:
     try:
@@ -113,7 +115,7 @@ def check_gradle(gradle_text: str) -> list[str]:
     if "output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit" not in gradle_text:
         errors.append("Gradle version-code derivation must include the Forgejo build number and ABI digit")
 
-    for literal in ("ZASTO_BUILD_NUMBER", "zastoBuildNumber", "abiVersionDigit"):
+    for literal in ("ZastoBuildNumber", "zastoBuildNumber", "abiVersionDigit"):
         if literal not in gradle_text:
             errors.append(f"Standalone Gradle file is missing Forgejo version-code contract literal: {literal}")
 
@@ -151,10 +153,15 @@ def check_library_gradle(gradle_text: str) -> list[str]:
 
     required_literals = [
         "zastoAbiFilter",
+        "zastoAbiFilters",
         "zastoAllNativeAbis",
         'project.findProperty("zastoAbiFilter")',
+        'project.findProperty("zastoAbiFilters")',
         'System.getenv("ZASTO_ABI_FILTER")',
-        "abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))",
+        'System.getenv("ZASTO_ABI_FILTERS")',
+        "abiFilters(*(zastoRequestedAbiFilters ?: zastoAllNativeAbis))",
+        "CMAKE_C_COMPILER_LAUNCHER=ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
     for literal in required_literals:
         if literal not in gradle_text:
@@ -211,6 +218,17 @@ def check_workflow(workflow_text: str) -> list[str]:
         "https://data.forgejo.org/forgejo/upload-artifact@v4",
         "forgejo.run_number",
         "forgejo.run_attempt",
+        "forgejo.sha",
+        "path: ~/.cache/ccache",
+        "restore-keys:",
+        "CCACHE_MAXSIZE: 10G",
+        "ccache --show-stats",
+        "Restore Gradle and Python build caches",
+        "~/.gradle/caches",
+        "~/.gradle/wrapper",
+        "TMessagesProj/build/python",
+        "--no-configuration-cache",
+        "--parallel",
     ]
     for literal in required_literals:
         if literal not in workflow_text:
@@ -228,7 +246,8 @@ def check_workflow(workflow_text: str) -> list[str]:
     if "forgejo-release" in workflow_text or "direction: upload" in workflow_text:
         errors.append("Background Forgejo builds must not publish releases; verified local APKs remain authoritative")
 
-    for expected in ABI_FLAVORS.values():
+    for flavor in WORKFLOW_FLAVORS:
+        expected = ABI_FLAVORS[flavor]
         matrix_literals = [
             f"flavor: {expected['gradle_task_flavor']}",
             f"flavor_dir: {expected['flavor_dir']}",
@@ -240,6 +259,9 @@ def check_workflow(workflow_text: str) -> list[str]:
         for literal in matrix_literals:
             if literal not in workflow_text:
                 errors.append(f"Workflow is missing matrix/upload value: {literal}")
+
+    if "ZaStoGram-standalone-x86_64" in workflow_text or "abi: x86_64" in workflow_text:
+        errors.append("Workflow must not spend CI time on the intentionally excluded x86_64 release APK")
 
     return errors
 

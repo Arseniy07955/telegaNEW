@@ -1,4 +1,4 @@
-name: Build four ZaStoGram APKs
+name: Build three ZaStoGram APKs
 
 on:
   push:
@@ -29,10 +29,6 @@ jobs:
             flavor_dir: x86
             abi: x86
             artifact: ZaStoGram-standalone-x86
-          - flavor: X64
-            flavor_dir: x64
-            abi: x86_64
-            artifact: ZaStoGram-standalone-x86_64
     steps:
       - name: Checkout with submodules
         uses: https://data.forgejo.org/actions/checkout@v6
@@ -43,8 +39,21 @@ jobs:
       - name: Restore native compiler cache
         uses: https://data.forgejo.org/actions/cache@v4
         with:
-          path: ~/.ccache
-          key: zastogram-ccache-${{ matrix.abi }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'TMessagesProj/build.gradle') }}
+          path: ~/.cache/ccache
+          key: zastogram-ccache-v2-${{ matrix.abi }}-${{ forgejo.sha }}
+          restore-keys: |
+            zastogram-ccache-v2-${{ matrix.abi }}-
+
+      - name: Restore Gradle and Python build caches
+        uses: https://data.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            TMessagesProj/build/python
+          key: zastogram-gradle-v2-${{ matrix.abi }}-${{ forgejo.sha }}
+          restore-keys: |
+            zastogram-gradle-v2-${{ matrix.abi }}-
 
       - name: Prepare Android build compatibility
         shell: bash
@@ -96,6 +105,9 @@ jobs:
           CCACHE_COMPILERCHECK: content
           CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
           CCACHE_BASEDIR: ${{ forgejo.workspace }}
+          CCACHE_MAXSIZE: 10G
+          CCACHE_COMPRESS: 'true'
+          CCACHE_COMPRESSLEVEL: '6'
           ZASTO_UPDATE_CHANNEL: dev
           ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}
           ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}
@@ -103,13 +115,14 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew --build-cache --profile -PzastoAbiFilter=${{ matrix.abi }} ":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone" --stacktrace
+          ./gradlew --build-cache --no-configuration-cache --parallel --profile -PzastoAbiFilter=${{ matrix.abi }} ":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone" --stacktrace
           mkdir -p dist
           apk_dir="TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone"
           apk="$(find "$apk_dir" -type f -name '*.apk' -print -quit)"
           test -n "$apk"
           cp "$apk" "dist/${{ matrix.artifact }}.apk"
           sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
+          ccache --show-stats
 
       - name: Upload compile proof
         uses: https://data.forgejo.org/forgejo/upload-artifact@v4

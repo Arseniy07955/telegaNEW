@@ -29,11 +29,11 @@ Stable и dev используют разные package id, поэтому ус�
 | --- | --- |
 | `arm64-v8a` | Почти все современные Android-смартфоны и планшеты |
 | `armeabi-v7a` | Старые 32-битные ARM-устройства |
-| `x86_64` | 64-битные эмуляторы и редкие x86-устройства |
 | `x86` | Старые 32-битные эмуляторы |
 
-Стабильный релиз `1.1.1` собран для всех четырёх ABI, подписан релизным ключом
-ZaStoGram и использует канал обновлений `stable`.
+Актуальный стабильный релиз публикуется для этих трёх ABI, подписывается
+релизным ключом ZaStoGram и использует канал обновлений `stable`. Сборка
+`x86_64` поддерживается исходниками, но не публикуется без отдельного запроса.
 
 ## Транспортная архитектура
 
@@ -274,9 +274,9 @@ Android `versionName` следует версии upstream Telegram, а верс
 сборки Forgejo Actions и ABI-цифру, поэтому новые сборки устанавливаются поверх
 старых в правильном порядке.
 
-Push в `master` запускает фоновую проверочную сборку всех четырёх ABI в Forgejo
+Push в `master` запускает фоновую проверочную сборку трёх релизных ABI в Forgejo
 Actions. Публикация stable/dev-релиза остаётся локальным процессом: он собирает
-и проверяет все четыре APK, подписанные восстановленным production-ключом, и
+и проверяет все три APK, подписанные восстановленным production-ключом, и
 загружает именно эти файлы в Forgejo Releases.
 
 Forgejo Actions использует API id/hash из repository secrets, если они заданы.
@@ -287,7 +287,7 @@ Forgejo Actions использует API id/hash из repository secrets, есл
 ## Сборка из исходников
 
 Нужны JDK 17, Android SDK 35, build-tools 35.0.0, NDK `27.2.12479018` и CMake
-`3.10.2.4988404`.
+`3.10.2.4988404`. Для быстрого повторного native-build рекомендуется `ccache`.
 
 ```sh
 git clone --recursive https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram.git
@@ -300,11 +300,21 @@ git submodule update --init --recursive --depth=1
 ```sh
 export ANDROID_HOME=/opt/android-sdk
 export ANDROID_SDK_ROOT=/opt/android-sdk
+export USE_CCACHE=1
+export CCACHE_DIR="$HOME/.cache/zastogram-ccache"
 
 ./gradlew --build-cache \
+  --no-configuration-cache \
+  --parallel \
   -PzastoAbiFilter=arm64-v8a \
   :TMessagesProj_AppStandalone:assembleArm64Standalone
 ```
+
+Gradle task-output cache уже включён для всего проекта. `ccache` повторно
+использует неизменившиеся C/C++-объекты даже после потери каталога `.cxx`.
+Configuration cache намеренно выключен: задачи Chaquopy 16.1 с ним пока
+несовместимы. Локальный релизный процесс также собирает выбранные ABI одним
+запуском Gradle, чтобы не повторять общие Java, Python и resource-задачи.
 
 По умолчанию собирается stable. Для параллельно устанавливаемой dev-сборки
 передайте `ZASTO_UPDATE_CHANNEL=dev`; package id, Android label и встроенный
