@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GRADLE_PATH = ROOT / "TMessagesProj_AppStandalone" / "build.gradle"
 LIB_GRADLE_PATH = ROOT / "TMessagesProj" / "build.gradle"
 WORKFLOW_PATH = ROOT / ".forgejo" / "workflows" / "build-apk.yml"
+APK_ABI_CHECK_PATH = ROOT / "Tools" / "check_apk_single_abi.py"
 
 
 ABI_FLAVORS = {
@@ -135,6 +136,17 @@ def check_gradle(gradle_text: str) -> list[str]:
     if "!names.any { standaloneBuildFlavors.contains(it) }" not in gradle_text:
         errors.append("variantFilter must allow ABI standalone flavors through names.any")
 
+    for literal in (
+        "zastoStandaloneAbiApks",
+        "zastoValidNativeAbis",
+        "java.util.zip.ZipFile",
+        "assets/chaquopy/bootstrap-native/${abi}/",
+        "foreign ABI payload",
+        "finalizedBy verifyTask",
+    ):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing packaged APK ABI guard literal: {literal}")
+
     build_types = find_named_block(gradle_text, "buildTypes")
     standalone_build_type = find_named_block(build_types, "standalone") if build_types else None
     if standalone_build_type is None:
@@ -153,13 +165,16 @@ def check_library_gradle(gradle_text: str) -> list[str]:
 
     required_literals = [
         "zastoAbiFilter",
-        "zastoAbiFilters",
+        "zastoDeprecatedMultiAbiFilters",
         "zastoAllNativeAbis",
+        "zastoStandaloneTaskAbis",
+        "zastoTaskRequestedAbis.size() > 1",
         'project.findProperty("zastoAbiFilter")',
         'project.findProperty("zastoAbiFilters")',
         'System.getenv("ZASTO_ABI_FILTER")',
         'System.getenv("ZASTO_ABI_FILTERS")',
-        "abiFilters(*(zastoRequestedAbiFilters ?: zastoAllNativeAbis))",
+        "zastoSingleAbiFilter != zastoTaskAbiFilter",
+        "abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))",
         "CMAKE_C_COMPILER_LAUNCHER=ccache",
         "CMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
@@ -233,6 +248,7 @@ def check_workflow(workflow_text: str) -> list[str]:
         "TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}",
         "TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}",
         "ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS: '1'",
+        'python3 Tools/check_apk_single_abi.py "$apk" "${{ matrix.abi }}"',
     ]
     for literal in required_literals:
         if literal not in workflow_text:
@@ -270,11 +286,27 @@ def check_workflow(workflow_text: str) -> list[str]:
     return errors
 
 
+def check_apk_abi_checker(checker_text: str) -> list[str]:
+    errors: list[str] = []
+    for literal in (
+        "VALID_ABIS",
+        "assets/chaquopy/bootstrap-native/",
+        "assets/chaquopy/(?:requirements|stdlib)-",
+        "foreign ABI payload is present",
+        "no native libraries found for expected ABI",
+        "no Chaquopy bootstrap runtime found for expected ABI",
+    ):
+        if literal not in checker_text:
+            errors.append(f"APK ABI isolation checker is missing contract literal: {literal}")
+    return errors
+
+
 def main() -> int:
     errors = []
     errors.extend(check_gradle(read_text(GRADLE_PATH)))
     errors.extend(check_library_gradle(read_text(LIB_GRADLE_PATH)))
     errors.extend(check_workflow(read_text(WORKFLOW_PATH)))
+    errors.extend(check_apk_abi_checker(read_text(APK_ABI_CHECK_PATH)))
 
     if errors:
         print("Build APK workflow guard failed:", file=sys.stderr)

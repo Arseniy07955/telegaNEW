@@ -246,4 +246,66 @@ android {
     }
 }
 
+// A second line of defense after packaging: even a custom or abbreviated Gradle
+// invocation must never leave behind an ABI-specific APK containing Chaquopy
+// runtime assets for another architecture.
+def zastoStandaloneAbiApks = [
+        Arm64: [outputDir: "arm64", abi: "arm64-v8a"],
+        Armv7: [outputDir: "armv7", abi: "armeabi-v7a"],
+        X86: [outputDir: "x86", abi: "x86"],
+        X64: [outputDir: "x64", abi: "x86_64"],
+]
+def zastoValidNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
+zastoStandaloneAbiApks.each { flavor, spec ->
+    def assembleTaskName = "assemble${flavor}Standalone"
+    def verifyTask = tasks.register("verify${flavor}StandaloneAbiIsolation") {
+        group = "verification"
+        description = "Rejects foreign native and Chaquopy ABI payload in ${flavor} standalone APK"
+        dependsOn assembleTaskName
+        doLast {
+            File apkFile = file("$buildDir/outputs/apk/${spec.outputDir}/standalone/app.apk")
+            if (!apkFile.isFile()) {
+                throw new GradleException("Standalone APK is missing: ${apkFile}")
+            }
+
+            def foreignEntries = []
+            def hasExpectedNative = false
+            def hasExpectedChaquopy = false
+            def archive = new java.util.zip.ZipFile(apkFile)
+            try {
+                def entries = archive.entries()
+                while (entries.hasMoreElements()) {
+                    def name = entries.nextElement().name
+                    zastoValidNativeAbis.each { abi ->
+                        def nativeEntry = name.startsWith("lib/${abi}/")
+                        def chaquopyBootstrap = name.startsWith("assets/chaquopy/bootstrap-native/${abi}/")
+                        def chaquopyArchive = name == "assets/chaquopy/requirements-${abi}.imy" ||
+                                name == "assets/chaquopy/stdlib-${abi}.imy"
+                        if (nativeEntry || chaquopyBootstrap || chaquopyArchive) {
+                            if (abi != spec.abi) {
+                                foreignEntries.add(name)
+                            } else {
+                                hasExpectedNative |= nativeEntry
+                                hasExpectedChaquopy |= chaquopyBootstrap
+                            }
+                        }
+                    }
+                }
+            } finally {
+                archive.close()
+            }
+
+            if (!foreignEntries.isEmpty() || !hasExpectedNative || !hasExpectedChaquopy) {
+                throw new GradleException(
+                        "APK ABI isolation failed for ${apkFile}: foreign ABI payload=${foreignEntries.take(12)}, " +
+                                "expected native=${hasExpectedNative}, expected Chaquopy=${hasExpectedChaquopy}"
+                )
+            }
+        }
+    }
+    tasks.matching { it.name == assembleTaskName }.configureEach {
+        finalizedBy verifyTask
+    }
+}
+
 apply plugin: 'com.google.gms.google-services'

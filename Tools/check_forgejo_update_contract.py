@@ -19,6 +19,7 @@ ROOT_GRADLE = ROOT / "build.gradle"
 STANDALONE_MANIFEST = ROOT / "TMessagesProj/config/release/AndroidManifest_standalone.xml"
 GOOGLE_SERVICES = ROOT / "TMessagesProj_AppStandalone/google-services.json"
 WORKFLOW = ROOT / ".forgejo/workflows/build-apk.yml"
+PROVIDER_PATHS = ROOT / "TMessagesProj/src/main/res/xml/provider_paths.xml"
 
 
 def read(path: Path) -> str:
@@ -48,6 +49,7 @@ def main() -> int:
     standalone_manifest = read(STANDALONE_MANIFEST)
     google_services = read(GOOGLE_SERVICES)
     workflow = read(WORKFLOW)
+    provider_paths = read(PROVIDER_PATHS)
     failures: list[str] = []
 
     for literal in (
@@ -91,6 +93,13 @@ def main() -> int:
         'keepPartialFileOnCancel',
     ):
         require(http_get_file_task, literal, "HTTP file resume contract", failures)
+
+    require(
+        provider_paths,
+        '<cache-path name="update_cache" path="."/>',
+        "Downloaded update APKs must be shareable with the Android package installer",
+        failures,
+    )
 
     if "authorization" in controller.lower():
         failures.append("Android updater must use the public Forgejo Releases API without embedding credentials")

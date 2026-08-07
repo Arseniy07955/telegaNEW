@@ -93,7 +93,39 @@ dependencies {
 def isWindows = String.valueOf(DefaultNativePlatform.currentOperatingSystem.toFamilyName() == OperatingSystemFamily.WINDOWS)
 def zastoAllNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def zastoSingleAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
-def zastoMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
+def zastoDeprecatedMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
+if (zastoDeprecatedMultiAbiFilters) {
+    throw new GradleException(
+            "Multi-ABI ZaStoGram builds are disabled because Chaquopy would copy every selected ABI runtime into every APK. " +
+                    "Build each standalone ABI in a separate Gradle invocation with -PzastoAbiFilter=<abi>."
+    )
+}
+def zastoStandaloneTaskAbis = [
+        Arm64Standalone: "arm64-v8a",
+        Armv7Standalone: "armeabi-v7a",
+        X86Standalone: "x86",
+        X64Standalone: "x86_64",
+]
+def zastoTaskRequestedAbis = gradle.startParameter.taskNames
+        .collect { taskName ->
+            def taskLeaf = taskName.tokenize(":").last()
+            zastoStandaloneTaskAbis.find { taskMarker, ignored -> taskLeaf.contains(taskMarker) }?.value
+        }
+        .findAll { it != null }
+        .unique()
+if (zastoTaskRequestedAbis.size() > 1) {
+    throw new GradleException(
+            "Building several standalone ABIs in one Gradle invocation is disabled because it produces oversized Chaquopy APKs. " +
+                    "Run one standalone ABI task at a time."
+    )
+}
+def zastoTaskAbiFilter = zastoTaskRequestedAbis ? zastoTaskRequestedAbis.first() : null
+if (zastoSingleAbiFilter && zastoTaskAbiFilter && zastoSingleAbiFilter != zastoTaskAbiFilter) {
+    throw new GradleException(
+            "zastoAbiFilter '${zastoSingleAbiFilter}' does not match the requested standalone task ABI '${zastoTaskAbiFilter}'"
+    )
+}
+def zastoRequestedAbiFilter = zastoSingleAbiFilter ?: zastoTaskAbiFilter
 def zastoTelegramCredentials = new Properties()
 def zastoTelegramCredentialsFile = new File(
         System.getenv("ZASTO_TELEGRAM_API_CREDENTIALS_FILE")
@@ -135,17 +167,8 @@ if (zastoUsesPublishedTestIdentity) {
                     "Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in ${zastoTelegramCredentialsFile.absolutePath} or the environment."
     )
 }
-if (zastoSingleAbiFilter && zastoMultiAbiFilters) {
-    throw new GradleException("Use only one of zastoAbiFilter or zastoAbiFilters")
-}
-def zastoRequestedAbiFilters = (zastoMultiAbiFilters ?: zastoSingleAbiFilter ?: "")
-        .split(",")
-        .collect { it.trim() }
-        .findAll { !it.isEmpty() }
-        .unique()
-def zastoUnsupportedAbis = zastoRequestedAbiFilters.findAll { !zastoAllNativeAbis.contains(it) }
-if (!zastoUnsupportedAbis.isEmpty()) {
-    throw new GradleException("Unsupported ZaStoGram ABI filters '${zastoUnsupportedAbis.join(', ')}'. Expected only: ${zastoAllNativeAbis.join(', ')}")
+if (zastoRequestedAbiFilter && !zastoAllNativeAbis.contains(zastoRequestedAbiFilter)) {
+    throw new GradleException("Unsupported zastoAbiFilter '${zastoRequestedAbiFilter}'. Expected one of: ${zastoAllNativeAbis.join(', ')}")
 }
 
 android {
@@ -186,11 +209,12 @@ android {
 
         multiDexEnabled true
 
-        // CI matrix jobs pass one ABI. Local release builds pass the complete selected ABI
-        // set so shared Java/Python work runs once while native compilation remains filtered.
-        // Without either property, keep the universal fallback for afat and legacy builds.
+        // Every standalone ABI must be configured independently. Chaquopy stores part of its
+        // native runtime under assets, where the app flavor's normal ABI split cannot remove
+        // foreign architectures. Multi-ABI configuration therefore makes every APK oversized.
+        // Without a standalone task or explicit property, keep the universal afat fallback.
         ndk {
-            abiFilters(*(zastoRequestedAbiFilters ?: zastoAllNativeAbis))
+            abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))
         }
 
         externalNativeBuild {

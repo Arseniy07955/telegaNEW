@@ -119,6 +119,7 @@ jobs:
           apk_dir="TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone"
           apk="$(find "$apk_dir" -type f -name '*.apk' -print -quit)"
           test -n "$apk"
+          python3 Tools/check_apk_single_abi.py "$apk" "${{ matrix.abi }}"
           cp "$apk" "dist/${{ matrix.artifact }}.apk"
           sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
           ccache --show-stats
