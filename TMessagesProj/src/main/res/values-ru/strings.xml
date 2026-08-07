@@ -423,4 +423,8 @@
     <string name="EditableForwardUnsupported">Это сообщение нельзя отправить редактируемой копией</string>
     <string name="LoginCodeRequestTimeout">Telegram не ответил на запрос кода. Проверьте подключение прокси и попробуйте ещё раз.</string>
     <string name="LoginApiCredentialsError">Эта сборка не может выполнить вход: в ней используются публичные тестовые API-данные Telegram. Установите официальный релиз ZaStoGram с собственной API-идентификацией.</string>
+    <string name="DoubleTapSetting">Быстрые реакции</string>
+    <string name="DoubleTapPreviewRational">Дважды нажмите на сообщение, чтобы поставить быструю реакцию.</string>
+    <string name="EnableDoubleTapReactions">Быстрые реакции по двойному нажатию</string>
+    <string name="DoubleTapReactionsDisabledInfo">Быстрые реакции по двойному нажатию отключены. Реакцию по-прежнему можно выбрать через меню сообщения.</string>
 </resources>

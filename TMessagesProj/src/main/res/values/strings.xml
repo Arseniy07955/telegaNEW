@@ -5554,7 +5554,9 @@
     <string name="DoubleTapPreviewSenderName">Dino</string>
     <string name="GroupThemePreviewSenderName">Monika</string>
     <string name="DoubleTapSetting">Quick Reactions</string>
-    <string name="DoubleTapPreviewRational">Double tap this message for a quck reaction.</string>
+    <string name="DoubleTapPreviewRational">Double tap this message for a quick reaction.</string>
+    <string name="EnableDoubleTapReactions">Quick reactions on double tap</string>
+    <string name="DoubleTapReactionsDisabledInfo">Quick reactions on double tap are disabled. You can still react from the message menu.</string>
     <string name="ActionReactionsChanged">un1 changed chat reactions \nfrom: %1$s \nto: %2$s</string>
     <string name="ActionReactionsChangedList">un1 changed chat reactions:\n %1$s</string>
     <string name="NobodyViewed">Nobody viewed</string>

@@ -8515,6 +8515,14 @@ public class MediaDataController extends BaseController {
         return null;
     }
 
+    public boolean isDoubleTapReactionEnabled() {
+        return MessagesController.getEmojiSettings(currentAccount).getBoolean("reaction_on_double_tap_enabled", true);
+    }
+
+    public void setDoubleTapReactionEnabled(boolean enabled) {
+        MessagesController.getEmojiSettings(currentAccount).edit().putBoolean("reaction_on_double_tap_enabled", enabled).apply();
+    }
+
     public void setDoubleTapReaction(String reaction) {
         MessagesController.getEmojiSettings(currentAccount).edit().putString("reaction_on_double_tap", reaction).apply();
         doubleTapReaction = reaction;

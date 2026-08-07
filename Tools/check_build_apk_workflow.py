@@ -225,6 +225,7 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_logs_activity_compile_contract.py",
         "python3 Tools/check_runtime_resilience.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
+        "python3 Tools/check_double_tap_reaction_toggle.py",
         "python3 Tools/check_forgejo_update_contract.py",
         "-PzastoAbiFilter=${{ matrix.abi }}",
         "ZASTO_UPDATE_CHANNEL: dev",

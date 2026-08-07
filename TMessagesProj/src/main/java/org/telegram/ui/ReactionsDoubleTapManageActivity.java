@@ -30,6 +30,7 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ActionBar.ThemeDescription;
 import org.telegram.ui.Cells.AvailableReactionCell;
+import org.telegram.ui.Cells.TextCheckCell;
 import org.telegram.ui.Cells.TextInfoPrivacyCell;
 import org.telegram.ui.Cells.ThemePreviewMessagesCell;
 import org.telegram.ui.Components.AnimatedEmojiDrawable;
@@ -48,6 +49,7 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
     private RecyclerListView listView;
     private RecyclerView.Adapter listAdapter;
 
+    int enabledRow;
     int previewRow;
     int infoRow;
     int reactionsStartRow = -1;
@@ -91,7 +93,7 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
         listView.setAdapter(listAdapter = new RecyclerListView.SelectionAdapter() {
             @Override
             public boolean isEnabled(RecyclerView.ViewHolder holder) {
-                return holder.getItemViewType() == 3 || holder.getItemViewType() == 2;
+                return holder.getItemViewType() == 5 || holder.getItemViewType() == 3 || holder.getItemViewType() == 2;
             }
 
             @NonNull
@@ -129,6 +131,10 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
                         };
                         view.setTag(RecyclerListView.TAG_NOT_SECTION);
                         break;
+                    case 5:
+                        view = new TextCheckCell(context);
+                        view.setBackgroundColor(getThemedColor(Theme.key_windowBackgroundWhite));
+                        break;
                     default:
                     case 1: {
                         view = new AvailableReactionCell(context, true, true);
@@ -141,10 +147,22 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
             @Override
             public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
                 switch (getItemViewType(position)) {
+                    case 2:
+                        ((TextInfoPrivacyCell) holder.itemView).setText(LocaleController.getString(
+                                MediaDataController.getInstance(currentAccount).isDoubleTapReactionEnabled()
+                                        ? R.string.DoubleTapPreviewRational
+                                        : R.string.DoubleTapReactionsDisabledInfo));
+                        break;
                     case 1:
                         AvailableReactionCell reactionCell = (AvailableReactionCell) holder.itemView;
                         TLRPC.TL_availableReaction react = getAvailableReactions().get(position - reactionsStartRow);
                         reactionCell.bind(react, react.reaction.contains(MediaDataController.getInstance(currentAccount).getDoubleTapReaction()), currentAccount);
+                        break;
+                    case 5:
+                        ((TextCheckCell) holder.itemView).setTextAndCheck(
+                                LocaleController.getString(R.string.EnableDoubleTapReactions),
+                                MediaDataController.getInstance(currentAccount).isDoubleTapReactionEnabled(),
+                                true);
                         break;
                 }
             }
@@ -156,6 +174,9 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
 
             @Override
             public int getItemViewType(int position) {
+                if (position == enabledRow) {
+                    return 5;
+                }
                 if (position == previewRow) {
                     return 0;
                 }
@@ -172,7 +193,13 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
             }
         });
         listView.setOnItemClickListener((view, position) -> {
-            if (view instanceof AvailableReactionCell) {
+            if (view instanceof TextCheckCell && position == enabledRow) {
+                MediaDataController mediaDataController = MediaDataController.getInstance(currentAccount);
+                boolean enabled = !mediaDataController.isDoubleTapReactionEnabled();
+                mediaDataController.setDoubleTapReactionEnabled(enabled);
+                ((TextCheckCell) view).setChecked(enabled);
+                listAdapter.notifyItemChanged(infoRow);
+            } else if (view instanceof AvailableReactionCell) {
                 AvailableReactionCell cell = (AvailableReactionCell) view;
                 if (cell.locked && !getUserConfig().isPremium()) {
                     showDialog(new PremiumFeatureBottomSheet(this, PremiumPreviewFragment.PREMIUM_FEATURE_REACTIONS, true));
@@ -341,6 +368,7 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
 
     private void updateRows() {
         rowCount = 0;
+        enabledRow = rowCount++;
         previewRow = rowCount++;
         infoRow = rowCount++;
         if (UserConfig.getInstance(currentAccount).isPremium()) {

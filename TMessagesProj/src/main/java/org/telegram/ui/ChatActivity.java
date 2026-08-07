@@ -1870,7 +1870,7 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public boolean hasDoubleTap(View view, int position) {
-            if (chatMode == MODE_QUICK_REPLIES) return false;
+            if (chatMode == MODE_QUICK_REPLIES || !getMediaDataController().isDoubleTapReactionEnabled()) return false;
             String reactionStringSetting = getMediaDataController().getDoubleTapReaction();
             TLRPC.TL_availableReaction reaction = getMediaDataController().getReactionsMap().get(reactionStringSetting);
             if (reaction == null && (reactionStringSetting == null || !reactionStringSetting.startsWith("animated_"))) {
@@ -1896,7 +1896,7 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public void onDoubleTap(View view, int position, float x, float y) {
-            if (getParentActivity() == null || isSecretChat() || isInScheduleMode() || isInPreviewMode() || chatMode == MODE_QUICK_REPLIES) {
+            if (!getMediaDataController().isDoubleTapReactionEnabled() || getParentActivity() == null || isSecretChat() || isInScheduleMode() || isInPreviewMode() || chatMode == MODE_QUICK_REPLIES) {
                 return;
             }
             MessageObject messageObject;

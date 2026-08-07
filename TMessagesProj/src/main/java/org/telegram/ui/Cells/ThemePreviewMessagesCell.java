@@ -293,15 +293,16 @@ public class ThemePreviewMessagesCell extends LinearLayout {
                 private GestureDetector gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
                     @Override
                     public boolean onDoubleTap(MotionEvent e) {
-                        if (type != TYPE_REACTIONS_DOUBLE_TAP || MediaDataController.getInstance(currentAccount).getDoubleTapReaction() == null) {
+                        MediaDataController mediaDataController = MediaDataController.getInstance(currentAccount);
+                        if (type != TYPE_REACTIONS_DOUBLE_TAP || !mediaDataController.isDoubleTapReactionEnabled() || mediaDataController.getDoubleTapReaction() == null) {
                             return false;
                         }
-                        boolean added = getMessageObject().selectReaction(ReactionsLayoutInBubble.VisibleReaction.fromEmojicon(MediaDataController.getInstance(currentAccount).getDoubleTapReaction()), false, false);
+                        boolean added = getMessageObject().selectReaction(ReactionsLayoutInBubble.VisibleReaction.fromEmojicon(mediaDataController.getDoubleTapReaction()), false, false);
                         setMessageObject(getMessageObject(), null, false, false, false);
                         requestLayout();
                         ReactionsEffectOverlay.removeCurrent(false);
                         if (added) {
-                            ReactionsEffectOverlay.show(fragment, null, cells[1], null, e.getX(), e.getY(), ReactionsLayoutInBubble.VisibleReaction.fromEmojicon(MediaDataController.getInstance(currentAccount).getDoubleTapReaction()), currentAccount, ReactionsEffectOverlay.LONG_ANIMATION);
+                            ReactionsEffectOverlay.show(fragment, null, cells[1], null, e.getX(), e.getY(), ReactionsLayoutInBubble.VisibleReaction.fromEmojicon(mediaDataController.getDoubleTapReaction()), currentAccount, ReactionsEffectOverlay.LONG_ANIMATION);
                             ReactionsEffectOverlay.startAnimation();
                         }
                         getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
