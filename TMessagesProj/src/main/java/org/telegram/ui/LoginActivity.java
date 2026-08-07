@@ -1730,7 +1730,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             .show();
                 });
             }
-        }, ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors
+                | ConnectionsManager.RequestFlagWithoutLogin
+                | ConnectionsManager.RequestFlagTryDifferentDc
+                | ConnectionsManager.RequestFlagEnableUnauthorized);
     }
 
     public static String errorString(Throwable e) {
@@ -1771,10 +1774,15 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             return;
         }
         if (res.type instanceof TLRPC.TL_auth_sentCodeTypeFirebaseSms && !res.type.verifiedFirebase && !isRequestingFirebaseSms) {
+            needShowProgress(0);
+            isRequestingFirebaseSms = true;
+            if (!BuildVars.USE_FIREBASE_SMS_AUTH) {
+                FileLog.d("{FIREBASE_SMS_AUTH_DISABLED} Requesting a non-Firebase login code");
+                resendCodeFromSafetyNet(params, res, "FIREBASE_SMS_AUTH_DISABLED");
+                return;
+            }
             if (PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices()) {
                 TLRPC.TL_auth_sentCodeTypeFirebaseSms r = (TLRPC.TL_auth_sentCodeTypeFirebaseSms) res.type;
-                needShowProgress(0);
-                isRequestingFirebaseSms = true;
                 final String phone = params.getString("phoneFormated");
                 if (r.play_integrity_nonce != null) {
                     IntegrityManager integrityManager = IntegrityManagerFactory.create(getContext());
@@ -3082,7 +3090,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             TLRPC.TL_codeSettings settings = new TLRPC.TL_codeSettings();
             settings.allow_flashcall = simcardAvailable && allowCall && allowCancelCall && allowReadCallLog;
             settings.allow_missed_call = simcardAvailable && allowCall;
-            settings.allow_app_hash = settings.allow_firebase = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
+            boolean firebaseSmsAvailable = BuildVars.USE_FIREBASE_SMS_AUTH
+                    && PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
+            settings.allow_app_hash = firebaseSmsAvailable;
+            settings.allow_firebase = firebaseSmsAvailable;
             if (forceDisableSafetyNet || TextUtils.isEmpty(BuildVars.SAFETYNET_KEY)) {
                 settings.allow_firebase = false;
             }

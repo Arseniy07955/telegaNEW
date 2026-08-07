@@ -34,6 +34,7 @@ jobs:
             Tools/check_plugin_python_deps.py
             Tools/check_plugin_utils_javadoc.py
             Tools/check_android_string_format_contract.py
+            Tools/check_login_firebase_independence.py
             Tools/check_logs_activity_compile_contract.py
             Tools/check_runtime_resilience.py
             Tools/check_zasto_edit_history_contract.py
