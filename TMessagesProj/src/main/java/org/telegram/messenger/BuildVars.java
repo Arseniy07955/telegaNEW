@@ -29,9 +29,11 @@ public class BuildVars {
     public static int APP_ID = 4;
     public static String APP_HASH = "014b35b6184100b085b0d0572f9b5103";
 
-    // ZaStoGram login must work without Google Play Services. Keep Firebase SMS,
-    // Play Integrity, SafetyNet, and SMS Retriever out of the phone auth flow.
+    // ZaStoGram login must work without Google Play Services or reliable telephony APIs.
+    // Keep Firebase SMS, Play Integrity, SafetyNet, SMS Retriever, SIM autofill, and
+    // call-based verification out of the phone auth flow.
     public static final boolean USE_FIREBASE_SMS_AUTH = false;
+    public static final boolean USE_PHONE_LOGIN_TELEPHONY = false;
     public static String SAFETYNET_KEY = "";
     public static String PLAYSTORE_APP_URL = "https://play.google.com/store/apps/details?id=org.telegram.messenger";
     public static String HUAWEI_STORE_URL = "https://appgallery.huawei.com/app/C101184875";
@@ -43,7 +45,7 @@ public class BuildVars {
     public static boolean IS_BILLING_UNAVAILABLE = false;
 
     // works only on official app ids, disable on your forks
-    public static boolean SUPPORTS_PASSKEYS = true;
+    public static boolean SUPPORTS_PASSKEYS = false;
 
     static {
         if (ApplicationLoader.applicationContext != null) {

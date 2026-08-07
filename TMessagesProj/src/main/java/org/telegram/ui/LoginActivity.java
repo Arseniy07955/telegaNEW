@@ -2872,9 +2872,11 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 return;
             }
 
-            TelephonyManager tm = (TelephonyManager) ApplicationLoader.applicationContext.getSystemService(Context.TELEPHONY_SERVICE);
-            if (BuildVars.DEBUG_VERSION) {
-                FileLog.d("sim status = " + tm.getSimState());
+            if (BuildVars.DEBUG_VERSION && BuildVars.USE_PHONE_LOGIN_TELEPHONY) {
+                TelephonyManager tm = (TelephonyManager) ApplicationLoader.applicationContext.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    FileLog.d("sim status = " + tm.getSimState());
+                }
             }
             if (codeField.length() == 0 || phoneField.length() == 0) {
                 onFieldError(phoneOutlineView, false);
@@ -2914,7 +2916,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                         currentDoneType = DONE_TYPE_FLOATING;
                         needShowProgress(0, false);
 
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && AndroidUtilities.isSimAvailable()) {
+                        if (BuildVars.USE_PHONE_LOGIN_TELEPHONY
+                                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                                && AndroidUtilities.isSimAvailable()) {
                             boolean allowCall = getParentActivity().checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
                             boolean allowCancelCall = getParentActivity().checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
                             boolean allowReadCallLog = Build.VERSION.SDK_INT < Build.VERSION_CODES.P || getParentActivity().checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
@@ -2989,7 +2993,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 phoneNumberConfirmView.dismiss();
             }
 
-            boolean simcardAvailable = AndroidUtilities.isSimAvailable();
+            boolean simcardAvailable = BuildVars.USE_PHONE_LOGIN_TELEPHONY
+                    && AndroidUtilities.isSimAvailable();
             boolean allowCall = true;
             boolean allowCancelCall = true;
             boolean allowReadCallLog = true;
@@ -3090,13 +3095,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             TLRPC.TL_codeSettings settings = new TLRPC.TL_codeSettings();
             settings.allow_flashcall = simcardAvailable && allowCall && allowCancelCall && allowReadCallLog;
             settings.allow_missed_call = simcardAvailable && allowCall;
-            boolean firebaseSmsAvailable = BuildVars.USE_FIREBASE_SMS_AUTH
-                    && PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
-            settings.allow_app_hash = firebaseSmsAvailable;
-            settings.allow_firebase = firebaseSmsAvailable;
-            if (forceDisableSafetyNet || TextUtils.isEmpty(BuildVars.SAFETYNET_KEY)) {
-                settings.allow_firebase = false;
-            }
+            settings.allow_app_hash = false;
+            settings.allow_firebase = false;
 
             ArrayList<TLRPC.TL_auth_authorization> loginTokens = AuthTokensHelper.getSavedLogInTokens();
             if (loginTokens != null) {
@@ -3264,6 +3264,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         private boolean numberFilled;
         public void fillNumber() {
             if (numberFilled || activityMode != MODE_LOGIN) {
+                return;
+            }
+            if (!BuildVars.USE_PHONE_LOGIN_TELEPHONY) {
+                numberFilled = true;
                 return;
             }
             try {

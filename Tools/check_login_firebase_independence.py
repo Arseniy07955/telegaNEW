@@ -29,6 +29,14 @@ def main() -> int:
         "Firebase SMS auth must remain compile-time disabled",
     )
     require(
+        "public static final boolean USE_PHONE_LOGIN_TELEPHONY = false;" in build_vars,
+        "phone login must remain independent from SIM and call APIs",
+    )
+    require(
+        "public static boolean SUPPORTS_PASSKEYS = false;" in build_vars,
+        "automatic platform passkey login must remain disabled on the fork",
+    )
+    require(
         'public static String SAFETYNET_KEY = "";' in build_vars,
         "the fork must not ship the official SafetyNet key",
     )
@@ -36,15 +44,44 @@ def main() -> int:
         'public static String getSmsHash() {\n        return "";' in build_vars,
         "the fork must not advertise an SMS Retriever hash from another package/signature",
     )
+    phone_send_start = login.find("TLRPC.TL_codeSettings settings = new TLRPC.TL_codeSettings();")
+    phone_send_end = login.find("TLObject req;", phone_send_start)
+    phone_send = login[phone_send_start:phone_send_end]
     require(
-        "boolean firebaseSmsAvailable = BuildVars.USE_FIREBASE_SMS_AUTH" in login
-        and "settings.allow_app_hash = firebaseSmsAvailable;" in login
-        and "settings.allow_firebase = firebaseSmsAvailable;" in login,
-        "auth.sendCode flags must be gated by the disabled fork capability",
+        phone_send_start >= 0
+        and phone_send_end > phone_send_start
+        and "settings.allow_app_hash = false;" in phone_send
+        and "settings.allow_firebase = false;" in phone_send
+        and "PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices()"
+        not in phone_send,
+        "auth.sendCode must not consult or advertise Firebase services",
     )
     require(
         "settings.allow_app_hash = settings.allow_firebase =" not in login,
         "Google Services availability alone must never enable Firebase phone auth",
+    )
+    confirm_start = login.find("private void onConfirm(PhoneNumberConfirmView confirmView)")
+    confirm_end = login.find("confirmView.animateProgress", confirm_start)
+    confirm_block = login[confirm_start:confirm_end]
+    require(
+        confirm_start >= 0
+        and confirm_end > confirm_start
+        and "if (BuildVars.USE_PHONE_LOGIN_TELEPHONY" in confirm_block,
+        "phone confirmation must not enter the runtime-permission flow",
+    )
+    require(
+        "boolean simcardAvailable = BuildVars.USE_PHONE_LOGIN_TELEPHONY" in login,
+        "call and missed-call verification must remain disabled",
+    )
+    fill_number_start = login.find("public void fillNumber()")
+    fill_number_end = login.find("try {", fill_number_start)
+    fill_number_prefix = login[fill_number_start:fill_number_end]
+    require(
+        fill_number_start >= 0
+        and fill_number_end > fill_number_start
+        and "if (!BuildVars.USE_PHONE_LOGIN_TELEPHONY)" in fill_number_prefix
+        and "numberFilled = true;" in fill_number_prefix,
+        "login must skip SIM-number autofill and its permission prompt",
     )
     launch_auth_start = launch.find("TL_account.sendConfirmPhoneCode req")
     launch_auth_end = launch.find("Bundle params = new Bundle();", launch_auth_start)
