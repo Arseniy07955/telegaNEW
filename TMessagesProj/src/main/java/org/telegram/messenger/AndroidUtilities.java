@@ -2434,7 +2434,7 @@ public class AndroidUtilities {
         synchronized (smsLock) {
             waitingForSms = value;
             try {
-                if (waitingForSms) {
+                if (waitingForSms && BuildVars.USE_SMS_RETRIEVER) {
                     SmsRetrieverClient client = SmsRetriever.getClient(ApplicationLoader.applicationContext);
                     Task<Void> task = client.startSmsRetriever();
                     task.addOnSuccessListener(aVoid -> {

@@ -33,6 +33,8 @@ public class BuildVars {
     // Keep Firebase SMS, Play Integrity, SafetyNet, SMS Retriever, SIM autofill, and
     // call-based verification out of the phone auth flow.
     public static final boolean USE_FIREBASE_SMS_AUTH = false;
+    public static final boolean USE_PLAY_INTEGRITY = false;
+    public static final boolean USE_SMS_RETRIEVER = false;
     public static final boolean USE_PHONE_LOGIN_TELEPHONY = false;
     public static String SAFETYNET_KEY = "";
     public static String PLAYSTORE_APP_URL = "https://play.google.com/store/apps/details?id=org.telegram.messenger";

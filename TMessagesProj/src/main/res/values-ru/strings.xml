@@ -421,4 +421,5 @@
     <string name="EditableForwardEditCaption">Изменить подпись</string>
     <string name="EditableForwardCaptionHint">Подпись</string>
     <string name="EditableForwardUnsupported">Это сообщение нельзя отправить редактируемой копией</string>
+    <string name="LoginCodeRequestTimeout">Telegram не ответил на запрос кода. Проверьте подключение прокси и попробуйте ещё раз.</string>
 </resources>

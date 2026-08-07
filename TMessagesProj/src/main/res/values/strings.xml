@@ -11339,4 +11339,5 @@
     <string name="ArticleAIPrompt">Write a prompt...</string>
     <string name="ArticleAIGenerate">Generate</string>
     <string name="ArticleAIAddToPage">Add to Page</string>
+    <string name="LoginCodeRequestTimeout">Telegram did not answer the code request. Check the proxy connection and try again.</string>
 </resources>

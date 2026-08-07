@@ -8,6 +8,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_VARS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java"
 LOGIN_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/LoginActivity.java"
+CONNECTIONS_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
+ANDROID_UTILITIES = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java"
+ANDROID_MANIFEST = ROOT / "TMessagesProj/src/main/AndroidManifest.xml"
+MODULE_GRADLE = ROOT / "TMessagesProj/build.gradle"
+CAPTCHA_CONTROLLER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/CaptchaController.java"
 LAUNCH_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java"
 PASSPORT_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/PassportActivity.java"
 
@@ -21,6 +26,11 @@ def require(condition: bool, message: str) -> None:
 def main() -> int:
     build_vars = BUILD_VARS.read_text(encoding="utf-8")
     login = LOGIN_ACTIVITY.read_text(encoding="utf-8")
+    connections_manager = CONNECTIONS_MANAGER.read_text(encoding="utf-8")
+    android_utilities = ANDROID_UTILITIES.read_text(encoding="utf-8")
+    android_manifest = ANDROID_MANIFEST.read_text(encoding="utf-8")
+    module_gradle = MODULE_GRADLE.read_text(encoding="utf-8")
+    captcha_controller = CAPTCHA_CONTROLLER.read_text(encoding="utf-8")
     launch = LAUNCH_ACTIVITY.read_text(encoding="utf-8")
     passport = PASSPORT_ACTIVITY.read_text(encoding="utf-8")
 
@@ -31,6 +41,27 @@ def main() -> int:
     require(
         "public static final boolean USE_PHONE_LOGIN_TELEPHONY = false;" in build_vars,
         "phone login must remain independent from SIM and call APIs",
+    )
+    require(
+        "public static final boolean USE_PLAY_INTEGRITY = false;" in build_vars
+        and "com.google.android.play:integrity" not in module_gradle
+        and "com.google.android.gms:play-services-safetynet" not in module_gradle
+        and "com.google.android.recaptcha:recaptcha" not in module_gradle
+        and "IntegrityManagerFactory" not in connections_manager
+        and "PLAYINTEGRITY_FAILED_EXCEPTION_DISABLED" in connections_manager,
+        "Play Integrity and SafetyNet must be absent while native auth requests always receive a fallback",
+    )
+    require(
+        "com.google.android.recaptcha" not in captcha_controller
+        and "RECAPTCHA_FAILED_DISABLED" in captcha_controller
+        and "native_receivedCaptchaResult" in captcha_controller,
+        "Google reCAPTCHA must resume native requests through the no-GMS fallback",
+    )
+    require(
+        "public static final boolean USE_SMS_RETRIEVER = false;" in build_vars
+        and "waitingForSms && BuildVars.USE_SMS_RETRIEVER" in android_utilities
+        and 'android:name=".SmsReceiver"\n            android:enabled="false"' in android_manifest,
+        "SMS Retriever must not be started or exposed as a broadcast receiver",
     )
     require(
         "public static boolean SUPPORTS_PASSKEYS = false;" in build_vars,
@@ -73,6 +104,12 @@ def main() -> int:
         "boolean simcardAvailable = BuildVars.USE_PHONE_LOGIN_TELEPHONY" in login,
         "call and missed-call verification must remain disabled",
     )
+    require(
+        "PHONE_CODE_REQUEST_TIMEOUT_MS" in login
+        and "schedulePhoneCodeRequestTimeout(reqId);" in login
+        and "cancelPhoneCodeRequestTimeout();\n                nextPressed = false;" in login,
+        "auth.sendCode must have a bounded UI watchdog and cancel it on completion",
+    )
     fill_number_start = login.find("public void fillNumber()")
     fill_number_end = login.find("try {", fill_number_start)
     fill_number_prefix = login[fill_number_start:fill_number_end]
@@ -114,26 +151,31 @@ def main() -> int:
         "if (res.type instanceof TLRPC.TL_auth_sentCodeTypeFirebaseSms"
     )
     disabled_fallback = login.find(
-        "if (!BuildVars.USE_FIREBASE_SMS_AUTH)", firebase_response
+        'FileLog.d("{FIREBASE_SMS_AUTH_DISABLED}', firebase_response
     )
-    services_check = login.find(
-        "if (PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices())",
-        firebase_response,
+    firebase_block_end = login.find(
+        'params.putString("phoneHash", res.phone_code_hash);', firebase_response
     )
     require(
         firebase_response >= 0
         and disabled_fallback > firebase_response
-        and services_check > disabled_fallback,
-        "an unexpected Firebase response must fall back before touching Google Services",
+        and firebase_block_end > disabled_fallback,
+        "an unexpected Firebase response must immediately fall back",
     )
-    fallback_block = login[disabled_fallback:services_check]
+    fallback_block = login[disabled_fallback:firebase_block_end]
     require(
         "isRequestingFirebaseSms = true;" in login[firebase_response:disabled_fallback]
-        and 'resendCodeFromSafetyNet(params, res, "FIREBASE_SMS_AUTH_DISABLED");'
+        and 'resendCodeWithoutFirebase(params, res, "FIREBASE_SMS_AUTH_DISABLED");'
         in fallback_block,
         "the non-Firebase resend path must be active instead of returning as a no-op",
     )
-    resend_start = login.find("private void resendCodeFromSafetyNet(")
+    require(
+        "IntegrityManagerFactory" not in fallback_block
+        and "SafetyNet.getClient" not in fallback_block
+        and "GooglePushListenerServiceProvider" not in fallback_block,
+        "the Firebase response fallback must contain no Google Services path",
+    )
+    resend_start = login.find("private void resendCodeWithoutFirebase(")
     resend_end = login.find("public static String errorString(", resend_start)
     resend_body = login[resend_start:resend_end]
     require(

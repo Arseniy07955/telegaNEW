@@ -421,6 +421,7 @@
 
         <receiver
             android:name=".SmsReceiver"
+            android:enabled="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.auth.api.phone.SMS_RETRIEVED"/>
