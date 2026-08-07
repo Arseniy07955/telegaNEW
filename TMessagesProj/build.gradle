@@ -94,6 +94,47 @@ def isWindows = String.valueOf(DefaultNativePlatform.currentOperatingSystem.toFa
 def zastoAllNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def zastoSingleAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
 def zastoMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
+def zastoTelegramCredentials = new Properties()
+def zastoTelegramCredentialsFile = new File(
+        System.getenv("ZASTO_TELEGRAM_API_CREDENTIALS_FILE")
+                ?: new File(System.getProperty("user.home"), ".config/zastogram-signing/telegram-api.properties").absolutePath
+)
+if (zastoTelegramCredentialsFile.isFile()) {
+    zastoTelegramCredentialsFile.withInputStream { zastoTelegramCredentials.load(it) }
+}
+def zastoTelegramApiIdConfigured = (
+        project.findProperty("telegramApiId")
+                ?: System.getenv("TELEGRAM_API_ID")
+                ?: zastoTelegramCredentials.getProperty("TELEGRAM_API_ID")
+)?.toString()?.trim()
+def zastoTelegramApiHashConfigured = (
+        project.findProperty("telegramApiHash")
+                ?: System.getenv("TELEGRAM_API_HASH")
+                ?: zastoTelegramCredentials.getProperty("TELEGRAM_API_HASH")
+)?.toString()?.trim()
+def zastoRequireTelegramApiCredentials = (System.getenv("ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS") ?: "0") == "1"
+def zastoTelegramBuildScope = zastoRequireTelegramApiCredentials ? "release" : "Android"
+if (zastoTelegramApiIdConfigured == null || zastoTelegramApiHashConfigured == null) {
+    throw new GradleException(
+            "Refusing ZaStoGram ${zastoTelegramBuildScope} build without its own Telegram API identity. " +
+                    "Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in ${zastoTelegramCredentialsFile.absolutePath} or the environment."
+    )
+}
+if (!(zastoTelegramApiIdConfigured ==~ /[1-9][0-9]*/)) {
+    throw new GradleException("TELEGRAM_API_ID must be a positive decimal integer")
+}
+if (!(zastoTelegramApiHashConfigured ==~ /[0-9a-fA-F]{32}/)) {
+    throw new GradleException("TELEGRAM_API_HASH must contain exactly 32 hexadecimal characters")
+}
+def zastoTelegramApiId = zastoTelegramApiIdConfigured
+def zastoTelegramApiHash = zastoTelegramApiHashConfigured
+def zastoUsesPublishedTestIdentity = zastoTelegramApiId == "4" || zastoTelegramApiHash.equalsIgnoreCase("014b35b6184100b085b0d0572f9b5103")
+if (zastoUsesPublishedTestIdentity) {
+    throw new GradleException(
+            "Refusing ZaStoGram ${zastoTelegramBuildScope} build with Telegram's published test API identity. " +
+                    "Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in ${zastoTelegramCredentialsFile.absolutePath} or the environment."
+    )
+}
 if (zastoSingleAbiFilter && zastoMultiAbiFilters) {
     throw new GradleException("Use only one of zastoAbiFilter or zastoAbiFilters")
 }
@@ -137,6 +178,9 @@ android {
     defaultConfig {
         minSdkVersion 24 // ZaStoGram: Chaquopy (plugin engine) requires minSdk >= 24
         targetSdkVersion 35
+
+        buildConfigField "int", "TELEGRAM_API_ID", zastoTelegramApiId
+        buildConfigField "String", "TELEGRAM_API_HASH", "\"${zastoTelegramApiHash.toLowerCase()}\""
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 

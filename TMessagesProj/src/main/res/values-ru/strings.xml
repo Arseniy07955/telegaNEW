@@ -422,4 +422,5 @@
     <string name="EditableForwardCaptionHint">Подпись</string>
     <string name="EditableForwardUnsupported">Это сообщение нельзя отправить редактируемой копией</string>
     <string name="LoginCodeRequestTimeout">Telegram не ответил на запрос кода. Проверьте подключение прокси и попробуйте ещё раз.</string>
+    <string name="LoginApiCredentialsError">Эта сборка не может выполнить вход: в ней используются публичные тестовые API-данные Telegram. Установите официальный релиз ZaStoGram с собственной API-идентификацией.</string>
 </resources>

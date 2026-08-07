@@ -279,10 +279,12 @@ Actions. Публикация stable/dev-релиза остаётся лока�
 и проверяет все три APK, подписанные восстановленным production-ключом, и
 загружает именно эти файлы в Forgejo Releases.
 
-Forgejo Actions использует API id/hash из repository secrets, если они заданы.
-Если собрать проект локально без своих параметров подписи, будет
-использован публичный dummy key из репозитория; такой APK не заменит сборку,
-подписанную production-ключом.
+Forgejo Actions требует отдельные Telegram API credentials из repository
+secrets `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`. Публичная тестовая пара
+Telegram запрещена релизным guard: без обоих secrets проверочная сборка
+завершится ошибкой. Если собрать проект локально без своих параметров подписи,
+будет использован публичный dummy key из репозитория; такой APK не заменит
+сборку, подписанную production-ключом.
 
 ## Сборка из исходников
 
@@ -294,6 +296,20 @@ git clone --recursive https://git.zapret.moe/zapretdiscordyoutube/ZaStoGram.git
 cd ZaStoGram
 git submodule update --init --recursive --depth=1
 ```
+
+Получите собственные `api_id` и `api_hash` в
+[Telegram API development tools](https://my.telegram.org/apps) и сохраните их
+вне репозитория:
+
+```properties
+# ~/.config/zastogram-signing/telegram-api.properties (права 0600)
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
+```
+
+Вместо файла можно передать `TELEGRAM_API_ID` и `TELEGRAM_API_HASH` через
+окружение. Локальный релиз и Forgejo Actions отказываются собирать APK с
+публичной тестовой парой Telegram.
 
 Пример локальной arm64-сборки:
 
@@ -332,9 +348,9 @@ APK появится в:
 TMessagesProj_AppStandalone/build/outputs/apk/arm64/standalone/app.apk
 ```
 
-Перед собственной публикацией замените Telegram `api_id`/`api_hash` и
-release keystore. Не публикуйте APK с тестовым `APP_ID=4` или публичным dummy
-key как официальный релиз своего форка.
+Перед собственной публикацией настройте отдельные Telegram `api_id`/`api_hash`
+и release keystore. Не публикуйте APK с чужой API-парой или публичным dummy key
+как официальный релиз своего форка.
 
 ## Проверки
 

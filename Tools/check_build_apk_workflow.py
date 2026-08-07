@@ -206,6 +206,7 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_plugin_python_deps.py",
         "python3 Tools/check_plugin_utils_javadoc.py",
         "python3 Tools/check_android_string_format_contract.py",
+        "python3 Tools/check_telegram_api_identity.py",
         "python3 Tools/check_logs_activity_compile_contract.py",
         "python3 Tools/check_runtime_resilience.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
@@ -229,6 +230,9 @@ def check_workflow(workflow_text: str) -> list[str]:
         "TMessagesProj/build/python",
         "--no-configuration-cache",
         "--parallel",
+        "TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}",
+        "TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}",
+        "ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS: '1'",
     ]
     for literal in required_literals:
         if literal not in workflow_text:

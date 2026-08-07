@@ -3160,6 +3160,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString("CodeExpired", R.string.CodeExpired));
                         } else if (error.text.startsWith("FLOOD_WAIT")) {
                             needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString("FloodWait", R.string.FloodWait));
+                        } else if (error.text.contains("API_ID_PUBLISHED_FLOOD")) {
+                            needShowAlert(
+                                    getString(R.string.RestorePasswordNoEmailTitle),
+                                    getString(R.string.LoginApiCredentialsError));
                         } else if (error.code != -1000) {
                             AlertsCreator.processError(currentAccount, error, LoginActivity.this, req, phoneInputData.phoneNumber);
                         }

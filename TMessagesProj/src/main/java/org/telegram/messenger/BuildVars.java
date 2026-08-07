@@ -26,8 +26,8 @@ public class BuildVars {
     public static boolean NO_SCOPED_STORAGE = Build.VERSION.SDK_INT <= 29;
     public static String BUILD_VERSION_STRING = BuildConfig.BUILD_VERSION_STRING;
 
-    public static int APP_ID = 4;
-    public static String APP_HASH = "014b35b6184100b085b0d0572f9b5103";
+    public static int APP_ID = BuildConfig.TELEGRAM_API_ID;
+    public static String APP_HASH = BuildConfig.TELEGRAM_API_HASH;
 
     // ZaStoGram login must work without Google Play Services or reliable telephony APIs.
     // Keep Firebase SMS, Play Integrity, SafetyNet, SMS Retriever, SIM autofill, and
