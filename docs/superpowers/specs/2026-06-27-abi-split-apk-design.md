@@ -1,8 +1,8 @@
-# ABI-Split APK GitHub Actions Design
+# ABI-Split APK Forgejo Actions Design
 
 ## Goal
 
-Build four installable ZaStoGram standalone APKs in GitHub Actions instead of one fat `afat` APK:
+Build four installable ZaStoGram standalone APKs in Forgejo Actions instead of one fat `afat` APK:
 
 - `arm64-v8a`
 - `armeabi-v7a`
@@ -34,9 +34,9 @@ Each ABI flavor gets a distinct two-digit `abiVersionCode` above the old univers
 
 The existing `variantFilter` must also allow the new ABI flavors for the `standalone` build type; otherwise Gradle will not create the matrix task names.
 
-## GitHub Actions
+## Forgejo Actions
 
-Refactor `.github/workflows/build-apk.yml` to use a matrix with one entry per ABI flavor.
+Refactor `.forgejo/workflows/build-apk.yml` to use a matrix with one entry per ABI flavor.
 
 Shared setup remains in one job definition:
 
@@ -67,11 +67,11 @@ Each matrix leg stages exactly one APK into `dist/` with a stable architecture-s
 
 ## Outputs
 
-At minimum, GitHub Actions should upload four architecture-specific artifacts, each containing the matching APK.
+At minimum, Forgejo Actions should upload four architecture-specific artifacts, each containing the matching APK.
 
-The workflow can also publish a run-specific prerelease with four direct `.apk` assets if direct install links are desired. If enabled, the prerelease should use a run-specific tag based on `github.run_number` and `github.run_attempt`.
+The workflow can also publish a run-specific prerelease with four direct `.apk` assets if direct install links are desired. If enabled, the prerelease should use a run-specific tag based on `forgejo.run_number` and `forgejo.run_attempt`.
 
-GitHub Actions artifacts may remain for CI history. They are not the same as direct APK release assets because GitHub downloads artifacts as ZIP files.
+Forgejo Actions artifacts may remain for CI history. They are not the same as direct APK release assets because Forgejo downloads artifacts as ZIP files.
 
 ## Caching
 

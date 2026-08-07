@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: zastogram-apk-${{ github.ref }}
+  group: zastogram-apk-${{ forgejo.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -94,11 +94,11 @@ jobs:
           USE_CCACHE: '1'
           CCACHE_COMPILERCHECK: content
           CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
-          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_BASEDIR: ${{ forgejo.workspace }}
           ZASTO_UPDATE_CHANNEL: dev
-          ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}
-          ZASTO_BUILD_NUMBER: ${{ github.run_number }}
-          ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}
+          ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}
+          ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}
+          ZASTO_FORGEJO_REPOSITORY: ${{ forgejo.repository }}
         run: |
           set -euo pipefail
           chmod +x ./gradlew

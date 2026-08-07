@@ -69,7 +69,7 @@ public final class ForgejoUpdaterController {
     }
 
     private SharedPreferences getSharedPreferences() {
-        return ApplicationLoader.applicationContext.getSharedPreferences("github_updater", Activity.MODE_PRIVATE);
+        return ApplicationLoader.applicationContext.getSharedPreferences("forgejo_updater", Activity.MODE_PRIVATE);
     }
 
     private static boolean isDevChannel() {

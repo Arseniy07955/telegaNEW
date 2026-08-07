@@ -205,16 +205,19 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_forgejo_update_contract.py",
         "-PzastoAbiFilter=${{ matrix.abi }}",
         "ZASTO_UPDATE_CHANNEL: dev",
-        "ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}",
-        "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
-        "ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}",
+        "ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}",
+        "ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}",
+        "ZASTO_FORGEJO_REPOSITORY: ${{ forgejo.repository }}",
         "https://data.forgejo.org/forgejo/upload-artifact@v4",
-        "github.run_number",
-        "github.run_attempt",
+        "forgejo.run_number",
+        "forgejo.run_attempt",
     ]
     for literal in required_literals:
         if literal not in workflow_text:
             errors.append(f"Workflow is missing required contract literal: {literal}")
+
+    if "${{ github." in workflow_text or "GITHUB_" in workflow_text:
+        errors.append("Forgejo workflow must not use GitHub compatibility aliases")
 
     if "assembleAfatStandalone" in workflow_text:
         errors.append("Workflow must not build the universal assembleAfatStandalone task")

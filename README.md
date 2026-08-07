@@ -1,6 +1,6 @@
 # ZaStoGram — Telegram для Android с MTProxy FakeTLS и нативным WSS
 
-<img width="1916" height="821" alt="ZaStoGram" src="https://github.com/user-attachments/assets/0850c5cd-6d7f-4304-9347-2cc54d5ba416" />
+![ZaStoGram](docs/assets/overview.png)
 
 ZaStoGram — экспериментальный форк официального Telegram для Android. Он
 сохраняет протокол и серверную инфраструктуру Telegram, но добавляет:

@@ -141,12 +141,15 @@ def main() -> int:
     for literal in (
         "python3 Tools/check_forgejo_update_contract.py",
         "ZASTO_UPDATE_CHANNEL: dev",
-        "ZASTO_RELEASE_TAG: forgejo-build-${{ github.run_number }}-${{ github.run_attempt }}",
-        "ZASTO_BUILD_NUMBER: ${{ github.run_number }}",
-        "ZASTO_FORGEJO_REPOSITORY: ${{ github.repository }}",
+        "ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}",
+        "ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}",
+        "ZASTO_FORGEJO_REPOSITORY: ${{ forgejo.repository }}",
         "https://data.forgejo.org/forgejo/upload-artifact@v4",
     ):
         require(workflow, literal, "Forgejo Actions background build identity", failures)
+
+    if "${{ github." in workflow or "GITHUB_" in workflow:
+        failures.append("Forgejo workflow must not use GitHub compatibility aliases")
 
     for text, description in (
         (layout, "Forgejo update drawer UI"),
