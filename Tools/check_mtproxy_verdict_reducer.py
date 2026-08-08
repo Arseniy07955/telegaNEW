@@ -446,12 +446,12 @@ def main() -> int:
         failures,
     )
 
-    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs)")
+    java_stage = method_body(java_connections, "private static void processProxyConnectionStage(ProxyConnectionEvent event)")
     require(
         "ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event)" in java_stage
         and "if (!shouldNotifyProxyConnectionStage(decision))" in java_stage
         and "return;" in java_stage[java_stage.find("if (!shouldNotifyProxyConnectionStage(decision))"):],
-        "Java bridge must suppress UI notifications for telemetry-only reducer decisions",
+        "Java UI-stage processor must suppress notifications for telemetry-only reducer decisions",
         failures,
     )
     notify_method = method_body(java_connections, "private static boolean shouldNotifyProxyConnectionStage")

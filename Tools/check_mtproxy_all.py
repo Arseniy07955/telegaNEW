@@ -34,6 +34,7 @@ CHECKS = [
     "check_mtproxy_rotation_and_soft_mux.py",
     "check_mtproxy_transport_state.py",
     "check_mtproxy_runtime_log_contract.py",
+    "check_mtproxy_ui_stage_backpressure.py",
     "check_proxy_connection_live_stages.py",
     "check_proxy_control_plane_policy.py",
     "check_proxy_lifecycle_ownership.py",

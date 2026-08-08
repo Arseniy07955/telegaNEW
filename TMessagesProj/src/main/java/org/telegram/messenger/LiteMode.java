@@ -42,7 +42,8 @@ public class LiteMode {
     public static final int FLAG_CHAT_SCALE = 32768;
     public static final int FLAG_CHAT_THANOS = 65536;
     public static final int FLAG_LIQUID_GLASS = 1 << 18;
-    public static final int FLAGS_CHAT = FLAG_CHAT_BACKGROUND | FLAG_CHAT_FORUM_TWOCOLUMN | FLAG_CHAT_SPOILER | FLAG_CHAT_BLUR | FLAG_CHAT_SCALE | FLAG_CHAT_THANOS | FLAG_LIQUID_GLASS;
+    // Blur is opt-in and must only be changed through its dedicated setting.
+    public static final int FLAGS_CHAT = FLAG_CHAT_BACKGROUND | FLAG_CHAT_FORUM_TWOCOLUMN | FLAG_CHAT_SPOILER | FLAG_CHAT_SCALE | FLAG_CHAT_THANOS | FLAG_LIQUID_GLASS;
 
     public static final int FLAG_CALLS_ANIMATIONS = 512;
     public static final int FLAG_AUTOPLAY_VIDEOS = 1024;
@@ -75,14 +76,13 @@ public class LiteMode {
         FLAG_CHAT_BACKGROUND |
         FLAG_CHAT_FORUM_TWOCOLUMN |
         FLAG_CHAT_SPOILER |
-        FLAG_CHAT_BLUR |
         FLAG_CHAT_SCALE |
         FLAG_CHAT_THANOS |
         FLAG_CALLS_ANIMATIONS |
         FLAG_AUTOPLAY_VIDEOS |
         FLAG_AUTOPLAY_GIFS |
         FLAG_PARTICLES
-    ); // 262143
+    ); // 261887
     public static int PRESET_POWER_SAVER = 0;
 
     private static int BATTERY_LOW = 10;
@@ -179,9 +179,9 @@ public class LiteMode {
             if ("settings_mask".equals(kv.key) && kv.value instanceof TLRPC.TL_jsonArray) {
                 ArrayList<TLRPC.JSONValue> array = ((TLRPC.TL_jsonArray) kv.value).value;
                 try {
-                    PRESET_LOW = (int) ((TLRPC.TL_jsonNumber) array.get(0)).value;
-                    PRESET_MEDIUM = (int) ((TLRPC.TL_jsonNumber) array.get(1)).value;
-                    PRESET_HIGH = (int) ((TLRPC.TL_jsonNumber) array.get(2)).value;
+                    PRESET_LOW = (int) ((TLRPC.TL_jsonNumber) array.get(0)).value & ~FLAG_CHAT_BLUR;
+                    PRESET_MEDIUM = (int) ((TLRPC.TL_jsonNumber) array.get(1)).value & ~FLAG_CHAT_BLUR;
+                    PRESET_HIGH = (int) ((TLRPC.TL_jsonNumber) array.get(2)).value & ~FLAG_CHAT_BLUR;
                 } catch (Exception e) {
                     FileLog.e(e);
                 }
@@ -210,8 +210,10 @@ public class LiteMode {
         }
 
         final SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-        if (!preferences.contains("lite_mode6")) {
-            if (preferences.contains("lite_mode5")) {
+        if (!preferences.contains("lite_mode7")) {
+            if (preferences.contains("lite_mode6")) {
+                defaultValue = preferences.getInt("lite_mode6", defaultValue);
+            } else if (preferences.contains("lite_mode5")) {
                 defaultValue = preferences.getInt("lite_mode5", defaultValue);
                 defaultValue &=~ FLAG_LIQUID_GLASS;
                 preferences.edit().putInt("lite_mode6", defaultValue).apply();
@@ -274,10 +276,15 @@ public class LiteMode {
                     }
                 }
             }
+
+            // Existing installs also start with blur disabled. From now on only
+            // the dedicated blur toggle can add this flag to lite_mode7.
+            defaultValue &= ~FLAG_CHAT_BLUR;
+            preferences.edit().putInt("lite_mode7", defaultValue).apply();
         }
 
         int prevValue = value;
-        value = preferences.getInt("lite_mode6", defaultValue);
+        value = preferences.getInt("lite_mode7", defaultValue);
         if (loaded) {
             onFlagsUpdate(prevValue, value);
         }
@@ -286,7 +293,7 @@ public class LiteMode {
     }
 
     public static void savePreference() {
-        MessagesController.getGlobalMainSettings().edit().putInt("lite_mode6", value).putInt("lite_mode_battery_level", powerSaverLevel).apply();
+        MessagesController.getGlobalMainSettings().edit().putInt("lite_mode7", value).putInt("lite_mode_battery_level", powerSaverLevel).apply();
     }
 
     public static int getPowerSaverLevel() {

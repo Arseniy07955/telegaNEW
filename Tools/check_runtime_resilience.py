@@ -25,6 +25,8 @@ def main() -> int:
     stories = read("TMessagesProj/src/main/java/org/telegram/ui/Stories/StoriesController.java")
     plugins = read("TMessagesProj/src/main/java/org/telegram/plugins/PluginsController.java")
     logs = read("TMessagesProj/src/main/java/org/telegram/messenger/FileLog.java")
+    filter_tabs = read("TMessagesProj/src/main/java/org/telegram/ui/Components/FilterTabsView.java")
+    lite_mode = read("TMessagesProj/src/main/java/org/telegram/messenger/LiteMode.java")
 
     require("CONSTRAINED_HEAP_MB = 128" in policy and "isLowRamDevice()" in policy,
             "resource policy must treat both a 128 MiB heap and Android low-RAM as constrained", errors)
@@ -54,6 +56,26 @@ def main() -> int:
     require("e instanceof OutOfMemoryError && BuildVars.DEBUG_PRIVATE_VERSION" in logs
             and "!DeviceResourcePolicy.isConstrainedDevice()" in logs,
             "production or constrained OOM handling must not attempt an HPROF dump", errors)
+
+    require("private void resetDefaultTabTitle()" in filter_tabs
+            and "Tab defaultTab = findDefaultTab();" in filter_tabs
+            and "if (defaultTab != null)" in filter_tabs
+            and filter_tabs.count("resetDefaultTabTitle();") >= 2
+            and "findDefaultTab().setTitle" not in filter_tabs,
+            "tab-counter updates must tolerate a deliberately hidden All Chats tab", errors)
+
+    flags_chat = next(
+        (line for line in lite_mode.splitlines() if "int FLAGS_CHAT =" in line),
+        "",
+    )
+    require("FLAG_CHAT_BLUR" not in flags_chat
+            and lite_mode.count("& ~FLAG_CHAT_BLUR") >= 3
+            and 'if (!preferences.contains("lite_mode7"))' in lite_mode
+            and "defaultValue &= ~FLAG_CHAT_BLUR;" in lite_mode
+            and '.putInt("lite_mode7", defaultValue)' in lite_mode
+            and 'preferences.getInt("lite_mode7", defaultValue)' in lite_mode
+            and '.putInt("lite_mode7", value)' in lite_mode,
+            "chat blur must remain opt-in across presets and the lite-mode preference migration", errors)
 
     init_start = plugins.find("public void init(Context context)")
     staged_start = plugins.find("public void startEnabledPlugins()")
