@@ -32,6 +32,9 @@ namespace wss {
 namespace {
 
 constexpr const char *kOfficialPath = "/apiws";
+// Size of the MTProto obfuscation header. Measured against the official relays:
+// a first binary frame of 63 bytes never gets a reply, 64 always does.
+constexpr size_t kObfuscationHeaderSize = 64;
 constexpr uint32_t kMaxFrame = 2 * 1024 * 1024;
 constexpr size_t kMaxHttpHeader = 32 * 1024;
 constexpr size_t kMaxPendingOutput = 4 * 1024 * 1024;
@@ -676,11 +679,32 @@ bool Socket::write(const uint8_t *data, uint32_t size, std::string *diagnostic) 
         setDiagnostic(diagnostic, "wss_not_ready");
         return false;
     }
+    if (size == 0) {
+        return true;
+    }
+    if (!openingFrameSent) {
+        openingFrame.insert(openingFrame.end(), data, data + size);
+        if (openingFrame.size() < kObfuscationHeaderSize) {
+            // Not enough for the relay to identify the datacenter yet. Emitting
+            // it now would strand the connection with no error at all.
+            if (LOGS_ENABLED) {
+                DEBUG_D("wss_socket opening_frame_held domain=%s buffered=%u",
+                        routeConfig.domain.c_str(), (unsigned int) openingFrame.size());
+            }
+            return true;
+        }
+        openingFrameSent = true;
+        const bool queued = queueFrame(
+                0x2, openingFrame.data(), static_cast<uint32_t>(openingFrame.size()), diagnostic);
+        openingFrame.clear();
+        openingFrame.shrink_to_fit();
+        return queued;
+    }
     return queueFrame(0x2, data, size, diagnostic);
 }
 
 size_t Socket::queuedOutputBytes() const {
-    return pendingOutputBytes;
+    return pendingOutputBytes + openingFrame.size();
 }
 
 bool Socket::isReady() const {
@@ -783,6 +807,9 @@ void Socket::close() {
     pendingOutputOffset = 0;
     pendingOutputBytes = 0;
     inputBuffer.clear();
+    openingFrame.clear();
+    openingFrame.shrink_to_fit();
+    openingFrameSent = false;
     fragmentedMessage = false;
 }
 

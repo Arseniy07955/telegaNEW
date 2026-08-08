@@ -154,6 +154,13 @@ def main() -> None:
             and "dispatchWssPayloads(payloads)" in socket_cpp
             and socket_cpp.index("dispatchWssPayloads(payloads)") < socket_cpp.index("wss_transport_failed"),
             "WSS must deliver frames drained before EOF so transport errors reach MTProto")
+    # Measured against the official relays: a first binary frame of 63 bytes is
+    # never answered, 64 always is, and the failure is completely silent.
+    require("kObfuscationHeaderSize = 64" in wss_cpp
+            and "openingFrameSent" in wss_cpp
+            and "openingFrame.size() < kObfuscationHeaderSize" in wss_cpp
+            and "openingFrame" in wss_h,
+            "WSS must never emit a first frame shorter than the 64-byte obfuscation header")
     require("std::deque<std::vector<uint8_t>> pendingOutput" in wss_h
             and "pendingOutput.front()" in wss_cpp
             and "pendingOutput.push_back(std::move(frame))" in wss_cpp,

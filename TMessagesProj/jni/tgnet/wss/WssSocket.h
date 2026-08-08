@@ -95,6 +95,13 @@ private:
     size_t pendingOutputBytes = 0;
     std::vector<uint8_t> inputBuffer;
     std::string secWebSocketKey;
+    // The relay parses the 64-byte obfuscation header out of the payload of the
+    // FIRST binary frame alone — not out of the reassembled message and not out
+    // of the TCP stream. A shorter first frame is fatal and, worse, silent: the
+    // relay simply never answers. Hold the opening bytes back until the header
+    // is complete so no caller chunking can violate that.
+    std::vector<uint8_t> openingFrame;
+    bool openingFrameSent = false;
     bool fragmentedMessage = false;
     bool failureRecorded = false;
 };
