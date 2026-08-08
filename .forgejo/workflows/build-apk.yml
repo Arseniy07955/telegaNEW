@@ -126,6 +126,9 @@ jobs:
           # the installed one, and shows only "App not installed". A release
           # built with a lower build number is therefore dead on arrival.
           python3 Tools/check_apk_version_monotonic.py "$apk" --repo "${{ forgejo.repository }}"
+          # A changed signing certificate makes the update impossible to install
+          # and shows the user only "App not installed".
+          python3 Tools/check_apk_signing_identity.py "$apk"
           cp "$apk" "dist/${{ matrix.artifact }}.apk"
           sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
           ccache --show-stats

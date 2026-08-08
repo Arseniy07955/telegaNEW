@@ -6,8 +6,16 @@ def zastoBuildNumber = zastoReleaseIdentity.buildNumber
 def zastoApplicationId = zastoUpdateChannel == "dev" ? "${APP_PACKAGE}.dev" : APP_PACKAGE
 def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"
 
-def zastoReadSigningSecret = { String envName ->
-    def secretPath = System.getenv(envName)?.trim()
+// Signing inputs accept a Gradle property as well as the environment variable.
+// System.getenv() inside a build script reports the DAEMON's environment, not
+// the one of the command that started the build, so an exported variable can
+// silently fail to apply while a -P property always reaches this code.
+def zastoSigningInput = { String propertyName, String envName ->
+    return (findProperty(propertyName) ?: System.getenv(envName))?.toString()?.trim() ?: null
+}
+
+def zastoReadSigningSecret = { String propertyName, String envName ->
+    def secretPath = zastoSigningInput(propertyName, envName)
     if (!secretPath) {
         return null
     }
@@ -18,10 +26,10 @@ def zastoReadSigningSecret = { String envName ->
     return secretFile.getText("UTF-8").trim()
 }
 
-def zastoReleaseKeystorePath = System.getenv("ZASTO_RELEASE_KEYSTORE")?.trim()
-def zastoReleaseStorePassword = zastoReadSigningSecret("ZASTO_RELEASE_STORE_PASSWORD_FILE")
-def zastoReleaseKeyPassword = zastoReadSigningSecret("ZASTO_RELEASE_KEY_PASSWORD_FILE")
-def zastoReleaseKeyAlias = zastoReadSigningSecret("ZASTO_RELEASE_KEY_ALIAS_FILE")
+def zastoReleaseKeystorePath = zastoSigningInput("zastoReleaseKeystore", "ZASTO_RELEASE_KEYSTORE")
+def zastoReleaseStorePassword = zastoReadSigningSecret("zastoReleaseStorePasswordFile", "ZASTO_RELEASE_STORE_PASSWORD_FILE")
+def zastoReleaseKeyPassword = zastoReadSigningSecret("zastoReleaseKeyPasswordFile", "ZASTO_RELEASE_KEY_PASSWORD_FILE")
+def zastoReleaseKeyAlias = zastoReadSigningSecret("zastoReleaseKeyAliasFile", "ZASTO_RELEASE_KEY_ALIAS_FILE")
 def zastoExternalSigningValues = [
         zastoReleaseKeystorePath,
         zastoReleaseStorePassword,
@@ -30,6 +38,19 @@ def zastoExternalSigningValues = [
 ]
 if (zastoExternalSigningValues.any { it } && !zastoExternalSigningValues.every { it }) {
     throw new GradleException("ZaStoGram external signing requires the keystore and all three credential files")
+}
+// A stable build MUST carry the real release identity. The in-repo keystore is
+// a different certificate, and Android refuses to update an installed app whose
+// signature changed - it only says "App not installed", and Play Protect flags
+// the unknown signer on top. Releases 1.1.13 and 1.1.14 shipped that way
+// because the fallback applied silently; refusing to build is the only way this
+// cannot happen again.
+if (zastoUpdateChannel == "stable" && !zastoExternalSigningValues.every { it }) {
+    throw new GradleException(
+            "Refusing a stable ZaStoGram build without its release signing key. " +
+                    "Pass -PzastoReleaseKeystore, -PzastoReleaseStorePasswordFile, " +
+                    "-PzastoReleaseKeyPasswordFile and -PzastoReleaseKeyAliasFile " +
+                    "(or the matching ZASTO_RELEASE_* environment variables).")
 }
 def zastoReleaseKeystoreFile = zastoReleaseKeystorePath
         ? file(zastoReleaseKeystorePath)
