@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.text.SpannableStringBuilder;
+import android.text.TextUtils;
 import android.view.ViewGroup;
 
 import androidx.core.content.FileProvider;
@@ -151,11 +152,30 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
         try {
-            ForgejoUpdateAlertDialog.show(context, update);
+            boolean shown = ForgejoUpdateAlertDialog.show(context, update);
+            if (shown) {
+                ForgejoUpdaterController.getInstance().markUpdatePopupShown();
+            }
+            return shown;
         } catch (Exception e) {
             FileLog.e(e);
         }
-        return true;
+        return false;
+    }
+
+    @Override
+    public boolean allowCustomUpdateAppPopup(boolean force, boolean updateChanged) {
+        return ForgejoUpdaterController.getInstance().shouldShowUpdatePopup(force);
+    }
+
+    @Override
+    public String getCustomBuildVersionInfo() {
+        String releaseTag = getString(R.string.ZastoReleaseTag).trim();
+        if (TextUtils.isEmpty(releaseTag)) {
+            releaseTag = getString(R.string.ZastoUpdateChannel).trim();
+        }
+        int buildNumber = getResources().getInteger(R.integer.ZastoBuildNumber);
+        return LocaleController.formatString(R.string.ZaStoGramVersion, releaseTag, buildNumber);
     }
 
     @Override

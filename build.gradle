@@ -28,7 +28,7 @@ if (!(zastoUpdateChannelValue in ["dev", "stable"])) {
     throw new GradleException("Unsupported ZaStoGram update channel '${zastoUpdateChannelValue}'. Expected dev or stable")
 }
 def zastoReleaseTagValue = (findProperty("zastoReleaseTag") ?: System.getenv("ZASTO_RELEASE_TAG") ?: "").toString().trim()
-def zastoForgejoRepositoryValue = (findProperty("zastoForgejoRepository") ?: System.getenv("ZASTO_FORGEJO_REPOSITORY") ?: "zapretdiscordyoutube/ZaStoGram").toString().trim()
+def zastoForgejoRepositoryValue = (findProperty("zastoForgejoRepository") ?: System.getenv("ZASTO_FORGEJO_REPOSITORY") ?: "zastogram/ZaStoGram").toString().trim()
 if (!(zastoForgejoRepositoryValue ==~ /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/)) {
     throw new GradleException("Invalid ZaStoGram Forgejo repository '${zastoForgejoRepositoryValue}'. Expected owner/repository")
 }

@@ -20,7 +20,12 @@ public final class ForgejoUpdateAlertDialog {
     private ForgejoUpdateAlertDialog() {
     }
 
-    public static void show(Context context, BetaUpdate update) {
+    public static boolean show(Context context, BetaUpdate update) {
+        Activity activity = AndroidUtilities.findActivity(context);
+        if (activity == null || activity.isFinishing()) {
+            return false;
+        }
+        ForgejoUpdaterController updater = ForgejoUpdaterController.getInstance();
         File downloadedFile = ApplicationLoader.applicationLoaderInstance.getDownloadedUpdateFile();
         String title = LocaleController.getString(ForgejoUpdaterController.isDevChannel()
                 ? R.string.AppUpdateBeta
@@ -33,22 +38,29 @@ public final class ForgejoUpdateAlertDialog {
             message += "\n\n" + update.changelog;
         }
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context)
+        AlertDialog.Builder builder = new AlertDialog.Builder(activity)
                 .setTitle(title)
                 .setMessage(message)
-                .setNegativeButton(LocaleController.getString(R.string.AppUpdateRemindMeLater), null);
+                .setNegativeButton(LocaleController.getString(R.string.AppUpdateRemindMeLater), (dialog, which) ->
+                        updater.remindAboutCurrentUpdateLater())
+                .setNeutralButton(LocaleController.getString(R.string.AppUpdateSkipVersion), (dialog, which) ->
+                        updater.skipCurrentUpdate())
+                .forceVerticalButtons();
         if (downloadedFile != null) {
             builder.setPositiveButton(LocaleController.getString(R.string.AppUpdateNow), (dialog, which) -> {
+                updater.remindAboutCurrentUpdateLater();
                 File file = ApplicationLoader.applicationLoaderInstance.getDownloadedUpdateFile();
-                Activity activity = AndroidUtilities.findActivity(context);
-                if (file != null && activity != null) {
+                if (file != null) {
                     AndroidUtilities.openForView(file, "ZaStoGram.apk", "application/vnd.android.package-archive", activity, null, false);
                 }
             });
         } else {
-            builder.setPositiveButton(LocaleController.getString(R.string.AppUpdateDownloadNow), (dialog, which) ->
-                    ApplicationLoader.applicationLoaderInstance.downloadUpdate());
+            builder.setPositiveButton(LocaleController.getString(R.string.AppUpdateDownloadNow), (dialog, which) -> {
+                updater.remindAboutCurrentUpdateLater();
+                ApplicationLoader.applicationLoaderInstance.downloadUpdate();
+            });
         }
         builder.show();
+        return true;
     }
 }

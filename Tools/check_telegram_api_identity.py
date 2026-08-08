@@ -61,10 +61,12 @@ def main() -> int:
 
     require(
         'error.text.contains("API_ID_PUBLISHED_FLOOD")' in login
+        and "showPhoneCodeRequestError(getString(R.string.LoginApiCredentialsError))" in login
+        and "needHideProgress(false, false);" in login
         and "R.string.LoginApiCredentialsError" in login
         and 'name="LoginApiCredentialsError"' in strings
         and 'name="LoginApiCredentialsError"' in strings_ru,
-        "phone login must turn API_ID_PUBLISHED_FLOOD into a visible localized error",
+        "phone login must stop progress and turn API_ID_PUBLISHED_FLOOD into a visible localized error",
     )
 
     for literal in (

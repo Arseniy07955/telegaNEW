@@ -1159,6 +1159,14 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         showDialog(builder.create());
     }
 
+    private void showPhoneCodeRequestError(String text) {
+        // A terminal server error must restore the phone form before opening
+        // the dialog. Otherwise the floating action button can remain in its
+        // loading state behind an error which the user cannot retry from.
+        needHideProgress(false, false);
+        needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), text);
+    }
+
     private void onFieldError(View view, boolean allowErrorSelection) {
         try {
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP, HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
@@ -3161,9 +3169,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                         } else if (error.text.startsWith("FLOOD_WAIT")) {
                             needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString("FloodWait", R.string.FloodWait));
                         } else if (error.text.contains("API_ID_PUBLISHED_FLOOD")) {
-                            needShowAlert(
-                                    getString(R.string.RestorePasswordNoEmailTitle),
-                                    getString(R.string.LoginApiCredentialsError));
+                            FileLog.e("phone_login api_identity_rejected error=" + error.text);
+                            showPhoneCodeRequestError(getString(R.string.LoginApiCredentialsError));
                         } else if (error.code != -1000) {
                             AlertsCreator.processError(currentAccount, error, LoginActivity.this, req, phoneInputData.phoneNumber);
                         }

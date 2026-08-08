@@ -672,6 +672,7 @@
     <string name="AppUpdateNow">تحديثه الآن</string>
     <string name="AppUpdateDownloadNow">تنزيله الآن</string>
     <string name="AppUpdateRemindMeLater">تذكيري لاحقًا</string>
+    <string name="AppUpdateSkipVersion">تخطي هذا الإصدار</string>
     <string name="AppUpdateChangelogEmpty">**ما الجديد؟**\n\n• إصلاح للمشاكل وتحسينات أخرى.</string>
     <string name="Permanent">الرابط الأساسي</string>
     <string name="LinkHashExpired">لم يعد الرابط نشطًا</string>

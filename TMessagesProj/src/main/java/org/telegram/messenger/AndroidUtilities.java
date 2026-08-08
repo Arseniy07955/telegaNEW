@@ -6701,7 +6701,9 @@ public class AndroidUtilities {
     public static String getBuildVersionInfo() {
         try {
             PackageInfo pInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
-            int code = pInfo.versionCode / 10;
+            int code = ApplicationLoader.isStandaloneBuild()
+                    ? pInfo.versionCode / 100000
+                    : pInfo.versionCode / 10;
             String abi = "";
             switch (pInfo.versionCode % 10) {
                 case 1:
@@ -6717,7 +6719,12 @@ public class AndroidUtilities {
                     }
                     break;
             }
-            return formatString("TelegramVersion", R.string.TelegramVersion, String.format(Locale.US, "v%s (%d) %s", pInfo.versionName, code, abi));
+            String telegramVersion = formatString("TelegramVersion", R.string.TelegramVersion,
+                    String.format(Locale.US, "v%s (%d) %s", pInfo.versionName, code, abi));
+            String customVersion = ApplicationLoader.applicationLoaderInstance.getCustomBuildVersionInfo();
+            return TextUtils.isEmpty(customVersion)
+                    ? telegramVersion
+                    : telegramVersion + "\n" + customVersion;
         } catch (Exception e) {
             FileLog.e(e);
         }

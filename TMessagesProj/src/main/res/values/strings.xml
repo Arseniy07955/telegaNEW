@@ -2892,6 +2892,7 @@
     <string name="AppUpdateNow">Update Now</string>
     <string name="AppUpdateDownloadNow">Download Now</string>
     <string name="AppUpdateRemindMeLater">Remind me later</string>
+    <string name="AppUpdateSkipVersion">Skip this version</string>
     <string name="AppUpdateChangelogEmpty">**What\'s new?**\n\n• Bug fixes and improvements.</string>
     <string name="Permanent">Permanent</string>
     <string name="LinkHashExpired">Link is no longer active</string>
@@ -11342,5 +11343,6 @@
     <string name="ArticleAIGenerate">Generate</string>
     <string name="ArticleAIAddToPage">Add to Page</string>
     <string name="LoginCodeRequestTimeout">Telegram did not answer the code request. Check the proxy connection and try again.</string>
-    <string name="LoginApiCredentialsError">This build cannot sign in because it uses Telegram’s public test API credentials. Install an official ZaStoGram release with its own API identity.</string>
+    <string name="LoginApiCredentialsError">Telegram rejected this build’s API ID (API_ID_PUBLISHED_FLOOD). Install the latest official ZaStoGram release and try again. If it is already installed, the release API credentials must be replaced.</string>
+    <string name="ZaStoGramVersion">ZaStoGram %1$s (build %2$d)</string>
 </resources>

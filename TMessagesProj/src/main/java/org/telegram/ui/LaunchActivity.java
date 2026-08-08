@@ -5979,7 +5979,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                         }
                     }
                 }
-                if (pendingUpdate != null && !ApplicationLoader.applicationLoaderInstance.isDownloadingUpdate() && (first || prevUpdate == null || pendingUpdate.higherThan(prevUpdate))) {
+                boolean updateChanged = first || prevUpdate == null || pendingUpdate != null && pendingUpdate.higherThan(prevUpdate);
+                if (pendingUpdate != null
+                        && !ApplicationLoader.applicationLoaderInstance.isDownloadingUpdate()
+                        && ApplicationLoader.applicationLoaderInstance.allowCustomUpdateAppPopup(force, updateChanged)) {
                     ApplicationLoader.applicationLoaderInstance.showCustomUpdateAppPopup(LaunchActivity.this, pendingUpdate, currentAccount);
                 }
             });

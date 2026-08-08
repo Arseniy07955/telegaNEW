@@ -29,6 +29,7 @@ public final class ForgejoUpdaterController {
 
     private static final long CHECK_INTERVAL_PAUSED = 24L * 60L * 60L * 1000L;
     private static final long CHECK_INTERVAL = 20L * 60L * 1000L;
+    private static final long REMIND_LATER_INTERVAL = 24L * 60L * 60L * 1000L;
     private static final long MAX_APK_BYTES = 512L * 1024L * 1024L;
     private static final Pattern DEV_RELEASE_TAG = Pattern.compile("^zastogram-apk-(\\d+)-(\\d+)$");
 
@@ -53,6 +54,9 @@ public final class ForgejoUpdaterController {
     private String path;
     private long lastCheck;
     private String installedReleaseTag;
+    private String snoozedReleaseTag;
+    private long snoozedUntil;
+    private String skippedReleaseTag;
 
     private boolean checkingForUpdate;
     private boolean showPopupAfterCheck;
@@ -94,6 +98,9 @@ public final class ForgejoUpdaterController {
         path = prefs.getString("path", null);
         lastCheck = prefs.getLong("lastCheck", 0L);
         installedReleaseTag = prefs.getString("installedReleaseTag", null);
+        snoozedReleaseTag = prefs.getString("snoozedReleaseTag", null);
+        snoozedUntil = prefs.getLong("snoozedUntil", 0L);
+        skippedReleaseTag = prefs.getString("skippedReleaseTag", null);
 
         int currentVersionCode = getCurrentVersionCode();
         int previousInstalledVersionCode = prefs.getInt("installedVersionCode", currentVersionCode);
@@ -108,10 +115,17 @@ public final class ForgejoUpdaterController {
 
         if (!getChannel().equals(prefs.getString("channel", getChannel()))) {
             clearPendingUpdate(true);
+            clearUpdatePromptChoices();
             lastCheck = 0L;
         }
         if (!TextUtils.isEmpty(path) && !new File(path).exists()) {
             path = null;
+        }
+        File completedFile = getCompletedDownloadFile();
+        if (TextUtils.isEmpty(path) && completedFile != null && isDownloadedApkValid(completedFile)) {
+            // Recover a download if the process stopped after the APK was moved
+            // into place but before the completed path reached SharedPreferences.
+            path = completedFile.getAbsolutePath();
         }
         File partialFile = getPartialDownloadFile();
         if (partialFile != null && partialFile.isFile() && assetSize > 0L) {
@@ -119,12 +133,16 @@ public final class ForgejoUpdaterController {
                 deleteFile(partialFile);
             } else if (TextUtils.isEmpty(path) && partialFile.length() == assetSize && isDownloadedApkValid(partialFile)) {
                 // Recover a download if the process stopped after the last byte was
-                // written but before the completed path reached SharedPreferences.
-                path = partialFile.getAbsolutePath();
+                // written but before the temporary file was moved into place.
+                File finalizedFile = finalizeDownloadedApk(partialFile);
+                if (finalizedFile != null) {
+                    path = finalizedFile.getAbsolutePath();
+                }
             }
         }
         if (!TextUtils.isEmpty(releaseTag) && releaseTag.equals(getInstalledReleaseTag())) {
             clearPendingUpdate(true);
+            clearUpdatePromptChoices();
         }
         save(currentVersionCode);
     }
@@ -141,12 +159,15 @@ public final class ForgejoUpdaterController {
         putString(editor, "fileUrl", fileUrl);
         putString(editor, "path", path);
         putString(editor, "installedReleaseTag", installedReleaseTag);
+        putString(editor, "snoozedReleaseTag", snoozedReleaseTag);
+        putString(editor, "skippedReleaseTag", skippedReleaseTag);
         putInt(editor, "displayVersionCode", displayVersionCode);
         putLong(editor, "releaseId", releaseId);
         putLong(editor, "assetId", assetId);
         putLong(editor, "updateOrder", updateOrder);
         putLong(editor, "assetSize", assetSize);
         putLong(editor, "lastCheck", lastCheck);
+        putLong(editor, "snoozedUntil", snoozedUntil);
         editor.putString("channel", getChannel());
         editor.putInt("installedVersionCode", installedVersionCode);
         editor.apply();
@@ -188,12 +209,20 @@ public final class ForgejoUpdaterController {
 
         long interval = ApplicationLoader.mainInterfacePaused ? CHECK_INTERVAL_PAUSED : CHECK_INTERVAL;
         if (!force && System.currentTimeMillis() - lastCheck < interval) {
+            FileLog.d("zasto_update check_cached channel=" + getChannel()
+                    + " installed=" + getInstalledReleaseTag()
+                    + " pending=" + releaseTag
+                    + " remaining_ms=" + Math.max(0L, interval - (System.currentTimeMillis() - lastCheck)));
             finishCheck(false);
             scheduleNextCheck();
             return;
         }
 
         final String url = getReleasesUrl();
+        FileLog.d("zasto_update check_start channel=" + getChannel()
+                + " installed=" + getInstalledReleaseTag()
+                + " force=" + force
+                + " url=" + url);
         checkingForUpdate = true;
         new HttpGetTask(result -> AndroidUtilities.runOnUIThread(() -> {
             boolean changed = false;
@@ -205,6 +234,11 @@ public final class ForgejoUpdaterController {
                         ? parseNewestPrerelease(new JSONArray(result))
                         : parseStableRelease(new JSONObject(result));
                 changed = applyCandidate(candidate);
+                FileLog.d("zasto_update check_result channel=" + getChannel()
+                        + " installed=" + getInstalledReleaseTag()
+                        + " candidate=" + (candidate == null ? "none" : candidate.releaseTag)
+                        + " pending=" + releaseTag
+                        + " changed=" + changed);
                 lastCheck = System.currentTimeMillis();
                 save();
             } catch (Exception e) {
@@ -349,9 +383,25 @@ public final class ForgejoUpdaterController {
 
     private boolean applyCandidate(ReleaseCandidate candidate) {
         boolean hadPendingUpdate = !TextUtils.isEmpty(releaseTag);
-        if (candidate == null || candidate.releaseTag.equals(getInstalledReleaseTag())) {
+        if (candidate == null) {
             clearPendingUpdate(true);
             return hadPendingUpdate;
+        }
+        if (candidate.releaseTag.equals(getInstalledReleaseTag())) {
+            clearPendingUpdate(true);
+            clearUpdatePromptChoices();
+            return hadPendingUpdate;
+        }
+        if (candidate.releaseTag.equals(skippedReleaseTag)) {
+            clearPendingUpdate(true);
+            return hadPendingUpdate;
+        }
+        if (!TextUtils.isEmpty(skippedReleaseTag)) {
+            skippedReleaseTag = null;
+        }
+        if (!candidate.releaseTag.equals(snoozedReleaseTag)) {
+            snoozedReleaseTag = null;
+            snoozedUntil = 0L;
         }
 
         if (candidate.releaseId == releaseId && candidate.releaseTag.equals(releaseTag)) {
@@ -381,6 +431,12 @@ public final class ForgejoUpdaterController {
         fileUrl = candidate.fileUrl;
         assetSize = candidate.assetSize;
         return true;
+    }
+
+    private void clearUpdatePromptChoices() {
+        snoozedReleaseTag = null;
+        snoozedUntil = 0L;
+        skippedReleaseTag = null;
     }
 
     private String getInstalledReleaseTag() {
@@ -416,23 +472,67 @@ public final class ForgejoUpdaterController {
 
     private void clearDownloadedUpdateFiles() {
         File partialFile = getPartialDownloadFile();
+        File completedFile = getCompletedDownloadFile();
         if (!TextUtils.isEmpty(path)) {
             File downloadedFile = new File(path);
             deleteFile(downloadedFile);
             if (partialFile != null && downloadedFile.equals(partialFile)) {
                 partialFile = null;
             }
+            if (completedFile != null && downloadedFile.equals(completedFile)) {
+                completedFile = null;
+            }
         }
         deleteFile(partialFile);
+        deleteFile(completedFile);
         path = null;
+    }
+
+    private File getUpdateDirectory() {
+        // provider_paths.xml has exposed files/cache since before the Forgejo
+        // updater existed. Keeping updater files there makes the updater work
+        // with the FileProvider rules retained from those older releases.
+        File directory = new File(ApplicationLoader.applicationContext.getFilesDir(), "cache");
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            FileLog.e("Failed to create Forgejo update directory " + directory);
+        }
+        return directory;
     }
 
     private File getPartialDownloadFile() {
         if (releaseId == 0L || assetId == 0L) {
             return null;
         }
-        return new File(ApplicationLoader.applicationContext.getCacheDir(),
+        return new File(getUpdateDirectory(),
                 "zastogram-update-" + releaseId + "-" + assetId + ".apk.part");
+    }
+
+    private File getCompletedDownloadFile() {
+        if (releaseId == 0L || assetId == 0L) {
+            return null;
+        }
+        return new File(getUpdateDirectory(),
+                "zastogram-update-" + releaseId + "-" + assetId + ".apk");
+    }
+
+    private File finalizeDownloadedApk(File partialFile) {
+        if (partialFile == null || !isDownloadedApkValid(partialFile)) {
+            return null;
+        }
+        File completedFile = getCompletedDownloadFile();
+        if (completedFile == null || partialFile.equals(completedFile)) {
+            return completedFile;
+        }
+        if (isDownloadedApkValid(completedFile)) {
+            deleteFile(partialFile);
+            return completedFile;
+        }
+        deleteFile(completedFile);
+        if (!partialFile.renameTo(completedFile)) {
+            FileLog.e("Failed to finalize Forgejo update APK " + partialFile);
+            return null;
+        }
+        return completedFile;
     }
 
     private static void deleteFile(File file) {
@@ -458,11 +558,13 @@ public final class ForgejoUpdaterController {
         for (Runnable callback : callbacks) {
             callback.run();
         }
-        if (shouldShowPopup && !ApplicationLoader.mainInterfacePaused) {
+        if (shouldShowPopup && !ApplicationLoader.mainInterfacePaused && shouldShowUpdatePopup(false)) {
             Context context = LaunchActivity.instance != null ? LaunchActivity.instance : ApplicationLoader.applicationContext;
             BetaUpdate pendingUpdate = getUpdate();
             if (context != null && pendingUpdate != null) {
-                ApplicationLoader.applicationLoaderInstance.showCustomUpdateAppPopup(context, pendingUpdate, UserConfig.selectedAccount);
+                boolean shown = ApplicationLoader.applicationLoaderInstance.showCustomUpdateAppPopup(
+                        context, pendingUpdate, UserConfig.selectedAccount);
+                FileLog.d("zasto_update popup_attempt tag=" + releaseTag + " shown=" + shown);
             }
         }
     }
@@ -478,6 +580,58 @@ public final class ForgejoUpdaterController {
             return null;
         }
         return new BetaUpdate(version, displayVersionCode, changelog, updateOrder);
+    }
+
+    public boolean shouldShowUpdatePopup(boolean force) {
+        if (getUpdate() == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        if (!force && releaseTag.equals(snoozedReleaseTag) && now < snoozedUntil) {
+            FileLog.d("zasto_update popup_snoozed tag=" + releaseTag
+                    + " remaining_ms=" + (snoozedUntil - now));
+            return false;
+        }
+        return true;
+    }
+
+    public void markUpdatePopupShown() {
+        if (TextUtils.isEmpty(releaseTag)) {
+            return;
+        }
+        snoozedReleaseTag = releaseTag;
+        snoozedUntil = System.currentTimeMillis() + REMIND_LATER_INTERVAL;
+        save();
+        FileLog.d("zasto_update popup_shown tag=" + releaseTag);
+    }
+
+    public void remindAboutCurrentUpdateLater() {
+        if (TextUtils.isEmpty(releaseTag)) {
+            return;
+        }
+        snoozedReleaseTag = releaseTag;
+        snoozedUntil = System.currentTimeMillis() + REMIND_LATER_INTERVAL;
+        save();
+        FileLog.d("zasto_update remind_later tag=" + releaseTag);
+    }
+
+    public void skipCurrentUpdate() {
+        if (TextUtils.isEmpty(releaseTag)) {
+            return;
+        }
+        skippedReleaseTag = releaseTag;
+        snoozedReleaseTag = null;
+        snoozedUntil = 0L;
+        if (downloadingTask != null) {
+            downloadingTask.cancel(true);
+            downloadingTask = null;
+        }
+        downloading = false;
+        downloadingProgress = 0.0f;
+        clearPendingUpdate(true);
+        save();
+        FileLog.d("zasto_update skip tag=" + skippedReleaseTag);
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
     }
 
     public void downloadUpdate() {
@@ -502,11 +656,25 @@ public final class ForgejoUpdaterController {
             }
             return;
         }
+        File completedFile = getCompletedDownloadFile();
+        if (isDownloadedApkValid(completedFile)) {
+            path = completedFile.getAbsolutePath();
+            downloadingProgress = 1.0f;
+            save();
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
+            return;
+        }
         if (partialFile.isFile() && assetSize > 0L && partialFile.length() >= assetSize) {
             if (partialFile.length() == assetSize && isDownloadedApkValid(partialFile)) {
-                path = partialFile.getAbsolutePath();
+                File finalizedFile = finalizeDownloadedApk(partialFile);
+                if (finalizedFile != null) {
+                    path = finalizedFile.getAbsolutePath();
+                    downloadingProgress = 1.0f;
+                    save();
+                    NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
+                    return;
+                }
                 downloadingProgress = 1.0f;
-                save();
                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
                 return;
             }
@@ -546,9 +714,14 @@ public final class ForgejoUpdaterController {
             return;
         }
         if (downloadedFile != null && isDownloadedApkValid(downloadedFile)) {
-            path = downloadedFile.getAbsolutePath();
-            downloadingProgress = 1.0f;
-            save();
+            File finalizedFile = finalizeDownloadedApk(downloadedFile);
+            if (finalizedFile != null) {
+                path = finalizedFile.getAbsolutePath();
+                downloadingProgress = 1.0f;
+                save();
+            } else {
+                downloadingProgress = getCachedDownloadProgress();
+            }
         } else if (downloadedFile != null && downloadedFile.isFile()
                 && assetSize > 0L && downloadedFile.length() < assetSize) {
             // Some HTTP stacks report a clean EOF instead of throwing when the
@@ -573,7 +746,7 @@ public final class ForgejoUpdaterController {
     }
 
     private boolean isDownloadedApkValid(File file) {
-        if (!file.isFile() || assetSize > 0L && file.length() != assetSize) {
+        if (file == null || !file.isFile() || assetSize > 0L && file.length() != assetSize) {
             return false;
         }
         try {
@@ -624,6 +797,17 @@ public final class ForgejoUpdaterController {
             path = null;
             save();
             return null;
+        }
+        File completedFile = getCompletedDownloadFile();
+        if (completedFile != null && !completedFile.equals(file) && isDownloadedApkValid(file)) {
+            // Migrate a completed .part left by versions which downloaded into
+            // Context.getCacheDir(). New downloads never expose that file.
+            File finalizedFile = finalizeDownloadedApk(file);
+            if (finalizedFile != null) {
+                path = finalizedFile.getAbsolutePath();
+                save();
+                return finalizedFile;
+            }
         }
         return file;
     }

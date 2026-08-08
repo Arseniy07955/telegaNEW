@@ -9,10 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ForgejoUpdaterController.java"
 HTTP_GET_FILE_TASK = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/web/HttpGetFileTask.java"
 LOADER = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/messenger/ApplicationLoaderImpl.java"
+BASE_LOADER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java"
 LAYOUT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/ForgejoUpdateLayout.java"
 ALERT = ROOT / "TMessagesProj_AppStandalone/src/main/java/org/telegram/ui/Components/ForgejoUpdateAlertDialog.java"
 LAUNCH = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java"
 BETA_UPDATE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/BetaUpdate.java"
+ANDROID_UTILITIES = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java"
+SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
 LIB_GRADLE = ROOT / "TMessagesProj/build.gradle"
 APP_GRADLE = ROOT / "TMessagesProj_AppStandalone/build.gradle"
 ROOT_GRADLE = ROOT / "build.gradle"
@@ -20,6 +23,8 @@ STANDALONE_MANIFEST = ROOT / "TMessagesProj/config/release/AndroidManifest_stand
 GOOGLE_SERVICES = ROOT / "TMessagesProj_AppStandalone/google-services.json"
 WORKFLOW = ROOT / ".forgejo/workflows/build-apk.yml"
 PROVIDER_PATHS = ROOT / "TMessagesProj/src/main/res/xml/provider_paths.xml"
+MAIN_STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
+RU_STRINGS = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
 
 
 def read(path: Path) -> str:
@@ -39,10 +44,13 @@ def main() -> int:
     controller = read(CONTROLLER)
     http_get_file_task = read(HTTP_GET_FILE_TASK)
     loader = read(LOADER)
+    base_loader = read(BASE_LOADER)
     layout = read(LAYOUT)
     alert = read(ALERT)
     launch = read(LAUNCH)
     beta_update = read(BETA_UPDATE)
+    android_utilities = read(ANDROID_UTILITIES)
+    settings_activity = read(SETTINGS_ACTIVITY)
     lib_gradle = read(LIB_GRADLE)
     app_gradle = read(APP_GRADLE)
     root_gradle = read(ROOT_GRADLE)
@@ -50,6 +58,8 @@ def main() -> int:
     google_services = read(GOOGLE_SERVICES)
     workflow = read(WORKFLOW)
     provider_paths = read(PROVIDER_PATHS)
+    main_strings = read(MAIN_STRINGS)
+    ru_strings = read(RU_STRINGS)
     failures: list[str] = []
 
     for literal in (
@@ -59,6 +69,9 @@ def main() -> int:
         "ForgejoUpdaterController.getInstance().downloadUpdate()",
         "new ForgejoUpdateLayout(activity, sideMenuContainer)",
         "ForgejoUpdateAlertDialog.show(context, update)",
+        "ForgejoUpdaterController.getInstance().shouldShowUpdatePopup(force)",
+        "ForgejoUpdaterController.getInstance().markUpdatePopupShown()",
+        "public String getCustomBuildVersionInfo()",
     ):
         require(loader, literal, "Standalone loader must fully own app updates", failures)
 
@@ -76,6 +89,17 @@ def main() -> int:
         'file.length() != assetSize',
         'asset.optLong("id", 0L)',
         '"zastogram-update-" + releaseId + "-" + assetId + ".apk.part"',
+        'new File(ApplicationLoader.applicationContext.getFilesDir(), "cache")',
+        '"zastogram-update-" + releaseId + "-" + assetId + ".apk"',
+        'partialFile.renameTo(completedFile)',
+        'REMIND_LATER_INTERVAL = 24L * 60L * 60L * 1000L',
+        'prefs.getString("snoozedReleaseTag", null)',
+        'prefs.getString("skippedReleaseTag", null)',
+        'public boolean shouldShowUpdatePopup(boolean force)',
+        'public void markUpdatePopupShown()',
+        'public void remindAboutCurrentUpdateLater()',
+        'public void skipCurrentUpdate()',
+        'candidate.releaseTag.equals(skippedReleaseTag)',
         '.setDestFile(partialFile)',
         '.setResumeExistingFile(true)',
         '.setKeepPartialFileOnCancel(true)',
@@ -100,6 +124,12 @@ def main() -> int:
         "Downloaded update APKs must be shareable with the Android package installer",
         failures,
     )
+    require(
+        provider_paths,
+        '<files-path name="cache" path="/cache/"/>',
+        "Updater APKs must remain shareable with FileProvider rules from older releases",
+        failures,
+    )
 
     if "authorization" in controller.lower():
         failures.append("Android updater must use the public Forgejo Releases API without embedding credentials")
@@ -109,6 +139,17 @@ def main() -> int:
     custom_return = launch.find("return;", custom_branch)
     if custom_branch < 0 or custom_return < 0 or telegram_request < 0 or not custom_return < telegram_request:
         failures.append("LaunchActivity must return from the custom updater before Telegram TL_help_getAppUpdate")
+    for literal in (
+        "public boolean allowCustomUpdateAppPopup(boolean force, boolean updateChanged)",
+        "return force || updateChanged;",
+    ):
+        require(base_loader, literal, "Non-Forgejo custom updaters must retain their existing popup policy", failures)
+    require(
+        launch,
+        "ApplicationLoader.applicationLoaderInstance.allowCustomUpdateAppPopup(force, updateChanged)",
+        "Every automatic custom-update popup must respect its persisted snooze",
+        failures,
+    )
 
     for literal in (
         'System.getenv("ZASTO_UPDATE_CHANNEL") ?: "stable"',
@@ -188,6 +229,33 @@ def main() -> int:
     ):
         require(text, "ForgejoUpdaterController.isDevChannel()", description, failures)
         require(text, '"ZaStoGram.apk"', description, failures)
+
+    for literal in (
+        "updater.remindAboutCurrentUpdateLater()",
+        "updater.skipCurrentUpdate()",
+        "R.string.AppUpdateSkipVersion",
+        ".forceVerticalButtons()",
+        "public static boolean show(Context context, BetaUpdate update)",
+    ):
+        require(alert, literal, "Forgejo update prompt choices", failures)
+
+    require(main_strings, '<string name="AppUpdateSkipVersion">Skip this version</string>', "Skip-version label", failures)
+    require(ru_strings, '<string name="AppUpdateSkipVersion">Пропустить эту версию</string>', "Russian skip-version label", failures)
+    require(main_strings, 'name="ZaStoGramVersion"', "ZaStoGram build-version label", failures)
+    require(ru_strings, 'name="ZaStoGramVersion"', "Russian ZaStoGram build-version label", failures)
+
+    for literal in (
+        "pInfo.versionCode / 100000",
+        "getCustomBuildVersionInfo()",
+        'telegramVersion + "\\n" + customVersion',
+    ):
+        require(android_utilities, literal, "Version footer must show Telegram and ZaStoGram identities", failures)
+    require(
+        settings_activity,
+        "return AndroidUtilities.getBuildVersionInfo();",
+        "Settings footer must use the combined build identity",
+        failures,
+    )
 
     for literal in (
         "public final long updateOrder;",

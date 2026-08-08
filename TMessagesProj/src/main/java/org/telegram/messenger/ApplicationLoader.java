@@ -680,6 +680,14 @@ public class ApplicationLoader extends Application {
         return false;
     }
 
+    public boolean allowCustomUpdateAppPopup(boolean force, boolean updateChanged) {
+        return force || updateChanged;
+    }
+
+    public String getCustomBuildVersionInfo() {
+        return null;
+    }
+
     public IUpdateLayout takeUpdateLayout(Activity activity, ViewGroup sideMenuContainer) {
         return null;
     }

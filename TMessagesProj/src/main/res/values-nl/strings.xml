@@ -705,6 +705,7 @@
     <string name="AppUpdateNow">Update uitvoeren</string>
     <string name="AppUpdateDownloadNow">Nu downloaden</string>
     <string name="AppUpdateRemindMeLater">Herinner me later</string>
+    <string name="AppUpdateSkipVersion">Deze versie overslaan</string>
     <string name="AppUpdateChangelogEmpty">**Wat is er nieuw?**\n\n• Probleemoplossingen en verbeteringen</string>
     <string name="Permanent">Primaire link</string>
     <string name="LinkHashExpired">Link is niet meer actief</string>
