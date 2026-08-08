@@ -122,6 +122,10 @@ jobs:
           apk="$(find "$apk_dir" -type f -name '*.apk' -print -quit)"
           test -n "$apk"
           python3 Tools/check_apk_single_abi.py "$apk" "${{ matrix.abi }}"
+          # Android refuses to install a package whose versionCode is not above
+          # the installed one, and shows only "App not installed". A release
+          # built with a lower build number is therefore dead on arrival.
+          python3 Tools/check_apk_version_monotonic.py "$apk" --repo "${{ forgejo.repository }}"
           cp "$apk" "dist/${{ matrix.artifact }}.apk"
           sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
           ccache --show-stats
