@@ -140,11 +140,20 @@ def main() -> None:
             and "wss_socket tls_ready" in wss_cpp
             and "wss_socket timeout" in wss_cpp,
             "WSS diagnostics must identify TCP, TLS, and timeout phases")
-    require("writeTransportPacket" in socket_cpp
-            and "outgoingWssMessages" in socket_cpp
-            and "wssHandshakePrefixSize" in connection_cpp
-            and socket_state_cpp.count('{"writeTransportPacket"') >= 5,
-            "WSS must preserve init and MTProto packet message boundaries")
+    require("writeTransportPacket" not in socket_cpp
+            and "outgoingWssMessages" not in socket_cpp
+            and "wssHandshakePrefixSize" not in connection_cpp
+            and '{"writeTransportPacket"' not in socket_state_cpp
+            and "flushWssStream" in socket_cpp
+            and "outgoingByteStream->get" in socket_cpp
+            and "WSS_STREAM_CHUNK_BYTES" in socket_cpp,
+            "WSS must carry MTProto as one continuous byte stream; frames are chunking only")
+    require("queuedOutputBytes" in wss_cpp
+            and "readFailed" in wss_cpp
+            and "EPOLLRDHUP" in wss_cpp
+            and "dispatchWssPayloads(payloads)" in socket_cpp
+            and socket_cpp.index("dispatchWssPayloads(payloads)") < socket_cpp.index("wss_transport_failed"),
+            "WSS must deliver frames drained before EOF so transport errors reach MTProto")
     require("std::deque<std::vector<uint8_t>> pendingOutput" in wss_h
             and "pendingOutput.front()" in wss_cpp
             and "pendingOutput.push_back(std::move(frame))" in wss_cpp,

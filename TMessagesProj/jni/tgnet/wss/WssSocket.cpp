@@ -313,7 +313,7 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
         setDiagnostic(diagnostic, "wss_closed");
         return false;
     }
-    if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+    if (events & (EPOLLERR | EPOLLHUP)) {
         setDiagnostic(diagnostic, "wss_socket_closed");
         noteAttemptFailed();
         return false;
@@ -332,11 +332,17 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
         noteAttemptFailed();
         return false;
     }
+    // On peer close (EPOLLRDHUP) or EOF keep draining and parsing: the final
+    // frames may carry the server's MTProto transport error code, and dropping
+    // them hides the disconnect reason from the layer above.
+    bool readFailed = false;
+    std::string readDiagnostic;
     const bool retryReadOnWrite = ioWait == IoWait::Write && (events & EPOLLOUT);
-    if (((events & EPOLLIN) || retryReadOnWrite) && (state == State::HttpRead || state == State::Ready)) {
-        if (!readIntoBuffer(diagnostic)) {
+    if (((events & (EPOLLIN | EPOLLRDHUP)) || retryReadOnWrite)
+            && (state == State::HttpRead || state == State::Ready)) {
+        if (!readIntoBuffer(&readDiagnostic)) {
+            readFailed = true;
             noteAttemptFailed();
-            return false;
         }
     }
     if (state == State::HttpRead) {
@@ -357,6 +363,15 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
         }
     }
     if (state == State::Ready && !parseFrames(payloads, diagnostic)) {
+        return false;
+    }
+    if (readFailed) {
+        setDiagnostic(diagnostic, readDiagnostic.empty() ? "wss_read_failed" : readDiagnostic.c_str());
+        return false;
+    }
+    if (events & EPOLLRDHUP) {
+        setDiagnostic(diagnostic, "wss_socket_closed");
+        noteAttemptFailed();
         return false;
     }
     return true;
@@ -662,6 +677,10 @@ bool Socket::write(const uint8_t *data, uint32_t size, std::string *diagnostic) 
         return false;
     }
     return queueFrame(0x2, data, size, diagnostic);
+}
+
+size_t Socket::queuedOutputBytes() const {
+    return pendingOutputBytes;
 }
 
 bool Socket::isReady() const {

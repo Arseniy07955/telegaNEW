@@ -146,11 +146,9 @@ public:
         bool mediaConnection = false;
         tgnet::wss::Route route;
         std::unique_ptr<tgnet::transport::Socket> transport;
-        // Unlike TCP, WebSocket is message-oriented. Keep complete encrypted
-        // MTProto packets here so ConnectionSocket never destroys their
-        // boundaries by flattening them into outgoingByteStream.
-        std::deque<std::vector<uint8_t>> outgoingMessages;
-        size_t outgoingBytes = 0;
+        // Outgoing MTProto bytes live in the shared outgoingByteStream, same
+        // as every TCP transport: the relay forwards a continuous byte stream
+        // and WebSocket frames are chunking only, never packet boundaries.
     };
 
     struct AdmissionSubstate {

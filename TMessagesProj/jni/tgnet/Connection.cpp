@@ -674,7 +674,6 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
         buffer2 = nullptr;
     }
     uint8_t *bytes = buffer->bytes();
-    const uint32_t wssHandshakePrefixSize = !firstPacketSent && isCurrentTransportWss() ? 64 : 0;
 
     if (!firstPacketSent) {
         buffer->position(64);
@@ -778,8 +777,14 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     if (buffer2 != nullptr) {
         AES_ctr128_encrypt(buffer2->bytes(), buffer2->bytes(), buffer2->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
     }
-    return writeTransportPacket(buffer, buff, buffer2, wssHandshakePrefixSize)
-            && !isClosingOrClosedForWrites();
+    // Every transport, WSS included, carries the obfuscated MTProto stream as
+    // continuous bytes; chunking into wire units happens at the socket layer.
+    writeBuffer(buffer);
+    writeBuffer(buff);
+    if (buffer2 != nullptr) {
+        writeBuffer(buffer2);
+    }
+    return !isClosingOrClosedForWrites();
 }
 
 inline std::string *Connection::getCurrentSecret(uint8_t secretType) {

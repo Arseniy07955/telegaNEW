@@ -33,6 +33,7 @@ public:
     virtual int fd() const = 0;
     virtual bool onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payloads, std::string *diagnostic) = 0;
     virtual bool write(const uint8_t *data, uint32_t size, std::string *diagnostic) = 0;
+    virtual size_t queuedOutputBytes() const = 0;
     virtual bool isReady() const = 0;
     virtual bool wantsWrite() const = 0;
     virtual bool isClosed() const = 0;

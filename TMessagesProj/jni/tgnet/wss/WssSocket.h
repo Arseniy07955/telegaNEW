@@ -40,6 +40,7 @@ public:
     int fd() const override;
     bool onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payloads, std::string *diagnostic) override;
     bool write(const uint8_t *data, uint32_t size, std::string *diagnostic) override;
+    size_t queuedOutputBytes() const override;
     bool isReady() const override;
     bool wantsWrite() const override;
     bool isClosed() const override;

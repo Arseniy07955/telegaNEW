@@ -1034,12 +1034,14 @@ def main() -> int:
         "canSendWssFrame must delegate WSS mode/ready/fd/epoll checks to the action policy",
         failures,
     )
-    flush_wss_body = method_body(socket, "bool ConnectionSocket::flushWssMessages", "void ConnectionSocket::clearWssMessages")
+    flush_wss_body = method_body(socket, "bool ConnectionSocket::flushWssStream", "void ConnectionSocket::publishSanitizedSecretDomainIfNeeded")
     require(
         "!canSendWssFrame()" in flush_wss_body
         and "currentWssTransport->write" in flush_wss_body
-        and "flushWssMessages" in on_event_body,
-        "WSS outbound frame send must use the transport action policy",
+        and "outgoingByteStream->hasData()" in flush_wss_body
+        and "outgoingByteStream->discard" in flush_wss_body
+        and "flushWssStream" in on_event_body,
+        "WSS outbound send must pull the shared byte stream under the transport action policy",
         failures,
     )
     write_raw_body = method_body(socket, "void ConnectionSocket::writeBuffer(uint8_t *data", "void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer)")
@@ -1099,7 +1101,7 @@ def main() -> int:
         and "close_native_socket" in action_table_body
         and "releaseProxyHandshakeAdmission" in action_table_body
         and "writeBufferRaw" in action_table_body
-        and action_table_body.count('{"writeTransportPacket"') >= 5,
+        and '{"writeTransportPacket"' not in action_table_body,
         "transport action states must be table-driven through allowedActionStates",
         failures,
     )
