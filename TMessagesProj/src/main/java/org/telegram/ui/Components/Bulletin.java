@@ -506,7 +506,7 @@ public class Bulletin {
     }
 
     private static boolean isTransitionsEnabled() {
-        return MessagesController.getGlobalMainSettings().getBoolean("view_animations", true);
+        return MessagesController.getGlobalMainSettings().getBoolean("view_animations", false);
     }
 
     public void updatePosition() {

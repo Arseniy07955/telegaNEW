@@ -6378,7 +6378,7 @@ public class ChatActivity extends BaseFragment implements
         paddingTopHeight = 0;
         botDraftHeightController.setRecyclerView(chatListView);
         invalidateChatListViewTopPadding();
-        if (MessagesController.getGlobalMainSettings().getBoolean("view_animations", true)) {
+        if (MessagesController.getGlobalMainSettings().getBoolean("view_animations", false)) {
             chatListItemAnimator = new ChatListItemAnimator(this, chatListView, themeDelegate) {
 
                 Runnable finishRunnable;

@@ -1174,7 +1174,7 @@ public class ChangeUsernameActivity extends BaseFragment {
     public void onResume() {
         super.onResume();
         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-        boolean animations = preferences.getBoolean("view_animations", true);
+        boolean animations = preferences.getBoolean("view_animations", false);
         if (!animations) {
             focusUsernameField(false);
         }

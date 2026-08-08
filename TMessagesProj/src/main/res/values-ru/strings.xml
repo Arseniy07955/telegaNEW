@@ -429,4 +429,6 @@
     <string name="EnableDoubleTapReactions">Быстрые реакции по двойному нажатию</string>
     <string name="DoubleTapReactionsDisabledInfo">Быстрые реакции по двойному нажатию отключены. Реакцию по-прежнему можно выбрать через меню сообщения.</string>
     <string name="AppUpdateSkipVersion">Пропустить эту версию</string>
+    <string name="LiteProfileAvatarBlur">Размытие под фото профиля</string>
+    <string name="LiteProfileAvatarBlurInfo">Размытая подложка под фото профиля и кнопками действий. На старых устройствах лучше не включать: без неё раскрытие фото профиля работает гораздо плавнее.</string>
 </resources>

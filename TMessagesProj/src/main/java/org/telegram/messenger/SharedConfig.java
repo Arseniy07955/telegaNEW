@@ -165,6 +165,14 @@ public class SharedConfig {
                 .apply();
     }
 
+    public static void setProfileAvatarBlur(boolean enabled) {
+        profileAvatarBlur = enabled;
+        ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE)
+                .edit()
+                .putBoolean("profile_avatar_blur", profileAvatarBlur)
+                .apply();
+    }
+
     private static String goodHevcEncoder;
     private static HashSet<String> hevcEncoderWhitelist = new HashSet<>();
     static {
@@ -267,6 +275,7 @@ public class SharedConfig {
     public static boolean useNewBlur;
     public static boolean useSurfaceInStories;
     public static boolean photoViewerBlur = true;
+    public static boolean profileAvatarBlur;
     public static boolean payByInvoice;
     public static int stealthModeSendMessageConfirm = 2;
     private static int lastLocalId = -210000;
@@ -667,6 +676,13 @@ public class SharedConfig {
             }
 
             preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
+            if (!preferences.getBoolean("view_animations_opt_in_v1", false)) {
+                preferences.edit()
+                        .putBoolean("view_animations", false)
+                        .putBoolean("view_animations_opt_in_v1", true)
+                        .apply();
+                animationsEnabled = false;
+            }
             SaveToGallerySettingsHelper.load(preferences);
             mapPreviewType = preferences.getInt("mapPreviewType", 2);
             searchEngineType = preferences.getInt("searchEngineType", 0);
@@ -752,6 +768,7 @@ public class SharedConfig {
             useSurfaceInStories = preferences.getBoolean("useSurfaceInStories", Build.VERSION.SDK_INT >= 30);
             payByInvoice = preferences.getBoolean("payByInvoice", false);
             photoViewerBlur = preferences.getBoolean("photoViewerBlur", true);
+            profileAvatarBlur = preferences.getBoolean("profile_avatar_blur", false);
             multipleReactionsPromoShowed = preferences.getBoolean("multipleReactionsPromoShowed", false);
             callEncryptionHintDisplayedCount = preferences.getInt("callEncryptionHintDisplayedCount", 0);
             debugVideoQualities = preferences.getBoolean("debugVideoQualities", false);
@@ -1924,7 +1941,7 @@ public class SharedConfig {
 
     public static boolean animationsEnabled() {
         if (animationsEnabled == null) {
-            animationsEnabled = MessagesController.getGlobalMainSettings().getBoolean("view_animations", true);
+            animationsEnabled = MessagesController.getGlobalMainSettings().getBoolean("view_animations", false);
         }
         return animationsEnabled;
     }

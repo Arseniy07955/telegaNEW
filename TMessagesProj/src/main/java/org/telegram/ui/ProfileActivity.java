@@ -919,7 +919,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 
         public void createBlurEffect(int actionsSize) {
             this.actionsSize = actionsSize;
-            this.blurEnabled = true; // actionsSize > 0;
+            this.blurEnabled = SharedConfig.profileAvatarBlur;
         }
 
         public AvatarImageView(Context context) {
@@ -5446,8 +5446,10 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
 //            metaball.destroy();
 //        }
         overlaysView = new OverlaysView(context);
-        avatarsBlurView = new ProfileGalleryBlurView(context);
-        avatarsBlurView.setSize(getActionsExtraHeight());
+        avatarsBlurView = SharedConfig.profileAvatarBlur ? new ProfileGalleryBlurView(context) : null;
+        if (avatarsBlurView != null) {
+            avatarsBlurView.setSize(getActionsExtraHeight());
+        }
         avatarsViewPager = new ProfileGalleryView(context, userId != 0 ? userId : -chatId, actionBar, listView, avatarImage, getClassGuid(), overlaysView, avatarsBlurView) {
             @Override
             protected void setCustomAvatarProgress(float progress) {
@@ -5462,14 +5464,20 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             avatarsViewPager.setChatInfo(chatInfo);
         }
         avatarContainer2.addView(avatarsViewPager);
-        avatarContainer2.addView(avatarsBlurView, LayoutHelper.createFrame(-1, 74 + 64));
+        if (avatarsBlurView != null) {
+            avatarContainer2.addView(avatarsBlurView, LayoutHelper.createFrame(-1, 74 + 64));
+        }
         avatarContainer2.addView(overlaysView);
         if (actionsView != null) {
-            avatarsBlurView.setActionsView(actionsView);
+            if (avatarsBlurView != null) {
+                avatarsBlurView.setActionsView(actionsView);
+            }
             avatarContainer2.addView(actionsView, LayoutHelper.createFrame(-1, -1));
         }
         if (musicView != null) {
-            avatarsBlurView.setMusicView(musicView);
+            if (avatarsBlurView != null) {
+                avatarsBlurView.setMusicView(musicView);
+            }
             avatarContainer2.addView(musicView, LayoutHelper.createFrame(-1, -1));
         }
         avatarImage.setAvatarsViewPager(avatarsViewPager);
@@ -9745,7 +9753,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             needTimerImage = type != 0;
             needStarImage = type != 0;
             updateStar();
-            if (preferences.getBoolean("view_animations", true)) {
+            if (preferences.getBoolean("view_animations", false)) {
                 playProfileAnimation = type;
             } else if (type == 2) {
                 expandPhoto = true;
