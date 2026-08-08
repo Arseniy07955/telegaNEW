@@ -158,6 +158,21 @@ def main() -> int:
     ):
         require(root_gradle, literal, "Build-wide release identity", failures)
 
+    # A stable release must derive its versionCode from its own tag. Passing the
+    # number by hand once shipped 1.1.13 with a versionCode BELOW 1.1.12, and
+    # Android then refuses the install with nothing but "App not installed".
+    for literal in (
+        "zastoSemanticTag = (zastoReleaseTagValue =~",
+        "zastoResolvedBuildNumber = major * 1000 + minor * 100 + patch",
+        "buildNumber: zastoResolvedBuildNumber,",
+    ):
+        require(
+            root_gradle,
+            literal,
+            "Semantic release tag must derive the versionCode",
+            failures,
+        )
+
     for literal in (
         'def zastoApplicationId = zastoUpdateChannel == "dev" ? "${APP_PACKAGE}.dev" : APP_PACKAGE',
         'def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"',

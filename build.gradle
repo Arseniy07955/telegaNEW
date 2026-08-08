@@ -37,9 +37,33 @@ if (!(zastoBuildNumberValue ==~ /\d+/) || zastoBuildNumberValue.toInteger() > 99
     throw new GradleException("Invalid ZaStoGram build number '${zastoBuildNumberValue}'. Expected an integer from 0 to 9999")
 }
 
+// The release tag is the single source of truth for a stable build. Android
+// refuses to install a package whose versionCode is not above the installed
+// one and reports only "App not installed", so a hand-passed build number is
+// a silent trap: pass a smaller one by accident and the release is dead on
+// arrival. A semantic tag therefore DERIVES the number instead, which makes
+// "1.1.14 is newer than 1.1.13" true by construction.
+//
+// Layout: X*1000 + Y*100 + Z, so 1.1.14 -> 1114 and 1.2.0 -> 1200. Dev builds
+// tag themselves differently (forgejo-build-N-M) and keep the CI run number;
+// they install under their own application id and never meet a stable build.
+def zastoSemanticTag = (zastoReleaseTagValue =~ /^(\d+)\.(\d+)\.(\d+)$/)
+def zastoResolvedBuildNumber = zastoBuildNumberValue.toInteger()
+if (zastoSemanticTag.matches()) {
+    def major = zastoSemanticTag[0][1].toInteger()
+    def minor = zastoSemanticTag[0][2].toInteger()
+    def patch = zastoSemanticTag[0][3].toInteger()
+    if (major > 9 || minor > 9 || patch > 99) {
+        throw new GradleException(
+                "Release tag '${zastoReleaseTagValue}' does not fit the versionCode layout. " +
+                        "Expected major and minor below 10 and patch below 100.")
+    }
+    zastoResolvedBuildNumber = major * 1000 + minor * 100 + patch
+}
+
 ext.zastoReleaseIdentity = [
         updateChannel: zastoUpdateChannelValue,
         releaseTag: zastoReleaseTagValue,
         forgejoRepository: zastoForgejoRepositoryValue,
-        buildNumber: zastoBuildNumberValue.toInteger(),
+        buildNumber: zastoResolvedBuildNumber,
 ]
