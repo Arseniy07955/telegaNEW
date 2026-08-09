@@ -1,5 +1,64 @@
 apply plugin: 'com.android.application'
 
+def zastoReleaseIdentity = rootProject.ext.zastoReleaseIdentity
+def zastoUpdateChannel = zastoReleaseIdentity.updateChannel
+def zastoBuildNumber = zastoReleaseIdentity.buildNumber
+def zastoApplicationId = zastoUpdateChannel == "dev" ? "${APP_PACKAGE}.dev" : APP_PACKAGE
+def zastoApplicationName = zastoUpdateChannel == "dev" ? "ZaStoGram Dev" : "ZaStoGram"
+
+// Signing inputs accept a Gradle property as well as the environment variable.
+// System.getenv() inside a build script reports the DAEMON's environment, not
+// the one of the command that started the build, so an exported variable can
+// silently fail to apply while a -P property always reaches this code.
+def zastoSigningInput = { String propertyName, String envName ->
+    return (findProperty(propertyName) ?: System.getenv(envName))?.toString()?.trim() ?: null
+}
+
+def zastoReadSigningSecret = { String propertyName, String envName ->
+    def secretPath = zastoSigningInput(propertyName, envName)
+    if (!secretPath) {
+        return null
+    }
+    def secretFile = file(secretPath)
+    if (!secretFile.isFile()) {
+        throw new GradleException("ZaStoGram signing secret file does not exist: ${secretPath}")
+    }
+    return secretFile.getText("UTF-8").trim()
+}
+
+def zastoReleaseKeystorePath = zastoSigningInput("zastoReleaseKeystore", "ZASTO_RELEASE_KEYSTORE")
+def zastoReleaseStorePassword = zastoReadSigningSecret("zastoReleaseStorePasswordFile", "ZASTO_RELEASE_STORE_PASSWORD_FILE")
+def zastoReleaseKeyPassword = zastoReadSigningSecret("zastoReleaseKeyPasswordFile", "ZASTO_RELEASE_KEY_PASSWORD_FILE")
+def zastoReleaseKeyAlias = zastoReadSigningSecret("zastoReleaseKeyAliasFile", "ZASTO_RELEASE_KEY_ALIAS_FILE")
+def zastoExternalSigningValues = [
+        zastoReleaseKeystorePath,
+        zastoReleaseStorePassword,
+        zastoReleaseKeyPassword,
+        zastoReleaseKeyAlias,
+]
+if (zastoExternalSigningValues.any { it } && !zastoExternalSigningValues.every { it }) {
+    throw new GradleException("ZaStoGram external signing requires the keystore and all three credential files")
+}
+// A stable build MUST carry the real release identity. The in-repo keystore is
+// a different certificate, and Android refuses to update an installed app whose
+// signature changed - it only says "App not installed", and Play Protect flags
+// the unknown signer on top. Releases 1.1.13 and 1.1.14 shipped that way
+// because the fallback applied silently; refusing to build is the only way this
+// cannot happen again.
+if (zastoUpdateChannel == "stable" && !zastoExternalSigningValues.every { it }) {
+    throw new GradleException(
+            "Refusing a stable ZaStoGram build without its release signing key. " +
+                    "Pass -PzastoReleaseKeystore, -PzastoReleaseStorePasswordFile, " +
+                    "-PzastoReleaseKeyPasswordFile and -PzastoReleaseKeyAliasFile " +
+                    "(or the matching ZASTO_RELEASE_* environment variables).")
+}
+def zastoReleaseKeystoreFile = zastoReleaseKeystorePath
+        ? file(zastoReleaseKeystorePath)
+        : file("../TMessagesProj/config/release.keystore")
+if (zastoReleaseKeystorePath && !zastoReleaseKeystoreFile.isFile()) {
+    throw new GradleException("ZaStoGram release keystore does not exist: ${zastoReleaseKeystorePath}")
+}
+
 repositories {
     mavenCentral()
     google()
@@ -26,7 +85,7 @@ android {
     compileSdkVersion 35
     buildToolsVersion '35.0.0'
 
-    defaultConfig.applicationId = APP_PACKAGE
+    defaultConfig.applicationId = zastoApplicationId
 
     sourceSets.main.jniLibs.srcDirs = ['../TMessagesProj/jni/']
 
@@ -45,17 +104,17 @@ android {
 
     signingConfigs {
         debug {
-            storeFile file("../TMessagesProj/config/release.keystore")
-            storePassword RELEASE_STORE_PASSWORD
-            keyAlias RELEASE_KEY_ALIAS
-            keyPassword RELEASE_KEY_PASSWORD
+            storeFile zastoReleaseKeystoreFile
+            storePassword zastoReleaseStorePassword ?: RELEASE_STORE_PASSWORD
+            keyAlias zastoReleaseKeyAlias ?: RELEASE_KEY_ALIAS
+            keyPassword zastoReleaseKeyPassword ?: RELEASE_KEY_PASSWORD
         }
 
         release {
-            storeFile file("../TMessagesProj/config/release.keystore")
-            storePassword RELEASE_STORE_PASSWORD
-            keyAlias RELEASE_KEY_ALIAS
-            keyPassword RELEASE_KEY_PASSWORD
+            storeFile zastoReleaseKeystoreFile
+            storePassword zastoReleaseStorePassword ?: RELEASE_STORE_PASSWORD
+            keyAlias zastoReleaseKeyAlias ?: RELEASE_KEY_ALIAS
+            keyPassword zastoReleaseKeyPassword ?: RELEASE_KEY_PASSWORD
         }
     }
 
@@ -153,7 +212,12 @@ android {
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             outputFileName = "app.apk"
-            output.versionCodeOverride = defaultConfig.versionCode * 100 + variant.productFlavors.get(0).abiVersionCode
+            // Reserve five decimal digits per upstream Telegram version: four for the
+            // Forgejo Actions run and one for the ABI. A newer dev prerelease can then
+            // be installed over the previous prerelease even when APP_VERSION_CODE did
+            // not change between workflow runs.
+            def abiVersionDigit = variant.productFlavors.get(0).abiVersionCode % 10
+            output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit
         }
     }
 
@@ -171,6 +235,16 @@ android {
         versionName APP_VERSION_NAME
         ndkVersion "27.2.12479018"
 
+        // Stable and dev are independent installed applications. Keep their
+        // package, visible label and updater channel derived from one identity.
+        resValue "string", "ZastoApplicationName", zastoApplicationName
+        // Keep identity in resources rather than BuildConfig. BuildConfig always embeds the
+        // changing VERSION_CODE, which would invalidate the expensive R8 output each release.
+        resValue "string", "ZastoUpdateChannel", zastoUpdateChannel
+        resValue "string", "ZastoReleaseTag", zastoReleaseIdentity.releaseTag
+        resValue "string", "ZastoForgejoRepository", zastoReleaseIdentity.forgejoRepository
+        resValue "integer", "ZastoBuildNumber", zastoBuildNumber.toString()
+
         multiDexEnabled true
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
@@ -184,12 +258,74 @@ android {
     }
 
     buildFeatures {
-        buildConfig = true
+        buildConfig = false
     }
     namespace 'org.telegram.messenger.web'
 
     lintOptions {
         checkReleaseBuilds false
+    }
+}
+
+// A second line of defense after packaging: even a custom or abbreviated Gradle
+// invocation must never leave behind an ABI-specific APK containing Chaquopy
+// runtime assets for another architecture.
+def zastoStandaloneAbiApks = [
+        Arm64: [outputDir: "arm64", abi: "arm64-v8a"],
+        Armv7: [outputDir: "armv7", abi: "armeabi-v7a"],
+        X86: [outputDir: "x86", abi: "x86"],
+        X64: [outputDir: "x64", abi: "x86_64"],
+]
+def zastoValidNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
+zastoStandaloneAbiApks.each { flavor, spec ->
+    def assembleTaskName = "assemble${flavor}Standalone"
+    def verifyTask = tasks.register("verify${flavor}StandaloneAbiIsolation") {
+        group = "verification"
+        description = "Rejects foreign native and Chaquopy ABI payload in ${flavor} standalone APK"
+        dependsOn assembleTaskName
+        doLast {
+            File apkFile = file("$buildDir/outputs/apk/${spec.outputDir}/standalone/app.apk")
+            if (!apkFile.isFile()) {
+                throw new GradleException("Standalone APK is missing: ${apkFile}")
+            }
+
+            def foreignEntries = []
+            def hasExpectedNative = false
+            def hasExpectedChaquopy = false
+            def archive = new java.util.zip.ZipFile(apkFile)
+            try {
+                def entries = archive.entries()
+                while (entries.hasMoreElements()) {
+                    def name = entries.nextElement().name
+                    zastoValidNativeAbis.each { abi ->
+                        def nativeEntry = name.startsWith("lib/${abi}/")
+                        def chaquopyBootstrap = name.startsWith("assets/chaquopy/bootstrap-native/${abi}/")
+                        def chaquopyArchive = name == "assets/chaquopy/requirements-${abi}.imy" ||
+                                name == "assets/chaquopy/stdlib-${abi}.imy"
+                        if (nativeEntry || chaquopyBootstrap || chaquopyArchive) {
+                            if (abi != spec.abi) {
+                                foreignEntries.add(name)
+                            } else {
+                                hasExpectedNative |= nativeEntry
+                                hasExpectedChaquopy |= chaquopyBootstrap
+                            }
+                        }
+                    }
+                }
+            } finally {
+                archive.close()
+            }
+
+            if (!foreignEntries.isEmpty() || !hasExpectedNative || !hasExpectedChaquopy) {
+                throw new GradleException(
+                        "APK ABI isolation failed for ${apkFile}: foreign ABI payload=${foreignEntries.take(12)}, " +
+                                "expected native=${hasExpectedNative}, expected Chaquopy=${hasExpectedChaquopy}"
+                )
+            }
+        }
+    }
+    tasks.matching { it.name == assembleTaskName }.configureEach {
+        finalizedBy verifyTask
     }
 }
 

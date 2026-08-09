@@ -5,14 +5,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
-CONNECTIONS = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
-PROXY_SETTINGS = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxySettingsActivity.java"
-WSS_CPP = ROOT / "TMessagesProj/jni/tgnet/WssTransport.cpp"
-
-
-def text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+WSS_CPP = ROOT / "TMessagesProj/jni/tgnet/wss/WssSocket.cpp"
+CONNECTION_CPP = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
+CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
+FILE_LOADER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileLoadOperation.java"
 
 
 def require(condition: bool, message: str) -> None:
@@ -21,47 +18,52 @@ def require(condition: bool, message: str) -> None:
         sys.exit(1)
 
 
-def section(source: str, start: str, end: str) -> str:
-    require(start in source, f"missing section start: {start}")
-    tail = source.split(start, 1)[1]
-    require(end in tail, f"missing section end after {start}: {end}")
-    return tail.split(end, 1)[0]
-
-
 def main() -> None:
-    shared_config = text(SHARED_CONFIG)
-    connections = text(CONNECTIONS)
-    proxy_list = text(PROXY_LIST)
-    proxy_settings = text(PROXY_SETTINGS)
-    wss_cpp = text(WSS_CPP)
+    shared_config = SHARED_CONFIG.read_text(encoding="utf-8", errors="replace")
+    proxy_list = PROXY_LIST.read_text(encoding="utf-8", errors="replace")
+    wss_cpp = WSS_CPP.read_text(encoding="utf-8", errors="replace")
+    connection_cpp = CONNECTION_CPP.read_text(encoding="utf-8", errors="replace")
+    connections_java = CONNECTIONS_JAVA.read_text(encoding="utf-8", errors="replace")
+    file_loader = FILE_LOADER.read_text(encoding="utf-8", errors="replace")
 
-    normalize = section(shared_config, "public static int normalizeWssTransportMode", "public static String normalizeWssPath")
-    load_config = section(shared_config, "public static void loadConfig()", "if (passcodeHash.length() > 0")
-    wss_options = section(proxy_list, "private static final int[] WSS_TRANSPORT_OPTIONS", "};")
-    wss_labels = section(proxy_list, "private String[] getWssTransportModeLabels", "};")
-    resolve_mode = section(connections, "private static int resolveWssTransportMode()", "private static class WssSocksProxy")
-    wss_save = section(proxy_settings, "if (currentType == TYPE_WSS)", "currentProxyInfo.address")
+    require('preferences.getBoolean("wssTransportEnabled", true)' in shared_config
+            and "WSS включён по умолчанию" in shared_config,
+            "WSS must be enabled by default while keeping an explicit user choice")
+    require('preferences.getInt("wssTransportMode"' in shared_config,
+            "legacy WSS mode must migrate to the checkbox")
+    require('.remove("wssHost")' in shared_config and '.remove("wssPath")' in shared_config,
+            "custom gateway keys must be removed during migration")
+    require("UseWssTransport" in proxy_list and "wssTransportEnabled" in proxy_list,
+            "the official transport must be exposed as a normal checkbox")
+    require('prefix = "kws" + std::to_string(dcId)' in wss_cpp,
+            "official WSS must generate Telegram DC1-DC5 relay names")
+    require("dcId < 1 || dcId > 5" in wss_cpp,
+            "official WSS relay catalog must cover exactly DC1-DC5")
+    require('mediaConnection ? "-1.web.telegram.org"' in wss_cpp,
+            "official WSS must select the media relay variant")
+    require("getDatacenterId(), isMediaConnection);" in connection_cpp
+            and "wssMediaRoute" not in connection_cpp,
+            "WSS relay selection must follow the selected auth realm; uploads use regular kwsN")
+    require("forceProxyLikeInitForWss" not in connection_cpp
+            and "if (useSecret != 0)" in connection_cpp,
+            "direct WSS must not inject the MTProxy-only DC marker")
+    require("dcId < 1 || dcId > 5" in wss_cpp and "testBackend" in wss_cpp,
+            "unsupported/test DCs must stay on their normal transport")
+    require("officialRelayIpForDc" in wss_cpp
+            and 'return "149.154.167.220"' in wss_cpp
+            and "result.relayHostFallback = result.domain" in wss_cpp
+            and "result.viaFallback = preferFallback(result)" in wss_cpp,
+            "official WSS must use direct Telegram ingress with an automatic hostname fallback")
+    require("if (isCurrentTransportWss())" in connection_cpp
+            and "useSecret = 0" in connection_cpp,
+            "direct WSS must not inherit a TCP dcOption or MTProxy secret")
+    require("supportsCdnFileRedirects()" in connections_java
+            and "return !SharedConfig.wssTransportEnabled" in connections_java,
+            "network layer must disable CDN redirects when WSS cannot route CDN DC ids")
+    require("req.cdn_supported = ConnectionsManager.supportsCdnFileRedirects()" in file_loader,
+            "file downloads must advertise the active transport's CDN capability")
 
-    require("mode >= TRANSPORT_LEGACY_PROXY && mode <= TRANSPORT_WSS_SOCKS5" in normalize,
-            "official WSS must remain a valid transport mode, not normalize to legacy proxy")
-    require("wss_default_applied" in load_config and "wssTransportMode = TRANSPORT_WSS_OFFICIAL" in load_config,
-            "first run must default to official Telegram WSS")
-    require("ConnectionsManager.WSS_TRANSPORT_OFFICIAL" in wss_options,
-            "WSS mode chooser must expose official Telegram WSS")
-    require("WssTransportOfficial" in wss_labels,
-            "WSS mode labels must include official Telegram WSS")
-    require("WSS_TRANSPORT_OFFICIAL" not in resolve_mode or "return WSS_TRANSPORT_OFF" not in resolve_mode.split("WSS_TRANSPORT_OFFICIAL", 1)[-1],
-            "Java resolver must not disable official WSS before native")
-    require("wssLocalProxyEnabled" not in shared_config and "saveWssLocalBridgeProxy" not in shared_config,
-            "official WSS default must not depend on a local proxy row")
-    require("WssMiniAppProxyBridge.ensureStartedForProxySettings()" not in wss_save,
-            "saving WSS settings must not start a local proxy-settings bridge")
-    require("SharedConfig.setWssTransport(" in wss_save and "ConnectionsManager.setWssTransportSettings()" in wss_save,
-            "WSS gateway editor must save native WSS settings")
-    require("kws2.web.telegram.org" in wss_cpp and "kws4.web.telegram.org" in wss_cpp and "dcId != 2 && dcId != 4" in wss_cpp,
-            "native official WSS route must target Telegram DC2/DC4 web relays only")
-
-    print("WSS official default guard passed.")
+    print("WSS official route guard passed.")
 
 
 if __name__ == "__main__":

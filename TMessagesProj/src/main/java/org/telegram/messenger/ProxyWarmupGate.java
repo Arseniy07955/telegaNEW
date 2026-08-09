@@ -62,8 +62,15 @@ public final class ProxyWarmupGate {
     private static long usableAtMs = -1;
     private static long lastStateChangeAtMs = -1;
     private static int delayedRequests;
-    private static String lastDecisionLogKey = "";
-    private static long lastDecisionLogAtMs;
+    // Per-key throttle for decision logs. A single "last key" slot was useless
+    // here: media loading interleaves decisions from several accounts and
+    // classes, so consecutive entries almost never repeat and every one of them
+    // reached the file. One media burst wrote hundreds of identical lines per
+    // second and pushed everything else — including updater errors — out of the
+    // rotated log. Each distinct decision now gets its own window, and the next
+    // line that survives reports how many were folded into it.
+    private static final int DECISION_LOG_KEYS_LIMIT = 64;
+    private static final HashMap<String, long[]> decisionLogWindows = new HashMap<>();
     private static final HashMap<String, DelayedBucket> delayedBuckets = new HashMap<>();
 
     private static final class DelayedOperation {
@@ -364,8 +371,7 @@ public final class ProxyWarmupGate {
         return SharedConfig.isProxyEnabled()
                 && currentProxy != null
                 && currentProxy.secret != null
-                && currentProxy.secret.length() > 0
-                && !currentProxy.isWssTransport();
+                && currentProxy.secret.length() > 0;
     }
 
     private static String delayedBucketKeyLocked(int account, NetworkRequestClass requestClass) {
@@ -451,6 +457,7 @@ public final class ProxyWarmupGate {
             return;
         }
         long now = SystemClock.elapsedRealtime();
+        suppressedDecisionLogs = 0;
         if (!shouldLogDecisionLocked(warmupState, decision, requestClass, account, dcId, delay, max, now)) {
             return;
         }
@@ -477,13 +484,16 @@ public final class ProxyWarmupGate {
         if (lastStateChangeAtMs > 0) {
             builder.append(" state_age=").append(Math.max(0, now - lastStateChangeAtMs));
         }
+        if (suppressedDecisionLogs > 0) {
+            // Never drop entries silently: say how many identical ones were folded in.
+            builder.append(" repeated=").append(suppressedDecisionLogs);
+        }
         FileLog.d(builder.toString());
     }
 
+    private static long suppressedDecisionLogs;
+
     private static boolean shouldLogDecisionLocked(ProxyWarmupState warmupState, String decision, NetworkRequestClass requestClass, int account, int dcId, long delay, int max, long now) {
-        if (!DECISION_RAMP.equals(decision) && !DECISION_DELAY.equals(decision)) {
-            return true;
-        }
         String key = warmupState.name()
                 + "|" + decision
                 + "|" + requestClass.name()
@@ -492,11 +502,23 @@ public final class ProxyWarmupGate {
                 + "|" + delay
                 + "|" + max
                 + "|" + (endpointKey != null ? endpointKey : "");
-        if (key.equals(lastDecisionLogKey) && now - lastDecisionLogAtMs < WARMUP_DECISION_LOG_DEDUP_MS) {
+        long[] window = decisionLogWindows.get(key);
+        if (window != null && now - window[0] < WARMUP_DECISION_LOG_DEDUP_MS) {
+            window[1]++;
             return false;
         }
-        lastDecisionLogKey = key;
-        lastDecisionLogAtMs = now;
+        if (window == null) {
+            if (decisionLogWindows.size() >= DECISION_LOG_KEYS_LIMIT) {
+                // Bound the map: a stale window only costs one extra line.
+                decisionLogWindows.clear();
+            }
+            window = new long[] {now, 0};
+            decisionLogWindows.put(key, window);
+        } else {
+            suppressedDecisionLogs = window[1];
+            window[0] = now;
+            window[1] = 0;
+        }
         return true;
     }
 }

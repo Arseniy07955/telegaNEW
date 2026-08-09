@@ -640,38 +640,26 @@ public class SharedConfig {
             passportConfigJson = preferences.getString("passportConfigJson", "");
             passportConfigHash = preferences.getInt("passportConfigHash", 0);
             storageCacheDir = preferences.getString("storageCacheDir", null);
-            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", true);
+            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
             showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
             mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
-            // telegaNEW: Disable 'Меньше параллельных каналов MTProxy' by default for new users
-            if (!preferences.contains("mtProxySoftMux")) {
-                mtProxySoftMux = false;
-            }
             mtProxyConnectionPatternMode = clampInt(preferences.getInt("mtProxyConnectionPatternMode", 0), 0, 4);
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
             mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 0), 0, 2);
-            // telegaNEW: Auto-enable Soft Startup Cover for first-run/new-users
-            if (!preferences.contains("mtProxyStartupCoverMode")) {
-                mtProxyStartupCoverMode = 1;
-            }
             wssTransportMode = normalizeWssTransportMode(preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY));
             // Auto-enable official Telegram WSS once on first run. Official
             // routes are native MTProto-over-WebSocket for DC2/DC4, not a
             // local SOCKS bridge and not a custom gateway.
-            if (!preferences.getBoolean("wss_default_applied_v8", false)) {
-                wssTransportMode = TRANSPORT_LEGACY_PROXY;
-                wssHost = "novosibirsk.senkapopka.ru";
-                wssPort = 2053;
-                wssPath = "/apiws";
+            if (!preferences.getBoolean("wss_default_applied", false)) {
+                if (wssTransportMode == TRANSPORT_LEGACY_PROXY) {
+                    wssTransportMode = TRANSPORT_WSS_OFFICIAL;
+                }
                 preferences.edit()
                         .putInt("wssTransportMode", wssTransportMode)
-                        .putString("wssHost", wssHost)
-                        .putInt("wssPort", wssPort)
-                        .putString("wssPath", wssPath)
-                        .putBoolean("wss_default_applied_v8", true)
+                        .putBoolean("wss_default_applied", true)
                         .apply();
             }
             wssHost = preferences.getString("wssHost", "");
@@ -1692,49 +1680,32 @@ public class SharedConfig {
             ProxyInfo info = currentWssSocksProxy = new ProxyInfo(wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword, "");
             proxyList.add(0, info);
         }
-        ensureZaStoDefaultProxies(preferences);
+        ensureDefaultProxyEntry(preferences);
     }
 
-    private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v7", false)) {
+    // Seeds a removable default SOCKS5 entry (127.0.0.1:1353) into the proxy
+    // list once, mirroring tdesktop's ensureDefaultProxy. It is NOT selected
+    // or forced - just a convenience row the user can use (if a local bypass
+    // tool listens on 1353) or delete. WSS stays opt-in and is untouched here.
+    private static void ensureDefaultProxyEntry(SharedPreferences preferences) {
+        if (preferences.getBoolean("default_proxy_added", false)) {
             return;
         }
-        // Seed: 0185e6912508d904febdb6df3e60cb49
-        // nsk.cdn.catpaws.ru hex: 6e736b2e63646e2e636174706177732e7275
-        // ya.ru hex: 79612e7275
-
-        ProxyInfo info1 = new ProxyInfo("144.31.15.132", 443, "", "", "ee0185e6912508d904febdb6df3e60cb4979612e7275");
-        ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275");
-        ProxyInfo info3 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd0185e6912508d904febdb6df3e60cb49");
-        ProxyInfo info4 = new ProxyInfo("pokemon.catpaws.ru", 9443, "", "", "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275");
-
-        proxyList.clear();
-        proxyList.add(0, info4);
-        proxyList.add(0, info1);
-        proxyList.add(0, info3);
-        proxyList.add(0, info2);
-
-        currentProxy = info2;
-
-        preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v7", true)
-                .putBoolean("proxy_enabled", true)
-                .putString("proxy_ip", info2.address)
-                .putInt("proxy_port", info2.port)
-                .putString("proxy_user", info2.username)
-                .putString("proxy_pass", info2.password)
-                .putString("proxy_secret", info2.secret)
-                .apply();
-
-        // Trigger immediate application to native layer
-        AndroidUtilities.runOnUIThread(() -> {
-            ConnectionsManager.setProxySettings(true, info2.address, info2.port, info2.username, info2.password, info2.secret);
-        }, 1000);
-
+        for (ProxyInfo existing : proxyList) {
+            if (existing != null
+                    && "127.0.0.1".equals(existing.address)
+                    && existing.port == 1353
+                    && TextUtils.isEmpty(existing.secret)
+                    && existing.transportMode == TRANSPORT_LEGACY_PROXY) {
+                preferences.edit().putBoolean("default_proxy_added", true).apply();
+                return;
+            }
+        }
+        ProxyInfo info = new ProxyInfo("127.0.0.1", 1353, "", "", "");
+        proxyList.add(0, info);
         saveProxyList();
+        preferences.edit().putBoolean("default_proxy_added", true).apply();
     }
-
-
 
     public static void saveProxyList() {
         // ZaStoGram: ручной порядок — сохраняем как есть, без авто-сортировки по пингу
@@ -2167,4 +2138,7 @@ public class SharedConfig {
         SharedPreferences pref = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         pref.edit().putBoolean("drawActionBarShadow", drawActionBarShadow);
     }
+
+
+
 }

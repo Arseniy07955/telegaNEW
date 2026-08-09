@@ -35,7 +35,6 @@
 #include "Config.h"
 #include "ProxyCheckInfo.h"
 #include "Handshake.h"
-#include "WssTransport.h"
 #include "mtproxy/MtProxyProbeCoordinator.h"
 
 #ifdef ANDROID
@@ -301,7 +300,9 @@ void ConnectionsManager::select() {
 
     Datacenter *datacenter = getDatacenterWithId(currentDatacenterId);
     if (pushConnectionEnabled) {
-        if ((sendingPushPing && llabs(now - lastPushPingTime) >= 30000) || llabs(now - lastPushPingTime) >= nextPingTimeOffset + 10000) {
+        if (lastPushPingTime != 0
+                && ((sendingPushPing && llabs(now - lastPushPingTime) >= 30000)
+                    || llabs(now - lastPushPingTime) >= nextPingTimeOffset + 10000)) {
             lastPushPingTime = 0;
             sendingPushPing = false;
             if (datacenter != nullptr) {
@@ -2592,7 +2593,8 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
         return false;
     }
 
-    if (!connection->canSendRequestData("sendMessages_pre_create")) {
+    const bool mtProxyRouteActive = connection->isMtProxyRouteActive();
+    if (mtProxyRouteActive && !connection->canSendRequestData("sendMessages_pre_create")) {
         if (requeueOnDeadConnection) {
             requeueMessagesForDeadConnection(messages, connection, "sendMessages_pre_create");
         } else {
@@ -2641,7 +2643,7 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     }
                 }
 
-                if (!connection->canSendRequestData("sendMessages_post_create")) {
+                if (mtProxyRouteActive && !connection->canSendRequestData("sendMessages_post_create")) {
                     removeQuickAckMappingForMessages(quickAckId, currentMessages);
                     transportData->reuse();
                     for (uint32_t b = a + 1; b < count; b++) {
@@ -2657,7 +2659,8 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     messages.clear();
                     return sentAny;
                 }
-                if (!connection->sendData(transportData, reportAck, true)) {
+                const bool accepted = connection->sendData(transportData, reportAck, true);
+                if (mtProxyRouteActive && !accepted) {
                     removeQuickAckMappingForMessages(quickAckId, currentMessages);
                     for (uint32_t b = a + 1; b < count; b++) {
                         if (messages[b] != nullptr) {
@@ -2672,7 +2675,10 @@ bool ConnectionsManager::sendMessagesToConnection(std::vector<std::unique_ptr<Ne
                     messages.clear();
                     return sentAny;
                 }
-                sentAny = true;
+                // Before MTProxy write gating was introduced, direct sendData
+                // owned rejection/retry itself and returned void. Preserve that
+                // behavior instead of feeding direct requests into proxy requeue.
+                sentAny = accepted || !mtProxyRouteActive;
             } else {
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) connection data is empty", connection);
             }
@@ -2928,7 +2934,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             iter++;
             continue;
         }
-        if (!connection->canSendRequestData("process_running_request")) {
+        if (connection->isMtProxyRouteActive() && !connection->canSendRequestData("process_running_request")) {
             iter++;
             continue;
         }
@@ -3183,8 +3189,24 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 if (std::find(neededDatacenters.begin(), neededDatacenters.end(), pair) == neededDatacenters.end()) {
                     neededDatacenters.push_back(pair);
                 }
-                if (LOGS_ENABLED)
-                    DEBUG_D("skip queue, token = %d: no authkey for dc", request->requestToken);
+                // Пока ключа для датацентра нет, очередь перебирается заново на
+                // каждом проходе цикла событий, и эта строка писалась для КАЖДОГО
+                // ждущего запроса. В логе пользователя вышло 98926 записей за 61
+                // секунду — они вытесняли из файла всю остальную диагностику.
+                // Состояние статичное, поэтому достаточно одной записи в секунду
+                // на датацентр, с числом свёрнутых повторов.
+                if (LOGS_ENABLED) {
+                    int64_t now = getCurrentTimeMonotonicMillis();
+                    NoAuthKeyLogWindow &window = noAuthKeyLogWindows[requestDatacenter->getDatacenterId()];
+                    if (now - window.lastLogTime >= 1000) {
+                        DEBUG_D("skip queue: no authkey for dc%u, waiting requests suppressed=%u",
+                                requestDatacenter->getDatacenterId(), window.suppressed);
+                        window.lastLogTime = now;
+                        window.suppressed = 0;
+                    } else {
+                        window.suppressed++;
+                    }
+                }
                 iter++;
                 continue;
             } else if (!(request->requestFlags & RequestFlagEnableUnauthorized) && !requestDatacenter->authorized && request->datacenterId != DEFAULT_DATACENTER_ID && request->datacenterId != currentDatacenterId) {
@@ -3204,7 +3226,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             iter++;
             continue;
         }
-        if (!connection->canSendRequestData("process_queued_request")) {
+        if (connection->isMtProxyRouteActive() && !connection->canSendRequestData("process_queued_request")) {
             iter++;
             continue;
         }
@@ -4169,56 +4191,11 @@ std::string ConnectionsManager::getProxyActivationOrigin() {
     return proxyActivationOrigin;
 }
 
-static int32_t normalizeWssTransportMode(int32_t mode) {
-    if (mode == WssTransport::WSS_TRANSPORT_SOCKS5) {
-        return WssTransport::WSS_TRANSPORT_CUSTOM;
-    }
-    if (mode >= WssTransport::WSS_TRANSPORT_OFF && mode <= WssTransport::WSS_TRANSPORT_SOCKS5) {
-        return mode;
-    }
-    return WssTransport::WSS_TRANSPORT_OFF;
-}
-
-void ConnectionsManager::setWssTransportSettings(int32_t mode, int32_t gatewayMode, std::string host, uint16_t port, std::string path, bool miniApps, std::string socksHost, uint16_t socksPort, std::string socksUsername, std::string socksPassword, bool socksEnabled, bool enabled) {
-    scheduleTask([&, mode, gatewayMode, host, port, path, miniApps, socksHost, socksPort, socksUsername, socksPassword, socksEnabled, enabled] {
-        int32_t normalizedMode = normalizeWssTransportMode(mode);
-        int32_t normalizedGatewayMode = normalizeWssTransportMode(gatewayMode);
-        if (!enabled) {
-            normalizedMode = WssTransport::WSS_TRANSPORT_OFF;
-        }
-        std::string normalizedPath = path;
-        if (normalizedPath.empty()) {
-            normalizedPath = "/apiws";
-        } else if (normalizedPath[0] != '/') {
-            normalizedPath = "/" + normalizedPath;
-        }
-        bool effectiveSocksEnabled = socksEnabled && normalizedMode != WssTransport::WSS_TRANSPORT_OFF && !socksHost.empty();
-        bool wssTransportChanged = wssTransportMode != normalizedMode
-                || wssGatewayMode != normalizedGatewayMode
-                || wssHost != host
-                || wssPort != (port == 0 ? 443 : port)
-                || wssPath != normalizedPath
-                || wssSocksHost != socksHost
-                || wssSocksPort != (socksPort == 0 ? 1080 : socksPort)
-                || wssSocksUsername != socksUsername
-                || wssSocksPassword != socksPassword
-                || wssSocksEnabled != effectiveSocksEnabled
-                || wssUseForMiniApps != miniApps
-                || wssEnabled != enabled;
-        wssTransportMode = normalizedMode;
-        wssGatewayMode = normalizedGatewayMode;
-        wssHost = host;
-        wssPort = port == 0 ? 443 : port;
-        wssPath = normalizedPath;
-        wssSocksHost = socksHost;
-        wssSocksPort = socksPort == 0 ? 1080 : socksPort;
-        wssSocksUsername = socksUsername;
-        wssSocksPassword = socksPassword;
-        wssSocksEnabled = effectiveSocksEnabled;
-        wssUseForMiniApps = miniApps;
-        wssEnabled = enabled;
-        if (wssTransportChanged) {
-            if (LOGS_ENABLED) DEBUG_D("wss_startup settings_changed mode=%d gateway=%d host=%s port=%u path=%s socks_host=%s socks_port=%u socks_enabled=%d miniapps=%d enabled=%d", wssTransportMode, wssGatewayMode, wssHost.c_str(), (uint32_t) wssPort, wssPath.c_str(), wssSocksHost.c_str(), (uint32_t) wssSocksPort, wssSocksEnabled ? 1 : 0, wssUseForMiniApps ? 1 : 0, wssEnabled ? 1 : 0);
+void ConnectionsManager::setWssTransportEnabled(bool enabled) {
+    scheduleTask([&, enabled] {
+        if (wssEnabled != enabled) {
+            wssEnabled = enabled;
+            if (LOGS_ENABLED) DEBUG_D("wss_startup enabled=%d", wssEnabled ? 1 : 0);
             requestTransportSettingsReconnect("wss_settings_changed");
         }
     });

@@ -141,12 +141,16 @@ public class LiteModeSettingsActivity extends BaseFragment {
             } else if (item.viewType == VIEW_TYPE_SWITCH2) {
                 if (item.type == SWITCH_TYPE_SMOOTH_TRANSITIONS) {
                     SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-                    boolean animations = preferences.getBoolean("view_animations", true);
+                    boolean animations = preferences.getBoolean("view_animations", false);
                     SharedPreferences.Editor editor = preferences.edit();
                     editor.putBoolean("view_animations", !animations);
                     SharedConfig.setAnimationsEnabled(!animations);
                     editor.commit();
                     ((TextCell) view).setChecked(!animations);
+                } else if (item.type == SWITCH_TYPE_PROFILE_AVATAR_BLUR) {
+                    boolean blur = !SharedConfig.profileAvatarBlur;
+                    SharedConfig.setProfileAvatarBlur(blur);
+                    ((TextCell) view).setChecked(blur);
                 }
             }
         });
@@ -281,6 +285,9 @@ public class LiteModeSettingsActivity extends BaseFragment {
         items.add(Item.asSwitch(LocaleController.getString(R.string.LiteSmoothTransitions), SWITCH_TYPE_SMOOTH_TRANSITIONS));
         items.add(Item.asInfo(LocaleController.getString("LiteSmoothTransitionsInfo")));
 
+        items.add(Item.asSwitch(LocaleController.getString(R.string.LiteProfileAvatarBlur), SWITCH_TYPE_PROFILE_AVATAR_BLUR));
+        items.add(Item.asInfo(LocaleController.getString(R.string.LiteProfileAvatarBlurInfo)));
+
         adapter.setItems(oldItems, items);
     }
 
@@ -338,6 +345,7 @@ public class LiteModeSettingsActivity extends BaseFragment {
     private static final int VIEW_TYPE_SWITCH2 = 5;
 
     public static final int SWITCH_TYPE_SMOOTH_TRANSITIONS = 1;
+    public static final int SWITCH_TYPE_PROFILE_AVATAR_BLUR = 2;
 
     private class Adapter extends AdapterWithDiffUtils {
 
@@ -409,8 +417,10 @@ public class LiteModeSettingsActivity extends BaseFragment {
                 TextCell textCell = (TextCell) holder.itemView;
                 if (item.type == SWITCH_TYPE_SMOOTH_TRANSITIONS) {
                     SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-                    boolean animations = preferences.getBoolean("view_animations", true);
+                    boolean animations = preferences.getBoolean("view_animations", false);
                     textCell.setTextAndCheck(item.text, animations, false);
+                } else if (item.type == SWITCH_TYPE_PROFILE_AVATAR_BLUR) {
+                    textCell.setTextAndCheck(item.text, SharedConfig.profileAvatarBlur, false);
                 }
             }
         }

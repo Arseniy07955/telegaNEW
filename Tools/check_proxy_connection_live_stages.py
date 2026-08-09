@@ -311,11 +311,21 @@ def main() -> None:
         and "id == NotificationCenter.proxyConnectionStageChanged" in text("proxy_list"),
         "Proxy list must refresh header and current row only on current-account live proxy stage updates",
     )
+    launch_text = text("launch")
+    launch_uses_explicit_observer = (
+        "NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.proxyConnectionStageChanged)" in launch_text
+        and "NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.proxyConnectionStageChanged)" in launch_text
+    )
+    launch_uses_observer_group = (
+        "observersGroup = NotificationCenter.getInstance(currentAccount)" in launch_text
+        and ".createObserversGroup(this)" in launch_text
+        and ".add(NotificationCenter.proxyConnectionStageChanged)" in launch_text
+        and "observersGroup.removeAllObservers()" in launch_text
+    )
     require(
-        "NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.proxyConnectionStageChanged)" in text("launch")
-        and "NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.proxyConnectionStageChanged)" in text("launch")
-        and "id == NotificationCenter.proxyConnectionStageChanged" in text("launch")
-        and "updateCurrentConnectionState(account)" in text("launch"),
+        (launch_uses_explicit_observer or launch_uses_observer_group)
+        and "id == NotificationCenter.proxyConnectionStageChanged" in launch_text
+        and "updateCurrentConnectionState(account)" in launch_text,
         "main screen proxy title must refresh on live proxy stages even when the generic connection state does not change",
     )
     require(

@@ -55,9 +55,6 @@ dependencies {
     implementation 'com.android.billingclient:billing:7.1.1'
     implementation 'com.google.code.gson:gson:2.11.0'
     implementation 'com.google.guava:guava:31.1-android'
-    implementation 'com.google.android.play:integrity:1.3.0'
-    implementation 'com.google.android.gms:play-services-safetynet:18.0.1'
-
     implementation 'com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1'
     implementation 'com.google.android.gms:play-services-mlkit-image-labeling:16.0.8'
 
@@ -81,8 +78,6 @@ dependencies {
             because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
         }
     }
-    implementation 'com.google.android.recaptcha:recaptcha:18.7.1'
-
     // ZaStoGram plugin engine: Pine — dynamic ART method hooking (Xposed-compatible API).
     // Supports Android 4.4(ART)-15 on arm64/armv7. The :xposed module exposes
     // XC_MethodHook (before/afterHookedMethod + MethodHookParam) used by the bridge.
@@ -97,7 +92,81 @@ dependencies {
 
 def isWindows = String.valueOf(DefaultNativePlatform.currentOperatingSystem.toFamilyName() == OperatingSystemFamily.WINDOWS)
 def zastoAllNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
-def zastoRequestedAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
+def zastoSingleAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
+def zastoDeprecatedMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
+if (zastoDeprecatedMultiAbiFilters) {
+    throw new GradleException(
+            "Multi-ABI ZaStoGram builds are disabled because Chaquopy would copy every selected ABI runtime into every APK. " +
+                    "Build each standalone ABI in a separate Gradle invocation with -PzastoAbiFilter=<abi>."
+    )
+}
+def zastoStandaloneTaskAbis = [
+        Arm64Standalone: "arm64-v8a",
+        Armv7Standalone: "armeabi-v7a",
+        X86Standalone: "x86",
+        X64Standalone: "x86_64",
+]
+def zastoTaskRequestedAbis = gradle.startParameter.taskNames
+        .collect { taskName ->
+            def taskLeaf = taskName.tokenize(":").last()
+            zastoStandaloneTaskAbis.find { taskMarker, ignored -> taskLeaf.contains(taskMarker) }?.value
+        }
+        .findAll { it != null }
+        .unique()
+if (zastoTaskRequestedAbis.size() > 1) {
+    throw new GradleException(
+            "Building several standalone ABIs in one Gradle invocation is disabled because it produces oversized Chaquopy APKs. " +
+                    "Run one standalone ABI task at a time."
+    )
+}
+def zastoTaskAbiFilter = zastoTaskRequestedAbis ? zastoTaskRequestedAbis.first() : null
+if (zastoSingleAbiFilter && zastoTaskAbiFilter && zastoSingleAbiFilter != zastoTaskAbiFilter) {
+    throw new GradleException(
+            "zastoAbiFilter '${zastoSingleAbiFilter}' does not match the requested standalone task ABI '${zastoTaskAbiFilter}'"
+    )
+}
+def zastoRequestedAbiFilter = zastoSingleAbiFilter ?: zastoTaskAbiFilter
+def zastoTelegramCredentials = new Properties()
+def zastoTelegramCredentialsFile = new File(
+        System.getenv("ZASTO_TELEGRAM_API_CREDENTIALS_FILE")
+                ?: new File(System.getProperty("user.home"), ".config/zastogram-signing/telegram-api.properties").absolutePath
+)
+if (zastoTelegramCredentialsFile.isFile()) {
+    zastoTelegramCredentialsFile.withInputStream { zastoTelegramCredentials.load(it) }
+}
+def zastoTelegramApiIdConfigured = (
+        project.findProperty("telegramApiId")
+                ?: System.getenv("TELEGRAM_API_ID")
+                ?: zastoTelegramCredentials.getProperty("TELEGRAM_API_ID")
+)?.toString()?.trim()
+def zastoTelegramApiHashConfigured = (
+        project.findProperty("telegramApiHash")
+                ?: System.getenv("TELEGRAM_API_HASH")
+                ?: zastoTelegramCredentials.getProperty("TELEGRAM_API_HASH")
+)?.toString()?.trim()
+def zastoRequireTelegramApiCredentials = (System.getenv("ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS") ?: "0") == "1"
+def zastoTelegramBuildScope = zastoRequireTelegramApiCredentials ? "release" : "Android"
+if (zastoTelegramApiIdConfigured == null || zastoTelegramApiHashConfigured == null) {
+    throw new GradleException(
+            "Refusing ZaStoGram ${zastoTelegramBuildScope} build without its own Telegram API identity. " +
+                    "Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in ${zastoTelegramCredentialsFile.absolutePath} or the environment."
+    )
+}
+if (!(zastoTelegramApiIdConfigured ==~ /[1-9][0-9]*/)) {
+    throw new GradleException("TELEGRAM_API_ID must be a positive decimal integer")
+}
+if (!(zastoTelegramApiHashConfigured ==~ /[0-9a-fA-F]{32}/)) {
+    throw new GradleException("TELEGRAM_API_HASH must contain exactly 32 hexadecimal characters")
+}
+def zastoTelegramApiId = zastoTelegramApiIdConfigured
+def zastoTelegramApiHash = zastoTelegramApiHashConfigured
+def zastoUsesPublishedTestIdentity = zastoTelegramApiId == "4" || zastoTelegramApiHash.equalsIgnoreCase("014b35b6184100b085b0d0572f9b5103")
+if (zastoUsesPublishedTestIdentity) {
+    throw new GradleException(
+            "Refusing ZaStoGram ${zastoTelegramBuildScope} build with Telegram's published test API identity. " +
+                    "Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in ${zastoTelegramCredentialsFile.absolutePath} or the environment."
+    )
+}
 if (zastoRequestedAbiFilter && !zastoAllNativeAbis.contains(zastoRequestedAbiFilter)) {
     throw new GradleException("Unsupported zastoAbiFilter '${zastoRequestedAbiFilter}'. Expected one of: ${zastoAllNativeAbis.join(', ')}")
 }
@@ -133,13 +202,17 @@ android {
         minSdkVersion 24 // ZaStoGram: Chaquopy (plugin engine) requires minSdk >= 24
         targetSdkVersion 35
 
+        buildConfigField "int", "TELEGRAM_API_ID", zastoTelegramApiId
+        buildConfigField "String", "TELEGRAM_API_HASH", "\"${zastoTelegramApiHash.toLowerCase()}\""
+
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
         multiDexEnabled true
 
-        // ZaStoGram: CI matrix jobs pass one ABI so the library module does not rebuild
-        // all native outputs before packaging a single-ABI APK. Without the property, keep
-        // the universal fallback for local builds and afat.
+        // Every standalone ABI must be configured independently. Chaquopy stores part of its
+        // native runtime under assets, where the app flavor's normal ABI split cannot remove
+        // foreign architectures. Multi-ABI configuration therefore makes every APK oversized.
+        // Without a standalone task or explicit property, keep the universal afat fallback.
         ndk {
             abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))
         }
@@ -148,9 +221,8 @@ android {
             cmake {
                 version '3.10.2'
                 def cmakeArgs = ['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21'] //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
-                // CI speedup: route NDK compiles through ccache so unchanged native sources
-                // (webrtc/openh264/ffmpeg/boringssl) reuse cached object files across runs.
-                // Enabled only when USE_CCACHE=1 (GitHub Actions); local builds are unaffected.
+                // Route NDK compiles through ccache when the caller has configured a persistent
+                // cache. This is used by both Forgejo Actions and local release scripts.
                 if (System.getenv('USE_CCACHE') == '1') {
                     cmakeArgs << '-DCMAKE_C_COMPILER_LAUNCHER=ccache' << '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'
                 }

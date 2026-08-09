@@ -650,6 +650,7 @@
     <string name="AppUpdateNow">Jetzt aktualisieren</string>
     <string name="AppUpdateDownloadNow">Jetzt herunterladen</string>
     <string name="AppUpdateRemindMeLater">Später erinnern</string>
+    <string name="AppUpdateSkipVersion">Diese Version überspringen</string>
     <string name="AppUpdateChangelogEmpty">**Was ist neu?**\n\n• Fehlerbehebungen und Verbesserungen</string>
     <string name="Permanent">Primärer Link</string>
     <string name="LinkHashExpired">Link ist nicht mehr aktiv</string>

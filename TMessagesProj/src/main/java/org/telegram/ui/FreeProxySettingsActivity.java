@@ -6,7 +6,6 @@ import android.widget.FrameLayout;
 
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
-import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.browser.Browser;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -55,9 +54,10 @@ public class FreeProxySettingsActivity extends BaseFragment {
     }
 
     private void fillItems(ArrayList<UItem> items, UniversalAdapter adapter) {
+        // Keep the ZaSto VPN bot pinned above the proxy catalog for quick access.
+        items.add(SettingsActivity.SettingCell.Factory.of(27, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, LocaleController.getString(R.string.ZapretVpnBot), "@zapretvpns_bot"));
         // Quick access to the real proxy settings (toggle a dead proxy without leaving this screen).
         items.add(SettingsActivity.SettingCell.Factory.of(1002, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_data, LocaleController.getString(R.string.ProxySettings), null));
-        items.add(SettingsActivity.SettingCell.Factory.of(27, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, LocaleController.getString(R.string.ZapretVpnSponsorSetting), null, LocaleController.getString(SharedConfig.showZapretVpnSponsor ? R.string.ZapretProxySponsorOn : R.string.ZapretProxySponsorOff)));
         items.add(UItem.asShadow(null));
         items.add(UItem.asHeader(LocaleController.getString(R.string.FreeProxyChannels)));
         items.add(SettingsActivity.SettingCell.Factory.of(28, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, LocaleController.getString(R.string.FreeProxyMtProxyEveryday)));
@@ -77,9 +77,7 @@ public class FreeProxySettingsActivity extends BaseFragment {
                 presentFragment(new ProxyListActivity());
                 break;
             case 27:
-                SharedConfig.showZapretVpnSponsor = !SharedConfig.showZapretVpnSponsor;
-                SharedConfig.saveConfig();
-                listView.adapter.update(true);
+                getMessagesController().openByUserName("zapretvpns_bot", this, 1);
                 break;
             case 28:
                 Browser.openUrl(getParentActivity(), "https://t.me/MTProxy_everyday");

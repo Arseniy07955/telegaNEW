@@ -38,6 +38,7 @@
 #include "BuffersStorage.h"
 #include "Connection.h"
 #include "mtproxy/MtProxyAdaptivePolicy.h"
+#include "mtproxy/MtProxyClientHelloPolicy.h"
 #include "mtproxy/MtProxyDataPathShaper.h"
 #include "mtproxy/MtProxyEndpointPolicy.h"
 #include "mtproxy/MtProxyFailureEvidence.h"
@@ -150,6 +151,7 @@
 #define currentMediaConnection stateMachine.wss.mediaConnection
 #define currentWssRoute stateMachine.wss.route
 #define currentWssTransport stateMachine.wss.transport
+#define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -187,6 +189,10 @@ static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
+// Outgoing MTProto bytes are pulled from outgoingByteStream and emitted one
+// packet per WebSocket frame. Pulling pauses while the socket already holds
+// this much serialized output.
+static constexpr size_t WSS_MAX_BUFFERED_OUTPUT_BYTES = 256 * 1024;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_CHANGE_CIPHER_SPEC = 0x14;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_ALERT = 0x15;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_APPLICATION_DATA = 0x17;
@@ -546,6 +552,7 @@ public:
                 Op::K(),
                 Op::string("\x00\xef", 2),
                 Op::random(239),
+                Op::P(),
                 Op::end_scope(),
                 Op::end_scope(),
                 Op::end_scope()
@@ -755,6 +762,7 @@ public:
                 Op::string("\x00\x2d\x00\x02\x01\x01", 6),
                 Op::string("\x00\x33\x00\x26\x00\x24\x00\x1d\x00\x20", 10),
                 Op::K(),
+                Op::P(),
                 Op::end_scope(),
                 Op::end_scope(),
                 Op::end_scope()
@@ -813,14 +821,7 @@ public:
                 Op::K(),
                 Op::string("\x01\x8f", 2),
                 Op::random(399),
-                Op::string("\x00\x29", 2),
-                Op::begin_scope(),
-                Op::string("\x00\x6f\x00\x69", 4),
-                Op::random(105),
-                Op::random(4),
-                Op::string("\x00\x21\x20", 3),
-                Op::random(32),
-                Op::end_scope(),
+                Op::P(),
                 Op::end_scope(),
                 Op::end_scope(),
                 Op::end_scope()
@@ -868,6 +869,7 @@ public:
                 Op::K(),
                 Op::grease(3),
                 Op::string("\x00\x01\x00", 3),
+                Op::P(),
                 Op::end_scope(),
                 Op::end_scope(),
                 Op::end_scope()
@@ -936,15 +938,11 @@ public:
                 Op::string("\x00\x1d\x00\x20", 4),
                 Op::K(),
                 Op::grease(3),
+                // Empty on purpose. A byte-perfect Yandex Browser capture
+                // carries one zero byte here and was refused where this
+                // deliberately imperfect tdesktop shape passed 12/12.
                 Op::string("\x00\x00", 2),
-                Op::string("\x00\x29", 2),
-                Op::begin_scope(),
-                Op::string("\x00\x6f\x00\x69", 4),
-                Op::random(105),
-                Op::random(4),
-                Op::string("\x00\x21\x20", 3),
-                Op::random(32),
-                Op::end_scope(),
+                Op::P(),
                 Op::end_scope(),
                 Op::end_scope(),
                 Op::end_scope()
@@ -1030,15 +1028,21 @@ private:
                 break;
             }
             case Type::P: {
-                auto length = offset;
-                // Randomized padding target instead of a fixed 513-byte ClientHello: a single
-                // fixed length is itself a DPI signature (the legacy faketls 517-byte record).
-                // Dormant for profiles whose body already exceeds the target (e.g. ML-KEM Chrome).
-                uint32_t target = 512 + secureRandomBounded(257); // 512..768
-                if (length <= target) {
+                // The reference relay does not even enter FakeTLS parsing for
+                // a record shorter than 0x0200 bytes (517 including the TLS
+                // header). Bring small templates to that floor exactly; large
+                // post-quantum templates already satisfy it and stay untouched.
+                uint32_t length = offset;
+                if (length < MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES) {
+                    uint32_t extensionHeader = 4;
+                    uint32_t zeros = length + extensionHeader
+                            < MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES
+                            ? (uint32_t) MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES
+                                    - extensionHeader - length
+                            : 0;
                     writeOp(Op::string("\x00\x15", 2), data, offset);
                     writeOp(Op::begin_scope(), data, offset);
-                    writeOp(Op::zero(target - length), data, offset);
+                    writeOp(Op::zero(zeros), data, offset);
                     writeOp(Op::end_scope(), data, offset);
                 }
                 break;
@@ -1339,56 +1343,21 @@ static void logClientHelloFingerprint(const void *socket, const char *profileNam
 }
 
 static bool validateServerCompatibleHello(const uint8_t *data, uint32_t size, const std::string &domain, const char *profileName) {
-    if (size < 100 || size > 4096) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s invalid hello size=%u", profileName, size);
-        return false;
-    }
-    if (data[0] != 0x16 || data[1] != 0x03 || data[2] != 0x01 || data[5] != 0x01 || data[9] != 0x03 || data[10] != 0x03) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s invalid hello prefix", profileName);
-        return false;
-    }
-    uint32_t recordLength = ((uint32_t) data[3] << 8) | data[4];
-    uint32_t handshakeLength = ((uint32_t) data[6] << 16) | ((uint32_t) data[7] << 8) | data[8];
-    if (recordLength + 5 != size || handshakeLength + 9 != size) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s invalid hello lengths record=%u handshake=%u size=%u", profileName, recordLength, handshakeLength, size);
-        return false;
-    }
-
-    const uint32_t cipherSuitesOffset = 76;
-    if (size <= cipherSuitesOffset + 2) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s too short for cipher suites", profileName);
-        return false;
-    }
-    uint32_t cipherSuitesLength = ((uint32_t) data[cipherSuitesOffset] << 8) | data[cipherSuitesOffset + 1];
-    uint32_t cipherSuitesBegin = cipherSuitesOffset + 2;
-    uint32_t cipherSuitesEnd = cipherSuitesBegin + cipherSuitesLength;
-    if (cipherSuitesLength < 2 || (cipherSuitesLength % 2) != 0 || cipherSuitesEnd > size) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s invalid cipher suites length=%u", profileName, cipherSuitesLength);
-        return false;
-    }
-
-    uint16_t firstCipher = 0;
-    for (uint32_t offset = cipherSuitesBegin; offset + 1 < cipherSuitesEnd; offset += 2) {
-        uint16_t cipher = ((uint16_t) data[offset] << 8) | data[offset + 1];
-        if (!isGreaseValue(cipher)) {
-            firstCipher = cipher; // first non-GREASE cipher must be TLS_AES_* for MTProxy server compatibility.
-            break;
-        }
-    }
-    if (firstCipher != 0x1301 && firstCipher != 0x1302 && firstCipher != 0x1303) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s invalid first cipher=0x%04x", profileName, firstCipher);
-        return false;
-    }
-
-    size_t domainSize = std::min(domain.size(), (size_t) 253);
-    if (domainSize == 0) {
+    MtProxyClientHelloContractIssue issue = mtProxyCheckClientHelloContract(
+            data,
+            size,
+            domain);
+    if (issue == MtProxyClientHelloContractIssue::None) {
         return true;
     }
-    if (std::search(data, data + size, (const uint8_t *) domain.data(), (const uint8_t *) domain.data() + domainSize) == data + size) {
-        if (LOGS_ENABLED) DEBUG_E("mtproxy_startup profile %s missing SNI domain size=%zu", profileName, domainSize);
-        return false;
+    if (LOGS_ENABLED) {
+        DEBUG_E(
+                "mtproxy_startup profile %s breaks relay contract issue=%s size=%u",
+                profileName != nullptr ? profileName : "unknown",
+                mtProxyClientHelloContractIssueName(issue),
+                size);
     }
-    return true;
+    return false;
 }
 
 ConnectionSocket::ConnectionSocket(int32_t instance) {
@@ -2419,12 +2388,18 @@ void ConnectionSocket::setTlsState(int8_t next, const char *reason) {
 }
 
 void ConnectionSocket::logTransportSnapshot(const char *event, const char *reason) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
     if (NETWORK_DEBUG_LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport snapshot event=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, event != nullptr ? event : "unknown", reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
 }
 
 void ConnectionSocket::logTransportInvariant(const char *action, const char *reason) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
     if (LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport transport_invariant action=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, action != nullptr ? action : "unknown", reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
@@ -2439,6 +2414,12 @@ bool ConnectionSocket::isTransportStateAllowedForAction(const char *action) {
 }
 
 bool ConnectionSocket::checkTransportActionRequirements(const char *action) {
+    // A disabled proxy means stock tgnet semantics. Direct sockets still use
+    // the syscall wrapper, but none of the MTProxy lifecycle policy can veto
+    // their socket, epoll, notification, receive, or write operations.
+    if (isCurrentDirectConnection()) {
+        return true;
+    }
     const TransportActionRule *rule = findTransportActionRule(action);
     if (rule == nullptr) {
         logTransportInvariant(action, "invalid_state");
@@ -2895,6 +2876,9 @@ bool ConnectionSocket::canSendWssFrame() {
 }
 
 bool ConnectionSocket::canQueueOutboundBuffer(const char *action) {
+    if (isCurrentDirectConnection()) {
+        return true;
+    }
     if (isClosingOrClosedForWrites()) {
         logTransportInvariant(action, "dead_for_writes");
         if (LOGS_ENABLED) {
@@ -3216,6 +3200,7 @@ bool ConnectionSocket::sendPendingTlsFrame() {
 
 bool ConnectionSocket::resetTransportSocketForOpenConnection() {
     bool hasOpenResources = socketFd >= 0
+            || currentWssTransport != nullptr
             || epollRegistered
             || currentTransportState != TransportState::Idle
             || !waitingForHostResolve.empty()
@@ -3244,7 +3229,10 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
             }
             setEpollRegistered(false, "openConnection_reset_epoll_ctl_del");
         }
-        if (socketFd >= 0) {
+        if (currentWssTransport != nullptr) {
+            currentWssTransport->close();
+            setSocketFd(-1, "openConnection_reset_close_transport_socket");
+        } else if (socketFd >= 0) {
             if (canCloseNativeSocket()) {
                 if (!stateMachine.closeNativeSocket("openConnection_reset_close_native_socket") && LOGS_ENABLED) {
                     DEBUG_E("connection(%p) unable to close stale socket during openConnection reset", this);
@@ -3253,6 +3241,9 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
             setSocketFd(-1, "openConnection_reset_close_native_socket");
         }
     }
+    currentWssTransport.reset();
+    currentTransportWss = false;
+    currentWssRoute = tgnet::wss::Route();
     setWaitingForHostResolve("", "openConnection_reset_cleanup");
     setAdjustWriteOpAfterResolve(false, "openConnection_reset_cleanup");
     setAdjustWriteOpAfterPreTcpGate(false, "openConnection_reset_cleanup");
@@ -3328,7 +3319,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentSecretKind = "none";
     currentSecretIsFakeTls = false;
     currentAllowedSniVariants = 0;
-    currentRecipeFamily = MtProxyAdaptivePolicy::CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT;
+    currentRecipeFamily = MtProxyAdaptivePolicy::CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT;
     currentRecipeSniVariant = MtProxyAdaptivePolicy::SNI_ORIGINAL;
     currentRecipeParserVariant = MtProxyAdaptivePolicy::PARSER_STANDARD_HMAC;
     currentRecipeClassicVariant = MtProxyAdaptivePolicy::CLASSIC_NONE;
@@ -3336,7 +3327,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentDatacenterId = datacenterId;
     currentMediaConnection = mediaConnection;
     currentWssTransport.reset();
-    currentWssRoute = WssRouteConfig();
+    currentWssRoute = tgnet::wss::Route();
     currentProxyTlsProfile = normalizeMtProxyTlsProfile(MT_PROXY_TLS_PROFILE_ANDROID_CHROME);
     currentEffectiveProxyTlsProfile = currentProxyTlsProfile;
     currentClientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
@@ -3386,11 +3377,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     std::string *proxySecret = &overrideProxySecret;
     uint16_t proxyPort = overrideProxyPort;
     MtProxyOptions proxyOptions = overrideMtProxyOptions;
-    std::string wssFallbackProxyAddress;
-    std::string wssFallbackProxyUsername;
-    std::string wssFallbackProxyPassword;
-    std::string wssFallbackProxySecret;
-    uint16_t wssFallbackProxyPort = 1080;
     if (proxyAddress->empty()) {
         proxyAddress = &ConnectionsManager::getInstance(instanceNum).proxyAddress;
         proxyPort = ConnectionsManager::getInstance(instanceNum).proxyPort;
@@ -3400,48 +3386,22 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
 
     bool shouldUseWss = overrideProxyAddress.empty()
             && manager.wssEnabled
-            && manager.wssTransportMode != WssTransport::WSS_TRANSPORT_OFF;
-    WssRouteConfig selectedWssRoute;
-    if (shouldUseWss) {
-        if (manager.wssTransportMode == WssTransport::WSS_TRANSPORT_OFFICIAL) {
-            selectedWssRoute = WssTransport::officialRouteFor(datacenterId, mediaConnection);
-            if (selectedWssRoute.mode == WssTransport::WSS_TRANSPORT_OFF) {
-                shouldUseWss = false;
-                if (manager.wssSocksEnabled && !manager.wssSocksHost.empty()) {
-                    wssFallbackProxyAddress = manager.wssSocksHost;
-                    wssFallbackProxyPort = manager.wssSocksPort == 0 ? 1080 : manager.wssSocksPort;
-                    wssFallbackProxyUsername = manager.wssSocksUsername;
-                    wssFallbackProxyPassword = manager.wssSocksPassword;
-                    proxyAddress = &wssFallbackProxyAddress;
-                    proxyPort = wssFallbackProxyPort;
-                    proxySecret = &wssFallbackProxySecret;
-                    if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup dc%d has no stable official route, fallback_to_socks socks=%s:%u", this, datacenterId, wssFallbackProxyAddress.c_str(), (uint32_t) wssFallbackProxyPort);
-                } else {
-                    if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup dc%d has no stable official route, fallback to TCP", this, datacenterId);
-                }
-            }
-        } else {
-            selectedWssRoute = WssTransport::customRoute(
-                    manager.wssTransportMode,
-                    manager.wssGatewayMode,
-                    manager.wssHost,
-                    manager.wssPort,
-                    manager.wssPath,
-                    address,
-                    port,
-                    manager.wssSocksHost,
-                    manager.wssSocksPort,
-                    manager.wssSocksUsername,
-                    manager.wssSocksPassword,
-                    manager.wssSocksEnabled);
-        }
-        if (shouldUseWss && manager.wssSocksEnabled && !manager.wssSocksHost.empty()) {
-            selectedWssRoute.upstreamSocksAddress = manager.wssSocksHost;
-            selectedWssRoute.upstreamSocksPort = manager.wssSocksPort == 0 ? 1080 : manager.wssSocksPort;
-            selectedWssRoute.upstreamSocksUsername = manager.wssSocksUsername;
-            selectedWssRoute.upstreamSocksPassword = manager.wssSocksPassword;
-            selectedWssRoute.upstreamSocksEnabled = true;
-        }
+            && proxyAddress->empty();
+    tgnet::wss::Route selectedWssRoute;
+    shouldUseWss = shouldUseWss && tgnet::wss::OfficialRoute(
+            datacenterId,
+            mediaConnection,
+            manager.testBackend,
+            &selectedWssRoute);
+
+    if (shouldUseWss && manager.getIpStratagy() == USE_IPV6_ONLY
+            && !selectedWssRoute.relayHostFallback.empty()) {
+        // У устройства нет IPv4 вообще, а зашитые адреса релеев — только IPv4.
+        // Начинать с них значит гарантированно терять попытку на каждом
+        // соединении: у пользователя с отключённым IPv4 из-за этого заметно
+        // медленнее грузились диалоги. Идём сразу по имени, DNS отдаст AAAA.
+        selectedWssRoute.viaFallback = true;
+        selectedWssRoute.connectHost = selectedWssRoute.relayHostFallback;
     }
 
     if (shouldUseWss) {
@@ -3450,47 +3410,21 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         currentSecretKind = "wss";
         setProxyAuthState(0, "wss_setup");
         currentWssRoute = selectedWssRoute;
-        std::string wssConnectHost = (wssUsedRelayFallback && !currentWssRoute.relayHostFallback.empty())
-                ? currentWssRoute.relayHostFallback
-                : currentWssRoute.relayIp;
+        currentWssTransport = tgnet::wss::CreateSocket(currentWssRoute);
+        const std::string &wssConnectHost = currentWssRoute.connectHost;
         uint16_t wssConnectPort = currentWssRoute.relayPort;
-        if (currentWssRoute.upstreamSocksEnabled) {
-            wssConnectHost = currentWssRoute.upstreamSocksAddress;
-            wssConnectPort = currentWssRoute.upstreamSocksPort == 0 ? 1080 : currentWssRoute.upstreamSocksPort;
-            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup connect_via_socks socks=%s:%u relay=%s:%u domain=%s", this, wssConnectHost.c_str(), (uint32_t) wssConnectPort, currentWssRoute.relayIp.c_str(), (uint32_t) currentWssRoute.relayPort, currentWssRoute.domain.c_str());
-        }
-        if (!canCreateSocket("create_wss_socket")) {
-            closeSocket(1, -1);
-            return;
-        }
-        int createdFd = stateMachine.createNativeSocket(AF_INET, SOCK_STREAM, 0);
-        setSocketFd(createdFd, "create_wss_socket");
-        if (socketFd < 0) {
-            if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create WSS socket", this);
-            closeSocket(1, -1);
-            return;
-        }
         socketAddress.sin_family = AF_INET;
         socketAddress.sin_port = htons(wssConnectPort);
         bool continueCheckAddress = false;
-        if (inet_pton(AF_INET, wssConnectHost.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
+        if (inet_pton(AF_INET, wssConnectHost.c_str(), &socketAddress.sin_addr.s_addr) == 1) {
+            // The relay owns the socket address. Never carry the address
+            // family of the ignored dcOption target into WSS setup.
+            ipv6 = false;
+        } else {
             continueCheckAddress = true;
         }
         if (continueCheckAddress) {
             if (inet_pton(AF_INET6, wssConnectHost.c_str(), &socketAddress6.sin6_addr.s6_addr) == 1) {
-                if (stateMachine.closeNativeSocket("create_wss_ipv6_reopen")) {
-                    setSocketFd(-1, "create_wss_ipv6_reopen");
-                    if (!canCreateSocket("create_wss_ipv6_socket")) {
-                        closeSocket(1, -1);
-                        return;
-                    }
-                    int createdIpv6Fd = stateMachine.createNativeSocket(AF_INET6, SOCK_STREAM, 0);
-                    setSocketFd(createdIpv6Fd, "create_wss_ipv6_socket");
-                }
-                if (socketFd < 0) {
-                    closeSocket(1, -1);
-                    return;
-                }
                 socketAddress6.sin6_family = AF_INET6;
                 socketAddress6.sin6_port = htons(wssConnectPort);
                 ipv6 = true;
@@ -3500,19 +3434,22 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
             setWaitingForHostResolve(wssConnectHost, "wss_host_resolve_start");
-            if (!canStartHostResolve()) {
+            ConnectionsManager &wssManager = ConnectionsManager::getInstance(instanceNum);
+            if (!canStartHostResolve() || wssManager.delegate == nullptr) {
+                proxyCheckDiagnostic = "connection_not_started";
+                currentWssTransport->timedOut();
                 closeSocket(1, -1);
                 return;
             }
-            setMtProxyDnsResolveAttemptStarted(true, "host_resolve_start");
-            setTransportState(TransportState::WaitingGate, "host_resolve_start");
-            ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(wssConnectHost, instanceNum, this);
+            setTransportState(TransportState::WaitingGate, "wss_host_resolve_start");
+            wssManager.delegate->getHostByName(wssConnectHost, instanceNum, this);
             return;
 #else
             struct hostent *he;
             if ((he = gethostbyname(wssConnectHost.c_str())) == nullptr) {
                 proxyCheckDiagnostic = "host_resolve_failed";
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve WSS host %s address", this, wssConnectHost.c_str());
+                currentWssTransport->timedOut();
                 closeSocket(1, -1);
                 return;
             }
@@ -3522,11 +3459,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                 ipv6 = false;
             } else {
                 proxyCheckDiagnostic = "host_resolve_failed";
+                currentWssTransport->timedOut();
                 closeSocket(1, -1);
                 return;
             }
 #endif
         }
+        isIpv6 = ipv6;
     } else if (!proxyAddress->empty()) {
         currentSecretKind = proxySecret->empty() ? "socks" : mtProxySecretKindName(*proxySecret);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d] secret_kind=%s", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size(), currentSecretKind);
@@ -3535,14 +3474,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             stateMachine.setTransportMode(TransportMode::Socks5);
             setProxyAuthState(1, "socks_proxy_setup");
             tempBuffLength = 1024;
-            if (!wssFallbackProxyAddress.empty()) {
-                currentAddress = address;
-                currentPort = port;
-                currentSocksUsername = wssFallbackProxyUsername;
-                currentSocksPassword = wssFallbackProxyPassword;
-                currentSecret = "";
-                currentSecretDomain = "";
-            } else if (!overrideProxyAddress.empty()) {
+            if (!overrideProxyAddress.empty()) {
                 currentSocksUsername = overrideProxyUser;
                 currentSocksPassword = overrideProxyPassword;
             } else {
@@ -3815,10 +3747,12 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
     }
 
-    publishProxyConnectionStage("connect_start");
-    if (LOGS_ENABLED) {
+    if (!isCurrentDirectConnection()) {
+        publishProxyConnectionStage("connect_start");
+    }
+    if (LOGS_ENABLED && !isCurrentDirectConnection()) {
         if (currentTransportWss) {
-            DEBUG_D("connection(%p) wss_startup connect_start mode=%d gateway=%d relay=%s:%u domain=%s path=%s target=%s:%u upstream_socks=%s:%u upstream_enabled=%d", this, (int) currentWssRoute.mode, (int) currentWssRoute.gatewayMode, currentWssRoute.relayIp.c_str(), (unsigned int) currentWssRoute.relayPort, currentWssRoute.domain.c_str(), currentWssRoute.path.c_str(), currentAddress.c_str(), (unsigned int) currentPort, currentWssRoute.upstreamSocksAddress.c_str(), (unsigned int) currentWssRoute.upstreamSocksPort, currentWssRoute.upstreamSocksEnabled ? 1 : 0);
+            DEBUG_D("connection(%p) wss_startup connect_start relay=%s:%u domain=%s path=%s target=%s:%u", this, currentWssRoute.connectHost.c_str(), (unsigned int) currentWssRoute.relayPort, currentWssRoute.domain.c_str(), currentWssRoute.path.c_str(), currentAddress.c_str(), (unsigned int) currentPort);
         } else {
             DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d secret_kind=%s is_faketls=%d domain_len=%d profile=%s effective_profile=%s clienthello_fragment=%d server_hello_parser=%s connection_pattern=%s record_sizing=%d timing=%d startup_cover=%d address=%s port=%u", this, (int) proxyAuthState, currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), mtProxyTlsProfileName(currentEffectiveProxyTlsProfile), currentClientHelloFragmentation, mtProxyServerHelloParserName(currentServerHelloParserMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), currentRecordSizingMode, currentTimingMode, currentStartupCoverMode, currentAddress.c_str(), (unsigned int) currentPort);
         }
@@ -3827,6 +3761,48 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
 }
 
 void ConnectionSocket::openConnectionInternal(bool ipv6) {
+    if (isCurrentTransportWss()) {
+        const char *createAction = ipv6 ? "create_wss_ipv6_socket" : "create_wss_socket";
+        if (!canCreateSocket(createAction) || currentWssTransport == nullptr) {
+            closeSocket(1, -1);
+            return;
+        }
+        std::string diagnostic;
+        const sockaddr *address = ipv6
+                ? reinterpret_cast<const sockaddr *>(&socketAddress6)
+                : reinterpret_cast<const sockaddr *>(&socketAddress);
+        const socklen_t addressLength = ipv6 ? sizeof(socketAddress6) : sizeof(socketAddress);
+        if (!currentWssTransport->open(address, addressLength, &diagnostic)) {
+            proxyCheckDiagnostic = diagnostic.empty() ? "wss_tcp_connect_failed" : diagnostic;
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup open failed diagnostic=%s", this, proxyCheckDiagnostic.c_str());
+            closeSocket(1, -1);
+            return;
+        }
+        setSocketFd(currentWssTransport->fd(), createAction);
+        if (socketFd < 0) {
+            closeSocket(1, -1);
+            return;
+        }
+        setTransportState(TransportState::TcpConnecting, "wss_socket_connect_start");
+        // OpenSSL can switch between WANT_READ and WANT_WRITE while the TLS
+        // handshake is in flight. A level-triggered WSS fd makes each desired
+        // direction observable; edge-triggered epoll can lose the writable
+        // edge during that switch and leave the client in "Connecting" until
+        // the request timeout.
+        eventMask.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR;
+        eventMask.data.ptr = eventObject;
+        if (!canRegisterEpollSocket()
+                || !stateMachine.epollCtlAdd(ConnectionsManager::getInstance(instanceNum).epolFd)) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) epoll_ctl, adding WSS socket failed", this);
+            closeSocket(1, -1);
+            return;
+        }
+        setEpollRegistered(true, "wss_epoll_ctl_add");
+        setTransportState(TransportState::EpollRegistered, "wss_epoll_ctl_add");
+        proxyCheckDiagnostic = "wss_tls_handshake";
+        adjustWriteOp();
+        return;
+    }
     if (isCurrentMtProxyConnection() && scheduleMtProxyEndpointCircuitBreakerIfNeeded(ipv6)) {
         return;
     }
@@ -3864,12 +3840,15 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         return;
     }
 
-    finishMtProxyPreTcpWait("socket_connect_start");
-    publishProxyConnectionStage("socket_connect_start");
+    const bool directTransport = isCurrentDirectConnection();
+    if (!directTransport) {
+        finishMtProxyPreTcpWait("socket_connect_start");
+        publishProxyConnectionStage("socket_connect_start");
+        setMtProxyTcpConnectAttemptStarted(true, "socket_connect_start");
+        proxyCheckDiagnostic = MtProxyPhase::TcpNotConnected;
+    }
     setTransportState(TransportState::TcpConnecting, "socket_connect_start");
-    setMtProxyTcpConnectAttemptStarted(true, "socket_connect_start");
-    proxyCheckDiagnostic = MtProxyPhase::TcpNotConnected;
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
+    if (LOGS_ENABLED && !directTransport) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
     if (!canStartTcpConnect()) {
         closeSocket(1, -1);
         return;
@@ -3918,7 +3897,7 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
 }
 
 bool ConnectionSocket::isCurrentTransportWss() {
-    return currentTransportWss && currentWssRoute.mode != WssTransport::WSS_TRANSPORT_OFF;
+    return currentTransportWss && currentWssTransport != nullptr;
 }
 
 bool ConnectionSocket::isCurrentMtProxyConnection() {
@@ -3926,6 +3905,14 @@ bool ConnectionSocket::isCurrentMtProxyConnection() {
            && strcmp(currentSecretKind, "none") != 0
            && strcmp(currentSecretKind, "socks") != 0
            && strcmp(currentSecretKind, "wss") != 0;
+}
+
+bool ConnectionSocket::isCurrentDirectConnection() const {
+    return stateMachine.diagnostics.transportMode == TransportMode::Direct;
+}
+
+bool ConnectionSocket::hasMtProxyOverride() const {
+    return !overrideProxyAddress.empty() && !overrideProxySecret.empty();
 }
 
 bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads) {
@@ -3950,6 +3937,66 @@ bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &pa
         }
     }
     return true;
+}
+
+bool ConnectionSocket::flushWssStream(std::string *diagnostic) {
+    if (!isCurrentTransportWss() || !currentWssTransport->isReady()) {
+        return true;
+    }
+    // Outgoing bytes are queued in the shared stream like on any TCP transport,
+    // but frames are cut back at the recorded packet boundaries: the relay
+    // parses only the first MTProto packet of a frame and drops the rest with
+    // no error at all. Coalescing msgs_ack with the next handshake step this
+    // way stalled key creation for a whole datacenter.
+    uint32_t flushedBytes = 0;
+    while (outgoingByteStream->hasData()
+            && currentWssTransport->queuedOutputBytes() < WSS_MAX_BUFFERED_OUTPUT_BYTES) {
+        if (!canSendWssFrame()) {
+            return false;
+        }
+        NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+        buffer->clear();
+        outgoingByteStream->get(buffer);
+        buffer->flip();
+        const uint32_t available = buffer->remaining();
+        if (available == 0) {
+            break;
+        }
+        uint32_t offset = 0;
+        while (offset < available
+                && !outgoingWssPacketSizes.empty()
+                && currentWssTransport->queuedOutputBytes() < WSS_MAX_BUFFERED_OUTPUT_BYTES) {
+            // One MTProto packet per frame: the relay parses only the first
+            // packet of a frame and silently discards whatever follows it.
+            const uint32_t packetSize = outgoingWssPacketSizes.front();
+            if (packetSize == 0 || offset + packetSize > available) {
+                break;
+            }
+            if (!currentWssTransport->write(buffer->bytes() + offset, packetSize, diagnostic)) {
+                return false;
+            }
+            outgoingWssPacketSizes.pop_front();
+            offset += packetSize;
+        }
+        if (offset == 0) {
+            break;
+        }
+        outgoingByteStream->discard(offset);
+        flushedBytes += offset;
+        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+            ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent(
+                    (int32_t) offset, currentNetworkType, instanceNum);
+        }
+    }
+    if (flushedBytes == 0 && !currentWssTransport->wantsWrite()) {
+        return true;
+    }
+    std::vector<std::vector<uint8_t>> payloads;
+    const bool transportAlive = currentWssTransport->onEvent(EPOLLOUT, payloads, diagnostic);
+    if (!dispatchWssPayloads(payloads)) {
+        return false;
+    }
+    return transportAlive;
 }
 
 void ConnectionSocket::publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength) {
@@ -4270,6 +4317,15 @@ ConnectionSocket::CloseDiagnosticResolution ConnectionSocket::closeStepResolveDi
 // [close-step 4/8] Observability: the mtproxy_disconnect snapshot and the
 // suppressed/rotate branch log the RESOLVED diagnostic from step 3.
 void ConnectionSocket::closeStepLogDisconnect(int32_t reason, int32_t error, const CloseDiagnosticResolution &resolution) {
+    if (isCurrentDirectConnection()) {
+        return;
+    }
+    if (currentTransportWss) {
+        if (LOGS_ENABLED) {
+            DEBUG_D("connection(%p) wss_disconnect reason=%d reason_text=%s error=%d error_text=%s phase=%s transport_state=%s epoll_registered=%d", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), proxyCheckDiagnostic.c_str(), transportStateName(currentTransportState), epollRegistered ? 1 : 0);
+        }
+        return;
+    }
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d is_wss=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d first_plain_sent=%d first_plain_recv=%d tls_frames_completed=%u", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, currentTransportWss ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0, mtproxyFirstPlainDataSentLogged ? 1 : 0, mtproxyFirstPlainDataReceivedLogged ? 1 : 0, mtproxyTlsFrameCompletedCount);
     if (resolution.suppress) {
         proxyCloseDiagnosticSuppressed = true;
@@ -4324,7 +4380,9 @@ void ConnectionSocket::closeStepOsTeardown() {
             }
             setEpollRegistered(false, "epoll_ctl_del");
         }
-        if (canCloseNativeSocket()) {
+        if (currentWssTransport != nullptr) {
+            currentWssTransport->close();
+        } else if (canCloseNativeSocket()) {
             if (!stateMachine.closeNativeSocket("close_native_socket")) {
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) unable to close socket", this);
             }
@@ -4344,7 +4402,8 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     setAdjustWriteOpAfterResolve(false, "closeSocket_cleanup");
     currentTransportWss = false;
     currentWssTransport.reset();
-    currentWssRoute = WssRouteConfig();
+    currentWssRoute = tgnet::wss::Route();
+    outgoingWssPacketSizes.clear();
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -4371,105 +4430,39 @@ void ConnectionSocket::onEvent(uint32_t events) {
         return;
     }
     if (isCurrentTransportWss()) {
-        if (events & (EPOLLIN | EPOLLOUT)) {
-            int32_t error;
-            if (checkSocketError(&error) != 0) {
-                closeSocket(1, error);
+        std::vector<std::vector<uint8_t>> payloads;
+        std::string diagnostic;
+        const bool transportAlive = currentWssTransport->onEvent(events, payloads, &diagnostic);
+        if (transportAlive && currentWssTransport->isReady() && !onConnectedSent) {
+            lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+            proxyCheckDiagnostic = MtProxyPhase::PostHandshakeNoAppdata;
+            setTransportState(TransportState::MtprotoReady, "wss_ready");
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup on_connected", this);
+            if (!canNotifyConnected("wss_ready")) {
                 return;
             }
-            if (currentWssTransport == nullptr) {
-                currentWssTransport.reset(new WssTransport());
-                if (!currentWssTransport->connect(socketFd, currentWssRoute)) {
-                    if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup init failed", this);
-                    closeSocket(1, -1);
-                    return;
-                }
-                proxyCheckDiagnostic = "wss_tls_handshake";
-            }
-            std::vector<std::vector<uint8_t>> payloads;
-            std::string diagnostic;
-            bool ok = true;
-            if (events & EPOLLOUT) {
-                ok = currentWssTransport->onWritable(payloads, &diagnostic);
-            }
-            if (ok && (events & EPOLLIN)) {
-                ok = currentWssTransport->onReadable(payloads, &diagnostic);
-            }
-            if (!ok) {
-                if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup failed diagnostic=%s", this, diagnostic.c_str());
-                closeSocket(1, -1);
-                return;
-            }
-            if (!dispatchWssPayloads(payloads)) {
-                return;
-            }
-            if (currentWssTransport != nullptr && currentWssTransport->isReady()) {
-                if (!onConnectedSent) {
-                    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-                    proxyCheckDiagnostic = MtProxyPhase::PostHandshakeNoAppdata;
-                    setTransportState(TransportState::MtprotoReady, "wss_ready");
-                    if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup on_connected mode=%d", this, currentWssRoute.mode);
-                    if (!canNotifyConnected("wss_ready")) {
-                        return;
-                    }
-                    onConnected();
-                    setConnectedNotified(true, "wss_ready");
-                }
-                NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
-                buffer->clear();
-                outgoingByteStream->get(buffer);
-                buffer->flip();
-                uint32_t remaining = buffer->remaining();
-                if (remaining) {
-                    if (!canSendWssFrame()) {
-                        return;
-                    }
-                    if (!currentWssTransport->sendFrame(buffer->bytes(), remaining)) {
-                        closeSocket(1, -1);
-                        return;
-                    }
-                    if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                        ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) remaining, currentNetworkType, instanceNum);
-                    }
-                    outgoingByteStream->discard(remaining);
-                    payloads.clear();
-                    if (!currentWssTransport->onWritable(payloads, &diagnostic)) {
-                        if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup write failed diagnostic=%s", this, diagnostic.c_str());
-                        closeSocket(1, -1);
-                        return;
-                    }
-                    if (!dispatchWssPayloads(payloads)) {
-                        return;
-                    }
-                }
-            }
-            adjustWriteOp();
+            onConnected();
+            setConnectedNotified(true, "wss_ready");
         }
-        if (events & EPOLLHUP) {
-            if (LOGS_ENABLED) DEBUG_E("wss socket event has EPOLLHUP");
-            closeSocket(1, -1);
+        // Deliver payloads before acting on a transport failure: the frames
+        // drained ahead of an EOF may carry the server's transport error code,
+        // and MTProto needs it to recover (e.g. regenerate an auth key on -404)
+        // instead of blindly reconnecting with the same state.
+        if (!dispatchWssPayloads(payloads)) {
             return;
-        } else if (events & EPOLLRDHUP) {
-            if (LOGS_ENABLED) DEBUG_E("wss socket event has EPOLLRDHUP");
+        }
+        if (!transportAlive) {
+            proxyCheckDiagnostic = diagnostic.empty() ? "wss_transport_failed" : diagnostic;
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup failed diagnostic=%s", this, proxyCheckDiagnostic.c_str());
             closeSocket(1, -1);
             return;
         }
-        if (events & EPOLLERR) {
-            int32_t error = -1;
-            checkSocketError(&error);
-            if (LOGS_ENABLED) DEBUG_E("connection(%p) wss epoll error code=%d", this, error);
-            // Relay connect failed before the WSS path was up: alternate the
-            // relay host (IP <-> domain) so the next reconnect tries the other
-            // one. Reconnect reuses this Connection object, so the flag sticks.
-            if (!currentWssRoute.relayHostFallback.empty()
-                    && currentWssRoute.relayHostFallback != currentWssRoute.relayIp
-                    && (currentWssTransport == nullptr || !currentWssTransport->isReady())) {
-                wssUsedRelayFallback = !wssUsedRelayFallback;
-                if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup relay_alternate use_fallback=%d", this, wssUsedRelayFallback ? 1 : 0);
-            }
-            closeSocket(1, error);
+        if (currentWssTransport->isReady() && !flushWssStream(&diagnostic)) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup write failed diagnostic=%s", this, diagnostic.c_str());
+            closeSocket(1, -1);
             return;
         }
+        adjustWriteOp();
         return;
     }
     if (events & EPOLLIN) {
@@ -4792,7 +4785,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         TlsHello hello = selectMtProxyTlsHello(currentEffectiveProxyTlsProfile);
                         hello.setDomain(currentClientHelloSni);
                         uint32_t size = hello.writeToBuffer(tempBuffer->bytes);
-                        if (!validateServerCompatibleHello(tempBuffer->bytes, size, currentClientHelloSni, profileName)) {
+                        if (!validateServerCompatibleHello(tempBuffer->bytes, size, currentSecretDomain, profileName)) {
                             closeSocket(1, -1);
                             return;
                         }
@@ -4995,6 +4988,13 @@ void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
     queueAdjustWriteOpAfterOutboundAppend("writeBuffer");
 }
 
+void ConnectionSocket::noteWssPacketBoundary(uint32_t size) {
+    if (!isCurrentTransportWss() || size == 0) {
+        return;
+    }
+    outgoingWssPacketSizes.push_back(size);
+}
+
 void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend(const char *reason) {
     if (!waitingForHostResolve.empty()) {
         setAdjustWriteOpAfterResolve(true, reason);
@@ -5015,10 +5015,14 @@ void ConnectionSocket::adjustWriteOp() {
     if (!canModifyEpollWriteInterest("adjustWriteOp")) {
         return;
     }
-    eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
+    eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+    if (!isCurrentTransportWss()) {
+        eventMask.events |= EPOLLET;
+    }
     bool hasPendingClientHello = pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize;
     bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
-    bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr && currentWssTransport->wantsWrite();
+    bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr
+            && currentWssTransport->wantsWrite();
     if ((proxyAuthState == 0 && (hasPendingTlsFrame || hasPendingWssWrite || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
         eventMask.events |= EPOLLOUT;
     }
@@ -5044,6 +5048,17 @@ int32_t ConnectionSocket::getCurrentNetworkType() const {
 }
 
 bool ConnectionSocket::checkTimeout(int64_t now) {
+    if (isCurrentDirectConnection()) {
+        if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
+            if (!onConnectedSent || hasPendingRequests()) {
+                closeSocket(2, 0);
+                return true;
+            }
+            lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, no requests", this);
+        }
+        return false;
+    }
     if (isCurrentMtProxyConnection()
         && currentSecretIsFakeTls
         && mtproxyFirstTlsFrameSentLogged
@@ -5096,6 +5111,9 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
         if (!onConnectedSent || hasPendingRequests()) {
+            if (isCurrentTransportWss() && currentWssTransport != nullptr) {
+                currentWssTransport->timedOut();
+            }
             classifyMtProxyPreTcpTimeoutDiagnostic("checkTimeout");
             closeSocket(2, 0);
             return true;
@@ -5191,6 +5209,32 @@ void ConnectionSocket::onHostNameResolved(std::string host, std::string ip, bool
             setWaitingForHostResolve("", "host_resolve_callback");
             setMtProxyDnsResolveAttemptStarted(false, "host_resolve_callback");
             setMtProxyPreTcpWaitPhase(MtProxyStartupPhase::None, 0, "host_resolve_callback");
+            if (isCurrentTransportWss()) {
+                bool resolvedIpv6 = false;
+                if (ip.empty() || ip == "dns_negative_cache_hit" || ip == "dns_blocked_zero_address") {
+                    proxyCheckDiagnostic = "host_resolve_failed";
+                    currentWssTransport->timedOut();
+                    closeSocket(1, -1);
+                    return;
+                }
+                if (inet_pton(AF_INET, ip.c_str(), &socketAddress.sin_addr.s_addr) == 1) {
+                    socketAddress.sin_family = AF_INET;
+                    socketAddress.sin_port = htons(currentWssRoute.relayPort);
+                } else if (inet_pton(AF_INET6, ip.c_str(), &socketAddress6.sin6_addr.s6_addr) == 1) {
+                    socketAddress6.sin6_family = AF_INET6;
+                    socketAddress6.sin6_port = htons(currentWssRoute.relayPort);
+                    resolvedIpv6 = true;
+                } else {
+                    proxyCheckDiagnostic = "host_resolve_failed";
+                    if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve WSS host %s address via delegate", this, host.c_str());
+                    currentWssTransport->timedOut();
+                    closeSocket(1, -1);
+                    return;
+                }
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) resolved WSS host %s address %s via delegate", this, host.c_str(), ip.c_str());
+                openConnectionInternal(resolvedIpv6);
+                return;
+            }
             if (ip == "dns_negative_cache_hit") {
                 proxyCheckDiagnostic = "dns_negative_cache_hit";
                 publishProxyConnectionStage(proxyCheckDiagnostic.c_str());

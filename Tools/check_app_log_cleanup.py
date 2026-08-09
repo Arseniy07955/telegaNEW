@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import re
 import sys
 
 
@@ -51,7 +50,7 @@ def main() -> int:
     require(on_create, "ApplicationLoader.onCreate() must exist", failures)
     require(
         "FileLog.cleanupLogs();" in on_create,
-        "ApplicationLoader.onCreate() must clear app log files on every process start",
+        "ApplicationLoader.onCreate() must prune app log files on every process start",
         failures,
     )
     if "FileLog.cleanupLogs();" in on_create and 'FileLog.d("app start time' in on_create:
@@ -62,22 +61,22 @@ def main() -> int:
         )
     require(
         "ensureInitied();" not in cleanup_logs,
-        "cleanupLogs() must not initialize FileLog before deleting stale files",
+        "cleanupLogs() must not initialize FileLog before pruning stale files",
         failures,
     )
     require(
-        re.search(r"\bFileLog\s+instance\s*=\s*Instance\s*;", cleanup_logs) is not None,
-        "cleanupLogs() must use the existing FileLog instance without creating one",
+        "pruneOldLogs(getMaxLogFiles());" in cleanup_logs,
+        "cleanupLogs() must retain recent sessions through the bounded log pruner",
         failures,
     )
     require(
-        "tlRequestsFile" in cleanup_logs,
-        "cleanupLogs() must preserve the current MTProto request log when called after init",
+        ".delete()" not in cleanup_logs,
+        "startup cleanup must not erase the previous crash session",
         failures,
     )
     require(
-        "!file.isFile()" in cleanup_logs,
-        "cleanupLogs() must delete only regular log files and leave subdirectories alone",
+        "getCurrentLogFile()" in file_log and "f.getName().startsWith(prefix)" in file_log,
+        "bounded pruning must preserve every file in the current log session",
         failures,
     )
 

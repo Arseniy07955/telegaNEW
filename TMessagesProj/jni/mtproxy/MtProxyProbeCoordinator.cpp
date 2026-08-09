@@ -186,7 +186,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
         state.allowedSniVariants = probeKey.allowedSniVariants;
     }
     if (state.allowedSniVariants == 0) {
-        state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+        state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL);
     }
     if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF
             && state.fakeTlsHandshakeBudget.terminalUntilMs > now) {
@@ -256,7 +256,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
         }
     }
     if (state.cursor.generation == 0
-            && state.cursor.family == MtProxyAdaptivePolicy::CLIENT_HELLO_CHROME_MODERN_SOFT_FRAGMENT
+            && state.cursor.family == MtProxyAdaptivePolicy::CLIENT_HELLO_CHROME_MODERN_NO_FRAGMENT
             && state.cursor.sniVariant == MtProxyAdaptivePolicy::SNI_ORIGINAL
             && !((state.allowedSniVariants & MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL)) != 0)) {
         state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
@@ -301,7 +301,7 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
         state.allowedSniVariants = probeKey.allowedSniVariants;
     }
     if (state.allowedSniVariants == 0) {
-        state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+        state.allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL);
     }
 
     std::string budgetFailureClass = fakeTlsBudgetFailureClassForPhase(diagnostic, responseSignature);
@@ -478,7 +478,7 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
             }
             uint32_t siblingSniVariants = sibling.allowedSniVariants != 0
                     ? sibling.allowedSniVariants
-                    : MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
+                    : MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL);
             sibling.status = ProbeStatus::IDLE;
             sibling.ownerToken = 0;
             sibling.joinBudgetAnchorMs = 0;

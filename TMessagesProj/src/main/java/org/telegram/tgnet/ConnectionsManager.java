@@ -17,11 +17,6 @@ import android.util.Base64;
 import androidx.annotation.Keep;
 
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
-import com.google.android.gms.tasks.Task;
-import com.google.android.play.core.integrity.IntegrityManager;
-import com.google.android.play.core.integrity.IntegrityManagerFactory;
-import com.google.android.play.core.integrity.IntegrityTokenRequest;
-import com.google.android.play.core.integrity.IntegrityTokenResponse;
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
 
 import org.json.JSONArray;
@@ -49,7 +44,6 @@ import org.telegram.messenger.StatsController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
 import org.telegram.ui.Components.VideoPlayer;
-import org.telegram.ui.LoginActivity;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -69,8 +63,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
@@ -145,11 +142,6 @@ public class ConnectionsManager extends BaseController {
     public final static int MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
     public final static int MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
     public final static int MT_PROXY_CONNECTION_PATTERN_BROWSER = 4;
-    public final static int WSS_TRANSPORT_OFF = SharedConfig.TRANSPORT_LEGACY_PROXY;
-    public final static int WSS_TRANSPORT_OFFICIAL = SharedConfig.TRANSPORT_WSS_OFFICIAL;
-    public final static int WSS_TRANSPORT_CUSTOM = SharedConfig.TRANSPORT_WSS_CUSTOM;
-    public final static int WSS_TRANSPORT_SOCKS5 = SharedConfig.TRANSPORT_WSS_SOCKS5;
-
     private static final long TL_UNMAPPED_CONSTRUCTOR_LOG_INTERVAL_MS = 30_000;
     private static final long TL_UNMAPPED_SUMMARY_INTERVAL_MS = 60_000;
     private static final HashMap<Integer, UnmappedConstructorStats> unmappedConstructorStats = new HashMap<>();
@@ -187,9 +179,7 @@ public class ConnectionsManager extends BaseController {
     }
     public static final String BACKGROUND_NETWORK_ALWAYS_ON = "backgroundNetworkAlwaysOn";
 
-    private static final int MT_PROXY_TLS_PROFILE_RANDOM_COUNT = 2;
     private static final String MT_PROXY_TLS_PROFILE_PREFS = "mtproxy_tls_profile";
-    private static final String MT_PROXY_TLS_PROFILE_SALT = "profile_salt_v1";
     private static final String MT_PROXY_TLS_PROFILE_OVERRIDE = "profile_override";
     private static final String DOH_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
     private static final String DOH_GOOGLE_QUERY_ENDPOINT = "https://dns.google/resolve";
@@ -266,10 +256,16 @@ public class ConnectionsManager extends BaseController {
         });
     }
 
+    // Насколько быстрый повторный запрос имени считать признаком того, что
+    // выданный адрес не сработал.
+    private static final long ADDRESS_RETRY_WINDOW_MS = 20_000L;
+
     private static class ResolvedDomain {
 
         public final List<String> ipv4;
         public final List<String> ipv6;
+        private int preferredIndex;
+        private long lastHandOutTime;
         final long expiresAtMs;
         final long staleExpiresAtMs;
         final String source;
@@ -295,8 +291,38 @@ public class ConnectionsManager extends BaseController {
         }
 
         public String getAddress() {
-            List<String> addresses = !ipv4.isEmpty() ? ipv4 : ipv6;
-            return addresses.get(Utilities.random.nextInt(addresses.size()));
+            // IPv6 первым, когда он есть: у веб-релеев Telegram IPv4-адрес
+            // обычно единственный и режется целиком, а IPv6 их сразу два и
+            // блокируют их заметно реже. Если IPv6 у устройства нет, резолвер
+            // его и не вернёт, и остаётся прежнее поведение.
+            // Порядок семейств выбирается по тому, что у устройства реально
+            // есть. При отключённом IPv4 начинать с него — значит тратить
+            // попытку впустую на каждом соединении: диалоги и медиа грузятся
+            // ощутимо дольше. При работающем IPv4 он идёт первым, потому что
+            // глобальный IPv6-адрес ещё не означает маршрут до релея.
+            List<String> addresses;
+            if (!ipv6.isEmpty() && !deviceHasGlobalIpv4()) {
+                addresses = new ArrayList<>(ipv6);
+                addresses.addAll(ipv4);
+            } else {
+                addresses = new ArrayList<>(ipv4);
+                addresses.addAll(ipv6);
+            }
+            if (addresses.isEmpty()) {
+                addresses = ipv4.isEmpty() ? ipv6 : ipv4;
+            }
+            // Держимся адреса, который работает, и уходим с него только при
+            // отказе. Признак отказа — повторный запрос того же имени вскоре
+            // после предыдущего: успешное соединение живёт минутами и заново
+            // резолвить имя не заставляет, а неудачная попытка возвращается
+            // сюда почти сразу.
+            long now = SystemClock.elapsedRealtime();
+            if (lastHandOutTime != 0 && now - lastHandOutTime < ADDRESS_RETRY_WINDOW_MS) {
+                preferredIndex++;
+            }
+            lastHandOutTime = now;
+            int index = Math.abs(preferredIndex) % addresses.size();
+            return addresses.get(index);
         }
     }
 
@@ -467,6 +493,26 @@ public class ConnectionsManager extends BaseController {
             }
         }, null, null, null, requestFlags, dcId, ConnectionTypeGeneric, true);
     }
+
+
+
+    public int sendRequestTypedAndProcessUpdates(TLMethod<TLRPC.Updates> method, Executor executor, Utilities.Callback2<TLRPC.Updates, TLRPC.TL_error> completionBlock) {
+        return sendRequestTypedAndProcessUpdates(method, executor, completionBlock, DEFAULT_DATACENTER_ID, 0);
+    }
+
+    public int sendRequestTypedAndProcessUpdates(TLMethod<TLRPC.Updates> method, Executor executor, Utilities.Callback2<TLRPC.Updates, TLRPC.TL_error> completionBlock, int dcId, int requestFlags) {
+        return sendRequestTyped(method, null, (result, err) -> {
+            if (result != null) {
+                getMessagesController().processUpdates(result, false);
+            }
+            if (executor != null) {
+                executor.execute(() -> completionBlock.run(result, err));
+            } else {
+                completionBlock.run(result, err);
+            }
+        }, dcId, requestFlags);
+    }
+
 
     public int sendRequest(TLObject object, RequestDelegate completionBlock) {
         return sendRequest(object, completionBlock, null, 0);
@@ -837,11 +883,15 @@ public class ConnectionsManager extends BaseController {
         String proxySecret = preferences.getString("proxy_secret", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
-        if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
+        final boolean legacyProxyEnabled = preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress);
+        if (legacyProxyEnabled) {
             int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount);
             native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
         }
-        setWssTransportSettings();
+        if (legacyProxyEnabled && SharedConfig.wssTransportEnabled) {
+            SharedConfig.setWssTransportEnabled(false);
+        }
+        setWssTransportEnabled();
         String installer = "";
         try {
             Context context = ApplicationLoader.applicationContext;
@@ -942,17 +992,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void resumeNetworkMaybe() {
-        publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE);
         native_resumeNetwork(currentAccount, true);
-    }
-
-    private void publishProxyActivationContext(ProxyConnectionEvent.Origin origin) {
-        if (!SharedConfig.isProxyEnabled()) {
-            return;
-        }
-        ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin;
-        int activationGeneration = ProxyRuntimeStateStore.noteProxyLifecycleActivation(currentAccount, activationOrigin);
-        native_setProxyActivationContext(currentAccount, activationGeneration, activationOrigin.wireName);
     }
 
     public void updateDcSettings() {
@@ -1045,8 +1085,6 @@ public class ConnectionsManager extends BaseController {
                 getContactsController().checkContacts();
             }
             lastPauseTime = 0;
-            ProxyRuntimeStateStore.noteResumeForeground();
-            publishProxyActivationContext(ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
             native_resumeNetwork(currentAccount, false);
         }
     }
@@ -1057,7 +1095,6 @@ public class ConnectionsManager extends BaseController {
         }
         if (isBackgroundNetworkAlwaysOn()) {
             lastPauseTime = 0;
-            publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE);
             native_resumeNetwork(currentAccount, false);
             return;
         }
@@ -1120,10 +1157,23 @@ public class ConnectionsManager extends BaseController {
         onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, "", origin);
     }
 
-    // UI-thread-confined (every write happens inside the runOnUIThread lambda below): last logged
+    // UI-thread-confined (every write happens in processProxyConnectionStage): last logged
     // proxy_connection_stage per account, used to log only on an actual stage transition.
     private static final java.util.HashMap<Integer, String> lastLoggedProxyStage = new java.util.HashMap<>();
     private static final java.util.HashMap<Integer, String> lastLoggedProxyDiagnosis = new java.util.HashMap<>();
+
+    // Native MTProxy sockets can publish thousands of stage callbacks per second while the first
+    // control/media connections fan out or reconnect. Posting one main-looper Runnable per callback
+    // starves input and rendering before the reducer gets a chance to discard telemetry-only events.
+    // Keep only the newest copy of an identical semantic event and give the UI looper a frame between
+    // bounded batches. remove+put keeps the map ordered by the latest occurrence, which preserves the
+    // final success/failure ordering when different phases alternate during a reconnect storm.
+    private static final Object proxyStageDispatchLock = new Object();
+    private static final LinkedHashMap<String, ProxyConnectionEvent> pendingProxyStageEvents = new LinkedHashMap<>();
+    private static final int MAX_PENDING_PROXY_STAGE_EVENTS = 256;
+    private static final int MAX_PROXY_STAGE_EVENTS_PER_FRAME = 12;
+    private static final long PROXY_STAGE_NEXT_BATCH_DELAY_MS = 16L;
+    private static boolean proxyStageDrainScheduled;
 
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin) {
         onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, 0);
@@ -1141,34 +1191,93 @@ public class ConnectionsManager extends BaseController {
     // authority's clock (endpoint cooldown / probe coordinator hold) riding
     // along with the event, so the Java layer never re-derives hold windows.
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs) {
-        AndroidUtilities.runOnUIThread(() -> {
-            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
-            ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event);
-            String normalizedDiagnostic = event.phase;
-            if (BuildVars.LOGS_ENABLED && decision != null) {
-                long lastSuccessAgeMs = ProxyRuntimeStateStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, event.timestamp);
-                String diagnosisKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration + "|" + decision.decision + "|" + decision.visibleChanged + "|" + decision.rotationTrigger;
-                if (!diagnosisKey.equals(lastLoggedProxyDiagnosis.get(currentAccount))) {
-                    lastLoggedProxyDiagnosis.put(currentAccount, diagnosisKey);
-                    FileLog.d("proxy_diagnosis owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " layer=" + decision.verdict.layer + " failure_class=" + decision.verdict.failureClass + " action=" + decision.verdict.action + " decision=" + decision.decision + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration + " last_success_age_ms=" + lastSuccessAgeMs + " visible_changed=" + (decision.visibleChanged ? 1 : 0) + " rotation_trigger=" + (decision.rotationTrigger ? 1 : 0) + " shadowed=" + (decision.shadowed ? 1 : 0));
+        if (!SharedConfig.isProxyEnabled()) {
+            return;
+        }
+        ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
+        enqueueProxyConnectionStage(event);
+    }
+
+    private static void enqueueProxyConnectionStage(ProxyConnectionEvent event) {
+        boolean scheduleDrain = false;
+        synchronized (proxyStageDispatchLock) {
+            String key = proxyStageEventKey(event);
+            pendingProxyStageEvents.remove(key);
+            pendingProxyStageEvents.put(key, event);
+            if (pendingProxyStageEvents.size() > MAX_PENDING_PROXY_STAGE_EVENTS) {
+                Iterator<Map.Entry<String, ProxyConnectionEvent>> iterator = pendingProxyStageEvents.entrySet().iterator();
+                if (iterator.hasNext()) {
+                    iterator.next();
+                    iterator.remove();
                 }
             }
-            if (!shouldNotifyProxyConnectionStage(decision)) {
-                return;
+            if (!proxyStageDrainScheduled) {
+                proxyStageDrainScheduled = true;
+                scheduleDrain = true;
             }
-            if (BuildVars.LOGS_ENABLED) {
-                // The native side fires this callback on every transport state change (thousands/sec
-                // during a reconnect storm); logging each one was the bulk of the main-log spam. Only
-                // distinct transitions carry diagnostic value, so log on change of (phase, endpoint, probe).
-                String stageKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration;
-                if (!stageKey.equals(lastLoggedProxyStage.get(currentAccount))) {
-                    lastLoggedProxyStage.put(currentAccount, stageKey);
-                    FileLog.d("proxy_connection_stage owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration);
-                }
+        }
+        if (scheduleDrain) {
+            AndroidUtilities.runOnUIThread(ConnectionsManager::drainProxyConnectionStages);
+        }
+    }
+
+    private static String proxyStageEventKey(ProxyConnectionEvent event) {
+        return event.account + "|" + event.phase + "|" + event.endpointKey + "|" + event.probeKey + "|"
+                + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.activationGeneration;
+    }
+
+    private static void drainProxyConnectionStages() {
+        ArrayList<ProxyConnectionEvent> batch = new ArrayList<>(MAX_PROXY_STAGE_EVENTS_PER_FRAME);
+        synchronized (proxyStageDispatchLock) {
+            Iterator<Map.Entry<String, ProxyConnectionEvent>> iterator = pendingProxyStageEvents.entrySet().iterator();
+            while (iterator.hasNext() && batch.size() < MAX_PROXY_STAGE_EVENTS_PER_FRAME) {
+                batch.add(iterator.next().getValue());
+                iterator.remove();
             }
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
-            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
-        });
+        }
+        for (int i = 0; i < batch.size(); i++) {
+            processProxyConnectionStage(batch.get(i));
+        }
+        boolean hasMore;
+        synchronized (proxyStageDispatchLock) {
+            hasMore = !pendingProxyStageEvents.isEmpty();
+            if (!hasMore) {
+                proxyStageDrainScheduled = false;
+            }
+        }
+        if (hasMore) {
+            AndroidUtilities.runOnUIThread(ConnectionsManager::drainProxyConnectionStages, PROXY_STAGE_NEXT_BATCH_DELAY_MS);
+        }
+    }
+
+    private static void processProxyConnectionStage(ProxyConnectionEvent event) {
+        if (!SharedConfig.isProxyEnabled()) {
+            return;
+        }
+        int currentAccount = event.account;
+        String endpointKey = event.endpointKey;
+        ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event);
+        String normalizedDiagnostic = event.phase;
+        if (BuildVars.LOGS_ENABLED && decision != null) {
+            long lastSuccessAgeMs = ProxyRuntimeStateStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, event.timestamp);
+            String diagnosisKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration + "|" + decision.decision + "|" + decision.visibleChanged + "|" + decision.rotationTrigger;
+            if (!diagnosisKey.equals(lastLoggedProxyDiagnosis.get(currentAccount))) {
+                lastLoggedProxyDiagnosis.put(currentAccount, diagnosisKey);
+                FileLog.d("proxy_diagnosis owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " layer=" + decision.verdict.layer + " failure_class=" + decision.verdict.failureClass + " action=" + decision.verdict.action + " decision=" + decision.decision + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration + " last_success_age_ms=" + lastSuccessAgeMs + " visible_changed=" + (decision.visibleChanged ? 1 : 0) + " rotation_trigger=" + (decision.rotationTrigger ? 1 : 0) + " shadowed=" + (decision.shadowed ? 1 : 0));
+            }
+        }
+        if (!shouldNotifyProxyConnectionStage(decision)) {
+            return;
+        }
+        if (BuildVars.LOGS_ENABLED) {
+            String stageKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration;
+            if (!stageKey.equals(lastLoggedProxyStage.get(currentAccount))) {
+                lastLoggedProxyStage.put(currentAccount, stageKey);
+                FileLog.d("proxy_connection_stage owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration);
+            }
+        }
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
+        AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
     }
 
     private static boolean shouldNotifyProxyConnectionStage(ProxyRuntimeStateStore.Decision decision) {
@@ -1405,11 +1514,16 @@ public class ConnectionsManager extends BaseController {
             secret = "";
         }
 
+        boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address);
+        if (hasSelectedProxy && SharedConfig.wssTransportEnabled) {
+            SharedConfig.setWssTransportEnabled(false);
+            setWssTransportEnabled();
+        }
         ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.SETTINGS_CHANGE : origin;
-        int activationGeneration = ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin);
-        MtProxyOptions enabledOptions = enabled && !TextUtils.isEmpty(address) ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
+        int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
+        MtProxyOptions enabledOptions = hasSelectedProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            if (enabled && !TextUtils.isEmpty(address)) {
+            if (hasSelectedProxy) {
                 native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName);
             } else {
                 native_setProxySettings(a, "", 1080, "", "", "", MtProxyOptions.disabled(), activationGeneration, activationOrigin.wireName);
@@ -1421,59 +1535,17 @@ public class ConnectionsManager extends BaseController {
         }
     }
 
-    private static int resolveWssTransportMode() {
-        int mode = SharedConfig.normalizeWssTransportMode(SharedConfig.wssTransportMode);
-        if (mode == WSS_TRANSPORT_CUSTOM) {
-            if (TextUtils.isEmpty(SharedConfig.wssHost)) {
-                return WSS_TRANSPORT_OFF;
-            }
-        }
-        return mode;
-    }
-
-    private static class WssSocksProxy {
-        String host = "";
-        int port = 1080;
-        String username = "";
-        String password = "";
-        boolean enabled;
-    }
-
-    private static WssSocksProxy resolveWssSocksProxy(int mode) {
-        WssSocksProxy proxy = new WssSocksProxy();
-        SharedConfig.loadProxyList();
-        SharedConfig.ProxyInfo selectedProxy = SharedConfig.currentWssSocksProxy;
-        if (mode == WSS_TRANSPORT_OFF || selectedProxy == null) {
-            return proxy;
-        }
-        if (!TextUtils.isEmpty(selectedProxy.secret) || TextUtils.isEmpty(selectedProxy.address)) {
-            return proxy;
-        }
-        int port = selectedProxy.port;
-        if (port <= 0 || port > 65535) {
-            return proxy;
-        }
-        proxy.host = selectedProxy.address;
-        proxy.port = port;
-        proxy.username = selectedProxy.username != null ? selectedProxy.username : "";
-        proxy.password = selectedProxy.password != null ? selectedProxy.password : "";
-        proxy.enabled = true;
-        return proxy;
-    }
-
-    public static void setWssTransportSettings() {
-        int mode = resolveWssTransportMode();
-        String host = SharedConfig.wssHost != null ? SharedConfig.wssHost : "";
-        String path = SharedConfig.normalizeWssPath(SharedConfig.wssPath);
-        int port = SharedConfig.wssPort > 0 && SharedConfig.wssPort <= 65535 ? SharedConfig.wssPort : 443;
-        boolean enabled = mode != WSS_TRANSPORT_OFF;
-        WssSocksProxy wssSocksProxy = resolveWssSocksProxy(mode);
-        String wssSocksHost = wssSocksProxy.host;
-        String wssSocksUsername = wssSocksProxy.username;
-        String wssSocksPassword = wssSocksProxy.password;
+    public static void setWssTransportEnabled() {
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            native_setWssTransportSettings(a, mode, mode, host, port, path, SharedConfig.wssUseForMiniApps, wssSocksHost, wssSocksProxy.port, wssSocksUsername, wssSocksPassword, wssSocksProxy.enabled, enabled);
+            native_setWssTransportEnabled(a, SharedConfig.wssTransportEnabled);
         }
+    }
+
+    public static boolean supportsCdnFileRedirects() {
+        // Public Telegram WebSocket relays address the five regular DCs, not
+        // the separate CDN DC ids. With WSS selected, ask the source DC to
+        // serve the file through its media relay instead of redirecting it.
+        return !SharedConfig.wssTransportEnabled;
     }
 
     static int resolveMtProxyClientHelloFragmentationMode() {
@@ -1521,7 +1593,14 @@ public class ConnectionsManager extends BaseController {
         if (profile == MT_PROXY_TLS_PROFILE_AUTO_ROTATE) {
             return MT_PROXY_TLS_PROFILE_AUTO_ROTATE;
         }
-        if (profile >= MT_PROXY_TLS_PROFILE_FIREFOX && profile <= MT_PROXY_TLS_PROFILE_CHROME_MODERN) {
+        if (profile == MT_PROXY_TLS_PROFILE_CHROME_MODERN
+                || profile == MT_PROXY_TLS_PROFILE_ANDROID_CHROME) {
+            return MT_PROXY_TLS_PROFILE_AUTO;
+        }
+        if (profile == MT_PROXY_TLS_PROFILE_FIREFOX
+                || profile == MT_PROXY_TLS_PROFILE_YANDEX
+                || profile == MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID
+                || profile == MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP) {
             return profile;
         }
         return MT_PROXY_TLS_PROFILE_AUTO;
@@ -1539,56 +1618,14 @@ public class ConnectionsManager extends BaseController {
     }
 
     static int resolveMtProxyTlsProfile(String address, int port, String secret) {
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences(MT_PROXY_TLS_PROFILE_PREFS, Context.MODE_PRIVATE);
         int override = getMtProxyTlsProfileOverride();
         if (override != MT_PROXY_TLS_PROFILE_AUTO) {
             return override;
         }
-
-        long salt = preferences.getLong(MT_PROXY_TLS_PROFILE_SALT, 0);
-        if (salt == 0) {
-            salt = Utilities.random.nextLong();
-            if (salt == 0) {
-                salt = 1;
-            }
-            preferences.edit().putLong(MT_PROXY_TLS_PROFILE_SALT, salt).apply();
-        }
-
-        long hash = 0xcbf29ce484222325L ^ salt;
-        hash = stableMtProxyTlsHash(hash, address);
-        hash = stableMtProxyTlsHash(hash, port);
-        hash = stableMtProxyTlsHash(hash, secret);
-
-        int bucket = Math.floorMod(hash, MT_PROXY_TLS_PROFILE_RANDOM_COUNT);
-        if (bucket == 0) {
-            return MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID;
-        }
+        // Keep Android on the same measured-safe default as tdesktop. Exact
+        // Chromium-shaped profiles remain available as legacy IDs only and
+        // are withheld by the native wire policy as a second line of defence.
         return MT_PROXY_TLS_PROFILE_YANDEX;
-    }
-
-    private static long stableMtProxyTlsHash(long hash, int value) {
-        for (int i = 0; i < 4; i++) {
-            hash ^= (value >> (i * 8)) & 0xff;
-            hash *= 0x100000001b3L;
-        }
-        return hash;
-    }
-
-    private static long stableMtProxyTlsHash(long hash, String value) {
-        if (value == null) {
-            return stableMtProxyTlsHash(hash, 0);
-        }
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c >= 'A' && c <= 'Z') {
-                c = (char) (c + 32);
-            }
-            hash ^= c & 0xff;
-            hash *= 0x100000001b3L;
-            hash ^= (c >> 8) & 0xff;
-            hash *= 0x100000001b3L;
-        }
-        return hash;
     }
 
     public static native void native_switchBackend(int currentAccount, boolean restart);
@@ -1616,7 +1653,7 @@ public class ConnectionsManager extends BaseController {
     public static native void native_setUserId(int currentAccount, long id);
     public static native void native_init(int currentAccount, int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, String installer, String packageId, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection, boolean hasNetwork, int networkType, int performanceClass);
     public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, MtProxyOptions options, int activationGeneration, String activationOrigin);
-    public static native void native_setWssTransportSettings(int currentAccount, int mode, int gatewayMode, String host, int port, String path, boolean miniApps, String socksHost, int socksPort, String socksUsername, String socksPassword, boolean socksEnabled, boolean enabled);
+    public static native void native_setWssTransportEnabled(int currentAccount, boolean enabled);
     public static native void native_setLangCode(int currentAccount, String langCode);
     public static native void native_setRegId(int currentAccount, String regId);
     public static native void native_setSystemLangCode(int currentAccount, String langCode);
@@ -1947,6 +1984,100 @@ public class ConnectionsManager extends BaseController {
     }
 
     @SuppressLint("NewApi")
+    private static ArrayList<String> queryAndroidDnsResolverAaaa(ResolveContext context) {
+        ArrayList<String> empty = new ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return empty;
+        }
+        // Без собственного IPv6 у устройства AAAA-адрес недостижим, и выдать
+        // его значило бы заменить рабочий путь на заведомо мёртвый.
+        if (!deviceHasGlobalIpv6()) {
+            return empty;
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<ArrayList<String>> result = new AtomicReference<>();
+        CancellationSignal cancellationSignal = new CancellationSignal();
+        try {
+            DnsResolver.getInstance().query(null, context.host, DnsResolver.TYPE_AAAA, DnsResolver.FLAG_EMPTY, DNS_DIRECT_EXECUTOR, cancellationSignal, new DnsResolver.Callback<List<InetAddress>>() {
+                @Override
+                public void onAnswer(List<InetAddress> answer, int rcode) {
+                    result.set(filterIpv6Addresses(answer, context));
+                    latch.countDown();
+                }
+
+                @Override
+                public void onError(DnsResolver.DnsException e) {
+                    latch.countDown();
+                }
+            });
+            if (!latch.await(HOST_RESOLVER_SYSTEM_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                cancellationSignal.cancel();
+                logHostResolverExpectedFailure("system", context.host, "android_aaaa_timeout");
+                return empty;
+            }
+        } catch (InterruptedException e) {
+            cancellationSignal.cancel();
+            Thread.currentThread().interrupt();
+            return empty;
+        } catch (Throwable e) {
+            cancellationSignal.cancel();
+            return empty;
+        }
+        ArrayList<String> addresses = result.get();
+        return addresses != null ? addresses : empty;
+    }
+
+    private static boolean deviceHasGlobalIpv4() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
+                    InetAddress inetAddress = interfaceAddress.getAddress();
+                    if (!(inetAddress instanceof Inet4Address)) {
+                        continue;
+                    }
+                    if (inetAddress.isLinkLocalAddress() || inetAddress.isLoopbackAddress()
+                            || inetAddress.isMulticastAddress()) {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        return false;
+    }
+
+    private static boolean deviceHasGlobalIpv6() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
+                    InetAddress inetAddress = interfaceAddress.getAddress();
+                    if (!(inetAddress instanceof Inet6Address)) {
+                        continue;
+                    }
+                    if (inetAddress.isLinkLocalAddress() || inetAddress.isLoopbackAddress()
+                            || inetAddress.isMulticastAddress() || inetAddress.isSiteLocalAddress()) {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        return false;
+    }
+
+    @SuppressLint("NewApi")
     private static ResolvedDomain tryAndroidDnsResolverA(ResolveContext context) {
         String hostName = context.host;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -1990,7 +2121,14 @@ public class ConnectionsManager extends BaseController {
             logHostResolverExpectedFailure("system", hostName, "android_" + resolverError.getClass().getSimpleName());
             return null;
         }
-        ResolvedDomain resolvedDomain = resolvedDomainFromIpv4Addresses(result.get(), "system");
+        // AAAA спрашиваем отдельным запросом: без него список IPv6 всегда пуст,
+        // и клиент не может воспользоваться шестым протоколом, даже когда он
+        // есть у устройства. У веб-релеев Telegram единичные IPv4-адреса,
+        // которые режутся целиком, поэтому IPv6-путь часто оказывается
+        // единственным рабочим.
+        ArrayList<String> ipv6Addresses = queryAndroidDnsResolverAaaa(context);
+        ResolvedDomain resolvedDomain = resolvedDomainFromAddresses(
+                result.get(), ipv6Addresses, "system", HOST_RESOLVER_MAX_FRESH_TTL_MS);
         if (resolvedDomain == null) {
             logHostResolverExpectedFailure("system", hostName, "android_no_ipv4_answer");
         }
@@ -2621,39 +2759,12 @@ public class ConnectionsManager extends BaseController {
     @Keep
     public static void onIntegrityCheckClassic(final int currentAccount, final int requestToken, final String project, final String nonce) {
         AndroidUtilities.runOnUIThread(() -> {
-            long start = System.currentTimeMillis();
-            FileLog.d("account"+currentAccount+": server requests integrity classic check with project = "+project+" nonce = " + nonce);
-            IntegrityManager integrityManager = IntegrityManagerFactory.create(ApplicationLoader.applicationContext);
-            final long project_id;
-            try {
-                project_id = Long.parseLong(project);
-            } catch (Exception e) {
-                FileLog.d("account"+currentAccount+": integrity check failes to parse project id");
-                native_receivedIntegrityCheckClassic(currentAccount, requestToken, nonce, "PLAYINTEGRITY_FAILED_EXCEPTION_NOPROJECT");
-                return;
-            }
-            Task<IntegrityTokenResponse> integrityTokenResponse = integrityManager.requestIntegrityToken(IntegrityTokenRequest.builder().setNonce(nonce).setCloudProjectNumber(project_id).build());
-            integrityTokenResponse
-                .addOnSuccessListener(r -> {
-                    final String token = r.token();
-
-                    if (token == null) {
-                        FileLog.e("account"+currentAccount+": integrity check gave null token in " + (System.currentTimeMillis() - start) + "ms");
-                        native_receivedIntegrityCheckClassic(currentAccount, requestToken, nonce, "PLAYINTEGRITY_FAILED_EXCEPTION_NULL");
-                        return;
-                    }
-
-                    FileLog.d("account"+currentAccount+": integrity check successfully gave token: " + token + " in " + (System.currentTimeMillis() - start) + "ms");
-                    try {
-                        native_receivedIntegrityCheckClassic(currentAccount, requestToken, nonce, token);
-                    } catch (Exception e) {
-                        FileLog.e("receivedIntegrityCheckClassic failed", e);
-                    }
-                })
-                .addOnFailureListener(e -> {
-                    FileLog.e("account"+currentAccount+": integrity check failed to give a token in " + (System.currentTimeMillis() - start) + "ms", e);
-                    native_receivedIntegrityCheckClassic(currentAccount, requestToken, nonce, "PLAYINTEGRITY_FAILED_EXCEPTION_" + LoginActivity.errorString(e));
-                });
+            // Fork builds cannot obtain a token for Telegram's Google Cloud project and
+            // must also work on devices without Google Play Services. The native request
+            // is paused while this callback runs, so always resume it immediately with
+            // the protocol's failure marker instead of leaving auth.sendCode spinning.
+            FileLog.d("account" + currentAccount + ": Play Integrity disabled, returning fallback for project = " + project);
+            native_receivedIntegrityCheckClassic(currentAccount, requestToken, nonce, "PLAYINTEGRITY_FAILED_EXCEPTION_DISABLED");
         });
     }
 

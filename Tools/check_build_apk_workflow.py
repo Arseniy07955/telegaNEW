@@ -9,7 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GRADLE_PATH = ROOT / "TMessagesProj_AppStandalone" / "build.gradle"
 LIB_GRADLE_PATH = ROOT / "TMessagesProj" / "build.gradle"
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "build-apk.yml"
+WORKFLOW_PATH = ROOT / ".forgejo" / "workflows" / "build-apk.yml"
+APK_ABI_CHECK_PATH = ROOT / "Tools" / "check_apk_single_abi.py"
 
 
 ABI_FLAVORS = {
@@ -46,6 +47,8 @@ ABI_FLAVORS = {
         "ccache_key": "ccache-x86_64-standalone",
     },
 }
+
+WORKFLOW_FLAVORS = ("arm64", "armv7", "x86")
 
 
 def read_text(path: Path) -> str:
@@ -110,14 +113,39 @@ def check_gradle(gradle_text: str) -> list[str]:
         if "AndroidManifest_standalone.xml" not in block:
             errors.append(f"Flavor {flavor} must keep the standalone manifest")
 
-    if "output.versionCodeOverride = defaultConfig.versionCode * 100 + variant.productFlavors.get(0).abiVersionCode" not in gradle_text:
-        errors.append("Gradle version-code derivation must stay centralized on abiVersionCode with a two-digit ABI suffix")
+    if "output.versionCodeOverride = defaultConfig.versionCode * 100000 + zastoBuildNumber * 10 + abiVersionDigit" not in gradle_text:
+        errors.append("Gradle version-code derivation must include the Forgejo build number and ABI digit")
+
+    for literal in ("ZastoBuildNumber", "zastoBuildNumber", "abiVersionDigit"):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing Forgejo version-code contract literal: {literal}")
+
+    for literal in (
+        "ZASTO_RELEASE_KEYSTORE",
+        "ZASTO_RELEASE_STORE_PASSWORD_FILE",
+        "ZASTO_RELEASE_KEY_PASSWORD_FILE",
+        "ZASTO_RELEASE_KEY_ALIAS_FILE",
+        "zastoExternalSigningValues.any { it } && !zastoExternalSigningValues.every { it }",
+    ):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing secure local signing contract literal: {literal}")
 
     if "standaloneBuildFlavors = [\"afat\", \"arm64\", \"armv7\", \"x86\", \"x64\"]" not in gradle_text:
         errors.append("variantFilter must keep an explicit allow-list for afat and the ABI standalone flavors")
 
     if "!names.any { standaloneBuildFlavors.contains(it) }" not in gradle_text:
         errors.append("variantFilter must allow ABI standalone flavors through names.any")
+
+    for literal in (
+        "zastoStandaloneAbiApks",
+        "zastoValidNativeAbis",
+        "java.util.zip.ZipFile",
+        "assets/chaquopy/bootstrap-native/${abi}/",
+        "foreign ABI payload",
+        "finalizedBy verifyTask",
+    ):
+        if literal not in gradle_text:
+            errors.append(f"Standalone Gradle file is missing packaged APK ABI guard literal: {literal}")
 
     build_types = find_named_block(gradle_text, "buildTypes")
     standalone_build_type = find_named_block(build_types, "standalone") if build_types else None
@@ -137,10 +165,18 @@ def check_library_gradle(gradle_text: str) -> list[str]:
 
     required_literals = [
         "zastoAbiFilter",
+        "zastoDeprecatedMultiAbiFilters",
         "zastoAllNativeAbis",
+        "zastoStandaloneTaskAbis",
+        "zastoTaskRequestedAbis.size() > 1",
         'project.findProperty("zastoAbiFilter")',
+        'project.findProperty("zastoAbiFilters")',
         'System.getenv("ZASTO_ABI_FILTER")',
+        'System.getenv("ZASTO_ABI_FILTERS")',
+        "zastoSingleAbiFilter != zastoTaskAbiFilter",
         "abiFilters(*(zastoRequestedAbiFilter ? [zastoRequestedAbiFilter] : zastoAllNativeAbis))",
+        "CMAKE_C_COMPILER_LAUNCHER=ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
     for literal in required_literals:
         if literal not in gradle_text:
@@ -171,7 +207,6 @@ def check_workflow(workflow_text: str) -> list[str]:
     errors: list[str] = []
 
     required_literals = [
-        "contents: write",
         "fail-fast: false",
         '":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone"',
         "TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone",
@@ -186,23 +221,43 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_plugin_python_deps.py",
         "python3 Tools/check_plugin_utils_javadoc.py",
         "python3 Tools/check_android_string_format_contract.py",
+        "python3 Tools/check_telegram_api_identity.py",
         "python3 Tools/check_logs_activity_compile_contract.py",
+        "python3 Tools/check_runtime_resilience.py",
         "python3 Tools/check_zasto_edit_history_contract.py",
+        "python3 Tools/check_double_tap_reaction_toggle.py",
+        "python3 Tools/check_profile_avatar_blur_toggle.py",
+        "python3 Tools/check_forgejo_update_contract.py",
         "-PzastoAbiFilter=${{ matrix.abi }}",
-        "release:",
-        "needs: build",
-        "actions/download-artifact@v4",
-        "pattern: ZaStoGram-standalone-*",
-        "merge-multiple: true",
-        "github.run_number",
-        "github.run_attempt",
-        "gh release create \"$TAG\" dist-release/*.apk",
-        "--prerelease",
-        "--target \"$GITHUB_SHA\"",
+        "ZASTO_UPDATE_CHANNEL: dev",
+        "ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}",
+        "ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}",
+        "ZASTO_FORGEJO_REPOSITORY: ${{ forgejo.repository }}",
+        "https://data.forgejo.org/forgejo/upload-artifact@v4",
+        "forgejo.run_number",
+        "forgejo.run_attempt",
+        "forgejo.sha",
+        "path: ~/.cache/ccache",
+        "restore-keys:",
+        "CCACHE_MAXSIZE: 10G",
+        "ccache --show-stats",
+        "Restore Gradle and Python build caches",
+        "~/.gradle/caches",
+        "~/.gradle/wrapper",
+        "TMessagesProj/build/python",
+        "--no-configuration-cache",
+        "--parallel",
+        "TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}",
+        "TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}",
+        "ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS: '1'",
+        'python3 Tools/check_apk_single_abi.py "$apk" "${{ matrix.abi }}"',
     ]
     for literal in required_literals:
         if literal not in workflow_text:
             errors.append(f"Workflow is missing required contract literal: {literal}")
+
+    if "${{ github." in workflow_text or "GITHUB_" in workflow_text:
+        errors.append("Forgejo workflow must not use GitHub compatibility aliases")
 
     if "assembleAfatStandalone" in workflow_text:
         errors.append("Workflow must not build the universal assembleAfatStandalone task")
@@ -210,23 +265,41 @@ def check_workflow(workflow_text: str) -> list[str]:
     if re.search(r"(?m)tag(_name)?\s*:\s*(latest|nightly|prerelease|standalone|apk)\s*$", workflow_text):
         errors.append("Workflow must not publish to a shared rolling release tag")
 
-    if "gh release upload" in workflow_text and "--clobber" in workflow_text:
-        errors.append("Workflow must not clobber release assets; each run needs a fresh prerelease tag")
+    if "forgejo-release" in workflow_text or "direction: upload" in workflow_text:
+        errors.append("Background Forgejo builds must not publish releases; verified local APKs remain authoritative")
 
-    for expected in ABI_FLAVORS.values():
+    for flavor in WORKFLOW_FLAVORS:
+        expected = ABI_FLAVORS[flavor]
         matrix_literals = [
             f"flavor: {expected['gradle_task_flavor']}",
             f"flavor_dir: {expected['flavor_dir']}",
             f"abi: {expected['abi']}",
             f"artifact: {expected['artifact']}",
-            f"ccache_key: {expected['ccache_key']}",
             f"name: ${{{{ matrix.artifact }}}}",
-            f"path: dist/${{{{ matrix.artifact }}}}.apk",
+            f"dist/${{{{ matrix.artifact }}}}.apk",
         ]
         for literal in matrix_literals:
             if literal not in workflow_text:
                 errors.append(f"Workflow is missing matrix/upload value: {literal}")
 
+    if "ZaStoGram-standalone-x86_64" in workflow_text or "abi: x86_64" in workflow_text:
+        errors.append("Workflow must not spend CI time on the intentionally excluded x86_64 release APK")
+
+    return errors
+
+
+def check_apk_abi_checker(checker_text: str) -> list[str]:
+    errors: list[str] = []
+    for literal in (
+        "VALID_ABIS",
+        "assets/chaquopy/bootstrap-native/",
+        "assets/chaquopy/(?:requirements|stdlib)-",
+        "foreign ABI payload is present",
+        "no native libraries found for expected ABI",
+        "no Chaquopy bootstrap runtime found for expected ABI",
+    ):
+        if literal not in checker_text:
+            errors.append(f"APK ABI isolation checker is missing contract literal: {literal}")
     return errors
 
 
@@ -235,6 +308,7 @@ def main() -> int:
     errors.extend(check_gradle(read_text(GRADLE_PATH)))
     errors.extend(check_library_gradle(read_text(LIB_GRADLE_PATH)))
     errors.extend(check_workflow(read_text(WORKFLOW_PATH)))
+    errors.extend(check_apk_abi_checker(read_text(APK_ABI_CHECK_PATH)))
 
     if errors:
         print("Build APK workflow guard failed:", file=sys.stderr)

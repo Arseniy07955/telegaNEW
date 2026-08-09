@@ -137,8 +137,10 @@ def main() -> int:
         failures,
     )
     require(
-        "samePlainSocksProxy(info, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)" in load_proxy_list,
-        f"{SHARED_CONFIG.relative_to(ROOT)}: WSS SOCKS proxy matching must remain secretless/plain SOCKS",
+        "PROXY_SCHEMA_V4" in shared_config
+        and "samePlainSocksProxy" not in load_proxy_list
+        and "currentWssSocksProxy" not in load_proxy_list,
+        f"{SHARED_CONFIG.relative_to(ROOT)}: WSS must be a global transport toggle, independent from proxy rotation rows",
         failures,
     )
     require_text(CHECK_ALL, '"check_proxy_rotation_engine.py"', "full MTProxy guard suite must run rotation-engine guard", failures)

@@ -560,6 +560,38 @@ public class FileLog {
         });
     }
 
+    private static void writeExceptionLogLineSync(final String level, final String message, final Throwable throwable) {
+        if (getInstance().streamWriter == null) {
+            return;
+        }
+        try {
+            String stack = throwable == null ? "" : Log.getStackTraceString(throwable);
+            writeLogLineLocked(level, message + " " + stack);
+        } catch (Throwable writeError) {
+            Log.e(tag, "failed to persist fatal exception", writeError);
+        }
+    }
+
+    /** Writes evidence which must survive another early process death before logQueue drains. */
+    public static void persistDiagnostic(final String message) {
+        if (!BuildVars.LOGS_ENABLED) {
+            return;
+        }
+        ensureInitied();
+        Log.d(tag, message);
+        synchronized (FileLog.class) {
+            try {
+                writeLogLineLocked("D", message);
+                if (getInstance().streamWriter != null) {
+                    getInstance().streamWriter.flush();
+                    lastStreamFlushMs = System.currentTimeMillis();
+                }
+            } catch (Throwable writeError) {
+                Log.e(tag, "failed to persist diagnostic", writeError);
+            }
+        }
+    }
+
     private static long lastStreamFlushMs;
 
     private static synchronized void writeLogLineLocked(String level, String message) throws IOException {
@@ -570,7 +602,7 @@ public class FileLog {
         // firehose. Errors still hit disk immediately (crash evidence); debug/warning lines ride
         // the writer buffer and flush at most once per second, so a hard kill loses <=1s of tail.
         long now = System.currentTimeMillis();
-        if ("E".equals(level) || now - lastStreamFlushMs >= 1000) {
+        if ("E".equals(level) || "FATAL".equals(level) || now - lastStreamFlushMs >= 1000) {
             getInstance().streamWriter.flush();
             lastStreamFlushMs = now;
         }
@@ -667,21 +699,24 @@ public class FileLog {
         if (!BuildVars.LOGS_ENABLED) {
             return;
         }
-        if (e instanceof OutOfMemoryError) {
-            getInstance().dumpMemory(false);
-        }
         if (logToAppCenter && BuildVars.DEBUG_VERSION && needSent(e)) {
             AndroidUtilities.appCenterLog(e);
         }
         ensureInitied();
         e.printStackTrace();
         if (getInstance().streamWriter != null) {
-            writeExceptionLogLine("FATAL", String.valueOf(e), e);
-            getInstance().logQueue.postRunnable(() -> {
-                if (BuildVars.DEBUG_PRIVATE_VERSION) {
-                    System.exit(2);
-                }
-            });
+            // An uncaught-exception handler cannot rely on logQueue: Android may terminate the
+            // process immediately after the handler returns. Persist and flush on this thread.
+            writeExceptionLogLineSync("FATAL", String.valueOf(e), e);
+            // HPROF generation is deliberately private-debug only. Trying to dump a production
+            // 128 MiB heap after OutOfMemoryError can erase the compact evidence and worsen death.
+            if (e instanceof OutOfMemoryError && BuildVars.DEBUG_PRIVATE_VERSION
+                    && !DeviceResourcePolicy.isConstrainedDevice()) {
+                getInstance().dumpMemory(false);
+            }
+            if (BuildVars.DEBUG_PRIVATE_VERSION) {
+                System.exit(2);
+            }
         } else {
             e.printStackTrace();
             if (BuildVars.DEBUG_PRIVATE_VERSION) {
@@ -720,37 +755,12 @@ public class FileLog {
             return;
         }
         try {
-            File dir = AndroidUtilities.getLogsDir();
-            if (dir == null) {
-                return;
-            }
-            FileLog instance = Instance;
-            File current = instance != null ? instance.currentFile : null;
-            File mtproto = instance != null ? instance.tlRequestsFile : null;
-            File network = instance != null ? instance.networkFile : null;
-            File tonlib = instance != null ? instance.tonlibFile : null;
-            File[] files = dir.listFiles();
-            if (files != null) {
-                for (int a = 0; a < files.length; a++) {
-                    File file = files[a];
-                    if (!file.isFile()) {
-                        continue;
-                    }
-                    if (isSameLogFile(file, current) || isSameLogFile(file, mtproto) || isSameLogFile(file, network) || isSameLogFile(file, tonlib)) {
-                        continue;
-                    }
-                    if (!file.delete()) {
-                        Log.w(tag, "failed to delete log file " + file.getAbsolutePath());
-                    }
-                }
-            }
+            // Keep prior sessions: they contain the fatal tail which the next process must export.
+            // Size remains bounded by the existing user-configurable retention limit.
+            pruneOldLogs(getMaxLogFiles());
         } catch (Throwable e) {
-            Log.w(tag, "failed to cleanup log files", e);
+            Log.w(tag, "failed to prune log files", e);
         }
-    }
-
-    private static boolean isSameLogFile(File file, File protectedFile) {
-        return protectedFile != null && file.getAbsolutePath().equals(protectedFile.getAbsolutePath());
     }
 
     public static class IgnoreSentException extends Exception{

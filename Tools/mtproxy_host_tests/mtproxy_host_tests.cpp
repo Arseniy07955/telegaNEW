@@ -10,9 +10,14 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
+#include <vector>
 
+#include "MtProxyAdaptivePolicy.h"
+#include "MtProxyClientHelloPolicy.h"
 #include "MtProxyPhaseContract.h"
 #include "MtProxyRetryAuthority.h"
+#include "MtProxySecretDomain.h"
 #include "MtProxyStartupTimeline.h"
 #include "MtProxyTerminalDiagnostic.h"
 
@@ -25,6 +30,121 @@ static int failures = 0;
             printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
         } \
     } while (0)
+
+static void write16(std::vector<uint8_t> &data, size_t offset, uint16_t value) {
+    data[offset] = (uint8_t) (value >> 8);
+    data[offset + 1] = (uint8_t) value;
+}
+
+static void write24(std::vector<uint8_t> &data, size_t offset, uint32_t value) {
+    data[offset] = (uint8_t) (value >> 16);
+    data[offset + 1] = (uint8_t) (value >> 8);
+    data[offset + 2] = (uint8_t) value;
+}
+
+static std::vector<uint8_t> validRelayClientHello(const std::string &domain) {
+    std::vector<uint8_t> data(MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES, 0);
+    data[0] = 0x16;
+    data[1] = 0x03;
+    data[2] = 0x01;
+    write16(data, 3, (uint16_t) (data.size() - 5));
+    data[5] = 0x01;
+    write24(data, 6, (uint32_t) (data.size() - 9));
+    data[9] = 0x03;
+    data[10] = 0x03;
+
+    size_t position = 43;
+    data[position++] = 32;
+    position += 32;
+    write16(data, position, 2);
+    position += 2;
+    write16(data, position, 0x1301);
+    position += 2;
+    data[position++] = 1;
+    data[position++] = 0;
+    write16(data, position, (uint16_t) (data.size() - position - 2));
+    position += 2;
+
+    write16(data, position, 0x0000);
+    write16(data, position + 2, (uint16_t) (domain.size() + 5));
+    position += 4;
+    write16(data, position, (uint16_t) (domain.size() + 3));
+    position += 2;
+    data[position++] = 0;
+    write16(data, position, (uint16_t) domain.size());
+    position += 2;
+    memcpy(data.data() + position, domain.data(), domain.size());
+    position += domain.size();
+
+    size_t remaining = data.size() - position;
+    CHECK(remaining >= 4);
+    write16(data, position, 0x0015);
+    write16(data, position + 2, (uint16_t) (remaining - 4));
+    return data;
+}
+
+static void testClientHelloRelayContract() {
+    const std::string domain = "example.com";
+    const auto valid = validRelayClientHello(domain);
+    CHECK(mtProxyCheckClientHelloContract(valid.data(), valid.size(), domain)
+            == MtProxyClientHelloContractIssue::None);
+
+    auto wrongSession = valid;
+    wrongSession[43] = 31;
+    CHECK(mtProxyCheckClientHelloContract(wrongSession.data(), wrongSession.size(), domain)
+            == MtProxyClientHelloContractIssue::SessionIdNot32Bytes);
+
+    auto wrongCipher = valid;
+    write16(wrongCipher, 78, 0xc02f);
+    CHECK(mtProxyCheckClientHelloContract(wrongCipher.data(), wrongCipher.size(), domain)
+            == MtProxyClientHelloContractIssue::FirstCipherNotTls13);
+
+    CHECK(mtProxyCheckClientHelloContract(valid.data(), valid.size(), "other.example")
+            == MtProxyClientHelloContractIssue::SniMismatch);
+
+    auto missingSni = valid;
+    write16(missingSni, 84, 0x0015);
+    CHECK(mtProxyCheckClientHelloContract(missingSni.data(), missingSni.size(), domain)
+            == MtProxyClientHelloContractIssue::SniMissing);
+
+    auto shortHello = valid;
+    shortHello.resize(MT_PROXY_CANONICAL_CLIENT_HELLO_BYTES - 1);
+    CHECK(mtProxyCheckClientHelloContract(shortHello.data(), shortHello.size(), domain)
+            == MtProxyClientHelloContractIssue::TooShort);
+
+    auto longHello = valid;
+    longHello.resize(MT_PROXY_MAX_RELAY_CLIENT_HELLO_BYTES + 1);
+    CHECK(mtProxyCheckClientHelloContract(longHello.data(), longHello.size(), domain)
+            == MtProxyClientHelloContractIssue::TooLong);
+
+    CHECK(mtProxyDefaultTlsProfile() == MT_PROXY_TLS_PROFILE_YANDEX);
+    CHECK(mtProxyTlsProfileWithheld(MT_PROXY_TLS_PROFILE_CHROME_MODERN));
+    CHECK(mtProxyTlsProfileWithheld(MT_PROXY_TLS_PROFILE_ANDROID_CHROME));
+    CHECK(!mtProxyTlsProfileWithheld(MT_PROXY_TLS_PROFILE_YANDEX));
+    CHECK(mtProxyEffectiveWireTlsProfile(MT_PROXY_TLS_PROFILE_AUTO)
+            == MT_PROXY_TLS_PROFILE_YANDEX);
+    CHECK(mtProxyEffectiveWireTlsProfile(MT_PROXY_TLS_PROFILE_CHROME_MODERN)
+            == MT_PROXY_TLS_PROFILE_YANDEX);
+}
+
+static void testExactSecretDomainPolicy() {
+    const auto exact = buildMtProxySecretDomainPlan("Example.COM");
+    CHECK(exact.terminalDiagnostic == nullptr);
+    CHECK(exact.originalDomain == "Example.COM");
+    CHECK(exact.canonicalDomain == "Example.COM");
+    CHECK(exact.allowedSniVariants
+            == MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL));
+
+    const auto spaced = buildMtProxySecretDomainPlan(" example.com");
+    CHECK(spaced.terminalDiagnostic == MtProxyPhase::SecretParseInvalidDomain);
+    CHECK(spaced.canonicalDomain.empty());
+    CHECK(spaced.allowedSniVariants == 0);
+
+    const auto controlled = buildMtProxySecretDomainPlan("exam\nple.com");
+    CHECK(controlled.terminalDiagnostic == MtProxyPhase::SecretParseInvalidDomainControlChar);
+    CHECK(controlled.canonicalDomain.empty());
+    CHECK(controlled.allowedSniVariants == 0);
+}
 
 static void testRetryAuthorityReconnectHold() {
     using namespace MtProxyRetry;
@@ -199,6 +319,8 @@ static void testGeneratedClassification() {
 }
 
 int main() {
+    testClientHelloRelayContract();
+    testExactSecretDomainPolicy();
     testRetryAuthorityReconnectHold();
     testRetryAuthorityEndpointCooldown();
     testTerminalDiagnosticDerivation();

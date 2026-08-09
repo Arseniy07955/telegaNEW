@@ -728,6 +728,7 @@
     <string name="AppUpdateNow">지금 업데이트 하세요</string>
     <string name="AppUpdateDownloadNow">지금 다운로드 하세요</string>
     <string name="AppUpdateRemindMeLater">나중에 알려주기</string>
+    <string name="AppUpdateSkipVersion">이 버전 건너뛰기</string>
     <string name="AppUpdateChangelogEmpty">**무엇이 달라졌나요?**\n\n• 버그 수정 및 기능 개선.</string>
     <string name="Permanent">기존 링크</string>
     <string name="LinkHashExpired">링크가 더 이상 유효하지 않습니다</string>

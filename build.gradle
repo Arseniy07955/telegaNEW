@@ -19,3 +19,51 @@ buildscript {
 repositories {
     google()
 }
+
+// ZaStoGram release identity is a single build-wide input. The standalone
+// application derives both its install identity and updater channel from these
+// values, so a dev APK can never accidentally replace the stable application.
+def zastoUpdateChannelValue = (findProperty("zastoUpdateChannel") ?: System.getenv("ZASTO_UPDATE_CHANNEL") ?: "stable").toString().trim().toLowerCase()
+if (!(zastoUpdateChannelValue in ["dev", "stable"])) {
+    throw new GradleException("Unsupported ZaStoGram update channel '${zastoUpdateChannelValue}'. Expected dev or stable")
+}
+def zastoReleaseTagValue = (findProperty("zastoReleaseTag") ?: System.getenv("ZASTO_RELEASE_TAG") ?: "").toString().trim()
+def zastoForgejoRepositoryValue = (findProperty("zastoForgejoRepository") ?: System.getenv("ZASTO_FORGEJO_REPOSITORY") ?: "zastogram/ZaStoGram").toString().trim()
+if (!(zastoForgejoRepositoryValue ==~ /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/)) {
+    throw new GradleException("Invalid ZaStoGram Forgejo repository '${zastoForgejoRepositoryValue}'. Expected owner/repository")
+}
+def zastoBuildNumberValue = (findProperty("zastoBuildNumber") ?: System.getenv("ZASTO_BUILD_NUMBER") ?: "0").toString().trim()
+if (!(zastoBuildNumberValue ==~ /\d+/) || zastoBuildNumberValue.toInteger() > 9999) {
+    throw new GradleException("Invalid ZaStoGram build number '${zastoBuildNumberValue}'. Expected an integer from 0 to 9999")
+}
+
+// The release tag is the single source of truth for a stable build. Android
+// refuses to install a package whose versionCode is not above the installed
+// one and reports only "App not installed", so a hand-passed build number is
+// a silent trap: pass a smaller one by accident and the release is dead on
+// arrival. A semantic tag therefore DERIVES the number instead, which makes
+// "1.1.14 is newer than 1.1.13" true by construction.
+//
+// Layout: X*1000 + Y*100 + Z, so 1.1.14 -> 1114 and 1.2.0 -> 1200. Dev builds
+// tag themselves differently (forgejo-build-N-M) and keep the CI run number;
+// they install under their own application id and never meet a stable build.
+def zastoSemanticTag = (zastoReleaseTagValue =~ /^(\d+)\.(\d+)\.(\d+)$/)
+def zastoResolvedBuildNumber = zastoBuildNumberValue.toInteger()
+if (zastoSemanticTag.matches()) {
+    def major = zastoSemanticTag[0][1].toInteger()
+    def minor = zastoSemanticTag[0][2].toInteger()
+    def patch = zastoSemanticTag[0][3].toInteger()
+    if (major > 9 || minor > 9 || patch > 99) {
+        throw new GradleException(
+                "Release tag '${zastoReleaseTagValue}' does not fit the versionCode layout. " +
+                        "Expected major and minor below 10 and patch below 100.")
+    }
+    zastoResolvedBuildNumber = major * 1000 + minor * 100 + patch
+}
+
+ext.zastoReleaseIdentity = [
+        updateChannel: zastoUpdateChannelValue,
+        releaseTag: zastoReleaseTagValue,
+        forgejoRepository: zastoForgejoRepositoryValue,
+        buildNumber: zastoResolvedBuildNumber,
+]

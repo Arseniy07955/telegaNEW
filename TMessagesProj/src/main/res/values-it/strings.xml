@@ -727,6 +727,7 @@
     <string name="AppUpdateNow">Aggiorna ora</string>
     <string name="AppUpdateDownloadNow">Scarica ora</string>
     <string name="AppUpdateRemindMeLater">Ricordamelo più tardi</string>
+    <string name="AppUpdateSkipVersion">Salta questa versione</string>
     <string name="AppUpdateChangelogEmpty">**Cosa c\'è di nuovo?**\n\n• Risoluzione di problemi e miglioramenti.</string>
     <string name="Permanent">Link primario</string>
     <string name="LinkHashExpired">Link non più attivo</string>

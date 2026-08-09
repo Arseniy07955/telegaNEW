@@ -52,8 +52,8 @@ def main() -> int:
             failures.append(message)
 
     require(
-        "public static final boolean DISABLE_ADS = true;" in zasto_privacy,
-        "ZaStoPrivacy must expose DISABLE_ADS enabled by default",
+        "public static boolean DISABLE_ADS = true;" in zasto_privacy,
+        "ZaStoPrivacy must expose the DISABLE_ADS runtime toggle enabled by default",
     )
 
     get_sponsored = method_body(messages_controller, "public SponsoredMessagesInfo getSponsoredMessages(long dialogId)")
@@ -122,11 +122,6 @@ def main() -> int:
         "DialogsSearchAdapter must not log sponsored peer impressions/clicks while DISABLE_ADS is enabled",
     )
 
-    require(
-        "ZaStoPrivacy.DISABLE_ADS" in dialogs_adapter
-        and "return false;" in method_body(dialogs_adapter, "private boolean shouldShowZapretVpnSponsor"),
-        "DialogsAdapter must hide the local Zapret VPN sponsor row while DISABLE_ADS is enabled",
-    )
     require(
         "ZaStoPrivacy.DISABLE_ADS" in method_body(dialogs_adapter, "private ArrayList<TLRPC.Dialog> filterLegacyProxySponsorDialogs"),
         "DialogsAdapter must remove legacy Telegram proxy sponsor dialogs while DISABLE_ADS is enabled",

@@ -34,12 +34,15 @@ public:
 
     void writeBuffer(uint8_t *data, uint32_t size);
     void writeBuffer(NativeByteBuffer *buffer);
+    void noteWssPacketBoundary(uint32_t size);
     void openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType, int32_t datacenterId = 0, bool mediaConnection = false);
     void setTimeout(time_t timeout);
     time_t getTimeout();
     int32_t getCurrentNetworkType() const;
     bool isDisconnected();
     bool isCurrentMtProxyConnection();
+    bool isCurrentDirectConnection() const;
+    bool hasMtProxyOverride() const;
     void dropConnection();
     void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
@@ -83,7 +86,6 @@ private:
     using TransportActionRule = ConnectionSocketStateMachine::ActionRule;
 
     ConnectionSocketStateMachine stateMachine;
-    bool wssUsedRelayFallback = false;
     bool suppressNextProxyCloseDiagnostic = false;
     uint32_t proxyActivationGeneration = 0;
     uint32_t proxyConfigGeneration = 0;
@@ -177,6 +179,7 @@ private:
     void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
+    bool flushWssStream(std::string *diagnostic);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);
     void scheduleProxyHandshakeAdmissionTimer(uint32_t delay, int32_t mode, bool ipv6);
     void grantProxyHandshakeAdmission(bool ipv6, uint32_t generation, uint32_t delay, int32_t timerMode, const char *reason);

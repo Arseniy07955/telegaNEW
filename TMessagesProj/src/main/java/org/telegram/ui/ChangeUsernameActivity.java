@@ -1174,7 +1174,7 @@ public class ChangeUsernameActivity extends BaseFragment {
     public void onResume() {
         super.onResume();
         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-        boolean animations = preferences.getBoolean("view_animations", true);
+        boolean animations = preferences.getBoolean("view_animations", false);
         if (!animations) {
             focusUsernameField(false);
         }
@@ -1475,21 +1475,5 @@ public class ChangeUsernameActivity extends BaseFragment {
         themeDescriptions.add(new ThemeDescription(actionBar, ThemeDescription.FLAG_AB_SELECTORCOLOR, null, null, null, null, Theme.key_actionBarDefaultSelector));
 
         return themeDescriptions;
-    }
-
-    @Override
-    public void onBecomeFullyVisible() {
-        super.onBecomeFullyVisible();
-        if (parentLayout != null && parentLayout.getDrawerLayoutContainer() != null) {
-            parentLayout.getDrawerLayoutContainer().setBehindKeyboardColor(getThemedColor(Theme.key_windowBackgroundGray));
-        }
-    }
-
-    @Override
-    public void onBecomeFullyHidden() {
-        super.onBecomeFullyHidden();
-        if (parentLayout != null && parentLayout.getDrawerLayoutContainer() != null) {
-            parentLayout.getDrawerLayoutContainer().setBehindKeyboardColor(Theme.getColor(Theme.key_windowBackgroundWhite));
-        }
     }
 }

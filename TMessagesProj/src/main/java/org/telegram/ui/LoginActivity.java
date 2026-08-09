@@ -109,14 +109,6 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.auth.api.signin.GoogleSignInClient;
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 import com.google.android.gms.common.api.ApiException;
-import com.google.android.gms.safetynet.SafetyNet;
-import com.google.android.gms.tasks.Task;
-import com.google.android.play.core.integrity.IntegrityManager;
-import com.google.android.play.core.integrity.IntegrityManagerFactory;
-import com.google.android.play.core.integrity.IntegrityTokenRequest;
-import com.google.android.play.core.integrity.IntegrityTokenResponse;
-
-import org.json.JSONException;
 import org.json.JSONObject;
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
@@ -154,6 +146,7 @@ import org.telegram.tgnet.tl.TL_update;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
+import org.telegram.ui.ActionBar.INavigationLayout;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ActionBar.ThemeDescription;
 import org.telegram.ui.Cells.CheckBoxCell;
@@ -393,7 +386,6 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     private Runnable[] editDoneCallback = new Runnable[2];
     private boolean[] postedEditDoneCallback = new boolean[2];
 
-    private boolean forceDisableSafetyNet;
 
     private static class ProgressView extends View {
 
@@ -1167,6 +1159,14 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         showDialog(builder.create());
     }
 
+    private void showPhoneCodeRequestError(String text) {
+        // A terminal server error must restore the phone form before opening
+        // the dialog. Otherwise the floating action button can remain in its
+        // loading state behind an error which the user cannot retry from.
+        needHideProgress(false, false);
+        needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), text);
+    }
+
     private void onFieldError(View view, boolean allowErrorSelection) {
         try {
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP, HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
@@ -1600,7 +1600,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
     private void needFinishActivity(boolean afterSignup, boolean showSetPasswordConfirm, int otherwiseRelogin) {
         if (getParentActivity() != null) {
-            AndroidUtilities.setLightStatusBar(getParentActivity().getWindow(), false);
+            AndroidUtilities.setLightStatusBar(getParentActivity(), false);
         }
         clearCurrentState();
         if (getParentActivity() instanceof LaunchActivity) {
@@ -1695,7 +1695,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         fillNextCodeParams(params, res, true);
     }
 
-    private void resendCodeFromSafetyNet(Bundle params, TLRPC.auth_SentCode res, String reason) {
+    private void resendCodeWithoutFirebase(Bundle params, TLRPC.auth_SentCode res, String reason) {
         if (!isRequestingFirebaseSms) {
             return;
         }
@@ -1721,7 +1721,6 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             .setTitle(getString(R.string.RestorePasswordNoEmailTitle))
                             .setMessage(getString(R.string.SafetyNetErrorOccurred))
                             .setPositiveButton(getString(R.string.OK), (dialog, which) -> {
-                                forceDisableSafetyNet = true;
                                 if (currentViewNum != VIEW_PHONE_INPUT) {
                                     setPage(VIEW_PHONE_INPUT, true, null, true);
                                 }
@@ -1729,7 +1728,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             .show();
                 });
             }
-        }, ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin);
+        }, ConnectionsManager.RequestFlagFailOnServerErrors
+                | ConnectionsManager.RequestFlagWithoutLogin
+                | ConnectionsManager.RequestFlagTryDifferentDc
+                | ConnectionsManager.RequestFlagEnableUnauthorized);
     }
 
     public static String errorString(Throwable e) {
@@ -1770,118 +1772,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             return;
         }
         if (res.type instanceof TLRPC.TL_auth_sentCodeTypeFirebaseSms && !res.type.verifiedFirebase && !isRequestingFirebaseSms) {
-            if (PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices()) {
-                TLRPC.TL_auth_sentCodeTypeFirebaseSms r = (TLRPC.TL_auth_sentCodeTypeFirebaseSms) res.type;
-                needShowProgress(0);
-                isRequestingFirebaseSms = true;
-                final String phone = params.getString("phoneFormated");
-                if (r.play_integrity_nonce != null) {
-                    IntegrityManager integrityManager = IntegrityManagerFactory.create(getContext());
-                    final String nonce = new String(Base64.encode(r.play_integrity_nonce, Base64.URL_SAFE));
-                    FileLog.d("getting classic integrity with nonce = " + nonce);
-                    Task<IntegrityTokenResponse> integrityTokenResponse = integrityManager.requestIntegrityToken(IntegrityTokenRequest.builder().setNonce(nonce).setCloudProjectNumber(r.play_integrity_project_id).build());
-                    integrityTokenResponse
-                        .addOnSuccessListener(result -> {
-                            final String token = result.token();
-
-                            if (token == null) {
-                                FileLog.d("Resend firebase sms because integrity token = null");
-                                resendCodeFromSafetyNet(params, res, "PLAYINTEGRITY_TOKEN_NULL");
-                                return;
-                            }
-
-                            TLRPC.TL_auth_requestFirebaseSms req = new TLRPC.TL_auth_requestFirebaseSms();
-                            req.phone_number = phone;
-                            req.phone_code_hash = res.phone_code_hash;
-                            req.play_integrity_token = token;
-                            req.flags |= 4;
-
-                            ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
-                                if (response instanceof TLRPC.TL_boolTrue) {
-                                    needHideProgress(false);
-                                    isRequestingFirebaseSms = false;
-                                    res.type.verifiedFirebase = true;
-                                    AndroidUtilities.runOnUIThread(() -> fillNextCodeParams(params, res, animate));
-                                } else {
-                                    FileLog.d("{PLAYINTEGRITY_REQUESTFIREBASESMS_FALSE} Resend firebase sms because auth.requestFirebaseSms = false");
-                                    resendCodeFromSafetyNet(params, res, "PLAYINTEGRITY_REQUESTFIREBASESMS_FALSE");
-                                }
-                            }, ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin);
-                        })
-                        .addOnFailureListener(e -> {
-                            final String reason = "PLAYINTEGRITY_EXCEPTION_" + errorString(e);
-                            FileLog.e("{"+reason+"} Resend firebase sms because integrity threw error", e);
-                            resendCodeFromSafetyNet(params, res, reason);
-                        });
-                } else {
-                    SafetyNet.getClient(ApplicationLoader.applicationContext).attest(res.type.nonce, BuildVars.SAFETYNET_KEY)
-                    .addOnSuccessListener(attestationResponse -> {
-                        String jws = attestationResponse.getJwsResult();
-
-                        if (jws != null) {
-                            TLRPC.TL_auth_requestFirebaseSms req = new TLRPC.TL_auth_requestFirebaseSms();
-                            req.phone_number = phone;
-                            req.phone_code_hash = res.phone_code_hash;
-                            req.safety_net_token = jws;
-                            req.flags |= 1;
-
-                            String[] spl = jws.split("\\.");
-                            if (spl.length > 0) {
-                                try {
-                                    JSONObject obj = new JSONObject(new String(Base64.decode(spl[1].getBytes(StandardCharsets.UTF_8), 0)));
-                                    final boolean basicIntegrity = obj.optBoolean("basicIntegrity");
-                                    final boolean ctsProfileMatch = obj.optBoolean("ctsProfileMatch");
-                                    if (basicIntegrity && ctsProfileMatch) {
-                                        ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
-                                            if (response instanceof TLRPC.TL_boolTrue) {
-                                                needHideProgress(false);
-                                                isRequestingFirebaseSms = false;
-                                                res.type.verifiedFirebase = true;
-                                                AndroidUtilities.runOnUIThread(() -> fillNextCodeParams(params, res, animate));
-                                            } else {
-                                                FileLog.d("{SAFETYNET_REQUESTFIREBASESMS_FALSE} Resend firebase sms because auth.requestFirebaseSms = false");
-                                                resendCodeFromSafetyNet(params, res, "SAFETYNET_REQUESTFIREBASESMS_FALSE");
-                                            }
-                                        }, ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin);
-                                    } else {
-                                        if (!basicIntegrity && !ctsProfileMatch) {
-                                            FileLog.d("{SAFETYNET_BASICINTEGRITY_CTSPROFILEMATCH_FALSE} Resend firebase sms because ctsProfileMatch = false and basicIntegrity = false");
-                                            resendCodeFromSafetyNet(params, res, "SAFETYNET_BASICINTEGRITY_CTSPROFILEMATCH_FALSE");
-                                        } else if (!basicIntegrity) {
-                                            FileLog.d("{SAFETYNET_BASICINTEGRITY_FALSE} Resend firebase sms because basicIntegrity = false");
-                                            resendCodeFromSafetyNet(params, res, "SAFETYNET_BASICINTEGRITY_FALSE");
-                                        } else if (!ctsProfileMatch) {
-                                            FileLog.d("{SAFETYNET_CTSPROFILEMATCH_FALSE} Resend firebase sms because ctsProfileMatch = false");
-                                            resendCodeFromSafetyNet(params, res, "SAFETYNET_CTSPROFILEMATCH_FALSE");
-                                        }
-                                    }
-                                } catch (JSONException e) {
-                                    FileLog.e(e);
-
-                                    FileLog.d("{SAFETYNET_JSON_EXCEPTION} Resend firebase sms because of exception");
-                                    resendCodeFromSafetyNet(params, res, "SAFETYNET_JSON_EXCEPTION");
-                                }
-                            } else {
-                                FileLog.d("{SAFETYNET_CANT_SPLIT} Resend firebase sms because can't split JWS token");
-                                resendCodeFromSafetyNet(params, res, "SAFETYNET_CANT_SPLIT");
-                            }
-                        } else {
-                            FileLog.d("{SAFETYNET_NULL_JWS} Resend firebase sms because JWS = null");
-                            resendCodeFromSafetyNet(params, res, "SAFETYNET_NULL_JWS");
-                        }
-                    })
-                    .addOnFailureListener(e -> {
-                        FileLog.e(e);
-
-                        final String reason = "SAFETYNET_EXCEPTION_" + errorString(e);
-                        FileLog.d("{"+reason+"} Resend firebase sms because of safetynet exception");
-                        resendCodeFromSafetyNet(params, res, reason);
-                    });
-                }
-            } else {
-                FileLog.d("{GOOGLE_PLAY_SERVICES_NOT_AVAILABLE} Resend firebase sms because firebase is not available");
-                resendCodeFromSafetyNet(params, res, "GOOGLE_PLAY_SERVICES_NOT_AVAILABLE");
-            }
+            needShowProgress(0);
+            isRequestingFirebaseSms = true;
+            FileLog.d("{FIREBASE_SMS_AUTH_DISABLED} Requesting a non-Firebase login code");
+            resendCodeWithoutFirebase(params, res, "FIREBASE_SMS_AUTH_DISABLED");
             return;
         }
 
@@ -1984,6 +1878,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         private boolean ignoreOnPhoneChangePaste = false;
         private boolean nextPressed = false;
         private boolean confirmedNumber = false;
+        private static final long PHONE_CODE_REQUEST_TIMEOUT_MS = 75_000L;
+        private int phoneCodeRequestId;
+        private Runnable phoneCodeRequestTimeout;
 
         private int titleClickCount = 0;
         private long lastTitleClick = 0;
@@ -2837,7 +2734,37 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
         @Override
         public void onCancelPressed() {
+            cancelPhoneCodeRequestTimeout();
             nextPressed = false;
+        }
+
+        private void cancelPhoneCodeRequestTimeout() {
+            if (phoneCodeRequestTimeout != null) {
+                AndroidUtilities.cancelRunOnUIThread(phoneCodeRequestTimeout);
+                phoneCodeRequestTimeout = null;
+            }
+            phoneCodeRequestId = 0;
+        }
+
+        private void schedulePhoneCodeRequestTimeout(int requestId) {
+            cancelPhoneCodeRequestTimeout();
+            phoneCodeRequestId = requestId;
+            phoneCodeRequestTimeout = () -> {
+                if (!nextPressed || phoneCodeRequestId != requestId) {
+                    return;
+                }
+                phoneCodeRequestTimeout = null;
+                phoneCodeRequestId = 0;
+                ConnectionsManager.getInstance(currentAccount).cancelRequest(requestId, false);
+                nextPressed = false;
+                needHideProgress(false);
+                if (getParentActivity() != null && !getParentActivity().isFinishing()) {
+                    needShowAlert(
+                            getString(R.string.RestorePasswordNoEmailTitle),
+                            getString(R.string.LoginCodeRequestTimeout));
+                }
+            };
+            AndroidUtilities.runOnUIThread(phoneCodeRequestTimeout, PHONE_CODE_REQUEST_TIMEOUT_MS);
         }
 
         @Override
@@ -2863,9 +2790,11 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 return;
             }
 
-            TelephonyManager tm = (TelephonyManager) ApplicationLoader.applicationContext.getSystemService(Context.TELEPHONY_SERVICE);
-            if (BuildVars.DEBUG_VERSION) {
-                FileLog.d("sim status = " + tm.getSimState());
+            if (BuildVars.DEBUG_VERSION && BuildVars.USE_PHONE_LOGIN_TELEPHONY) {
+                TelephonyManager tm = (TelephonyManager) ApplicationLoader.applicationContext.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    FileLog.d("sim status = " + tm.getSimState());
+                }
             }
             if (codeField.length() == 0 || phoneField.length() == 0) {
                 onFieldError(phoneOutlineView, false);
@@ -2905,7 +2834,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                         currentDoneType = DONE_TYPE_FLOATING;
                         needShowProgress(0, false);
 
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && AndroidUtilities.isSimAvailable()) {
+                        if (BuildVars.USE_PHONE_LOGIN_TELEPHONY
+                                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                                && AndroidUtilities.isSimAvailable()) {
                             boolean allowCall = getParentActivity().checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
                             boolean allowCancelCall = getParentActivity().checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
                             boolean allowReadCallLog = Build.VERSION.SDK_INT < Build.VERSION_CODES.P || getParentActivity().checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
@@ -2980,7 +2911,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 phoneNumberConfirmView.dismiss();
             }
 
-            boolean simcardAvailable = AndroidUtilities.isSimAvailable();
+            boolean simcardAvailable = BuildVars.USE_PHONE_LOGIN_TELEPHONY
+                    && AndroidUtilities.isSimAvailable();
             boolean allowCall = true;
             boolean allowCancelCall = true;
             boolean allowReadCallLog = true;
@@ -3081,10 +3013,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             TLRPC.TL_codeSettings settings = new TLRPC.TL_codeSettings();
             settings.allow_flashcall = simcardAvailable && allowCall && allowCancelCall && allowReadCallLog;
             settings.allow_missed_call = simcardAvailable && allowCall;
-            settings.allow_app_hash = settings.allow_firebase = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
-            if (forceDisableSafetyNet || TextUtils.isEmpty(BuildVars.SAFETYNET_KEY)) {
-                settings.allow_firebase = false;
-            }
+            settings.allow_app_hash = false;
+            settings.allow_firebase = false;
 
             ArrayList<TLRPC.TL_auth_authorization> loginTokens = AuthTokensHelper.getSavedLogInTokens();
             if (loginTokens != null) {
@@ -3182,6 +3112,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             phoneInputData.country = currentCountry;
             phoneInputData.patterns = phoneFormatMap.get(codeField.getText().toString());
             int reqId = ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+                cancelPhoneCodeRequestTimeout();
                 nextPressed = false;
                 if (error == null) {
                     if (response instanceof TLRPC.TL_auth_sentCodeSuccess) {
@@ -3237,6 +3168,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                             needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString("CodeExpired", R.string.CodeExpired));
                         } else if (error.text.startsWith("FLOOD_WAIT")) {
                             needShowAlert(getString(R.string.RestorePasswordNoEmailTitle), getString("FloodWait", R.string.FloodWait));
+                        } else if (error.text.contains("API_ID_PUBLISHED_FLOOD")) {
+                            FileLog.e("phone_login api_identity_rejected error=" + error.text);
+                            showPhoneCodeRequestError(getString(R.string.LoginApiCredentialsError));
                         } else if (error.code != -1000) {
                             AlertsCreator.processError(currentAccount, error, LoginActivity.this, req, phoneInputData.phoneNumber);
                         }
@@ -3247,11 +3181,16 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 }
             }), ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagWithoutLogin | ConnectionsManager.RequestFlagTryDifferentDc | ConnectionsManager.RequestFlagEnableUnauthorized);
             needShowProgress(reqId);
+            schedulePhoneCodeRequestTimeout(reqId);
         }
 
         private boolean numberFilled;
         public void fillNumber() {
             if (numberFilled || activityMode != MODE_LOGIN) {
+                return;
+            }
+            if (!BuildVars.USE_PHONE_LOGIN_TELEPHONY) {
+                numberFilled = true;
                 return;
             }
             try {
@@ -3403,6 +3342,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         @Override
         public void onDestroyActivity() {
             super.onDestroyActivity();
+            if (phoneCodeRequestId != 0) {
+                ConnectionsManager.getInstance(currentAccount).cancelRequest(phoneCodeRequestId, false);
+            }
+            cancelPhoneCodeRequestTimeout();
             if (cancelRequestingPasskey != null) {
                 cancelRequestingPasskey.run();
                 cancelRequestingPasskey = null;
@@ -9857,7 +9800,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
             addView(new Space(context), LayoutHelper.createLinear(0, 0, 1, Gravity.FILL));
 
-            button = new ButtonWithCounterView(context, null);
+            button = new ButtonWithCounterView(context, null).setRound();
             button.setLoading(true);
             addView(button, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48, Gravity.FILL_HORIZONTAL, 0, 16, 0, 16));
         }
@@ -10058,7 +10001,11 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                                 final PaymentFormActivity fragment = new PaymentFormActivity(form, invoice, true, LoginActivity.this);
                                 fragment.setCustomResultReceiver(result -> {
                                     AndroidUtilities.runOnUIThread(() -> {
-                                        fragment.finishFragment();
+                                        startPoll(purpose.phone_number, purpose.phone_code_hash, form.form_id);
+                                    });
+                                });
+                                fragment.setCustomAnyResultReceiver(result -> {
+                                    AndroidUtilities.runOnUIThread(() -> {
                                         startPoll(purpose.phone_number, purpose.phone_code_hash, form.form_id);
                                     });
                                 });
@@ -10242,6 +10189,23 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             }
         }
 
+        private void closeAllPaymentFormActivities() {
+            final INavigationLayout parentLayout = getParentLayout();
+            if (parentLayout == null || parentLayout.getFragmentStack() == null) {
+                return;
+            }
+            final List<BaseFragment> stack = parentLayout.getFragmentStack();
+            final BaseFragment topFragment = stack.isEmpty() ? null : stack.get(stack.size() - 1);
+            for (BaseFragment fragment : new ArrayList<>(stack)) {
+                if (fragment instanceof PaymentFormActivity && fragment != topFragment) {
+                    fragment.removeSelfFromStack();
+                }
+            }
+            if (topFragment instanceof PaymentFormActivity) {
+                parentLayout.closeLastFragment(true);
+            }
+        }
+
         private boolean polling;
         private String pollingPhoneNumber;
         private String pollingPhoneCodeHash;
@@ -10274,6 +10238,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 if (res instanceof TLRPC.auth_SentCode) {
                     polling = false;
                     button.setLoading(false);
+                    closeAllPaymentFormActivities();
                     fillNextCodeParams(params, (TLRPC.auth_SentCode) res);
                 } else if (err != null) {
                     if (err.text != null && err.text.startsWith("FLOOD_WAIT_")) {

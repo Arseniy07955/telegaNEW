@@ -1,0 +1,144 @@
+name: Build three ZaStoGram APKs
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: zastogram-apk-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: android
+    timeout-minutes: 150
+    env:
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      ZASTO_REQUIRE_TELEGRAM_API_CREDENTIALS: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: Arm64
+            flavor_dir: arm64
+            abi: arm64-v8a
+            artifact: ZaStoGram-standalone-arm64-v8a
+          - flavor: Armv7
+            flavor_dir: armv7
+            abi: armeabi-v7a
+            artifact: ZaStoGram-standalone-armeabi-v7a
+          - flavor: X86
+            flavor_dir: x86
+            abi: x86
+            artifact: ZaStoGram-standalone-x86
+    steps:
+      - name: Checkout with submodules
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Restore native compiler cache
+        uses: https://data.forgejo.org/actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: zastogram-ccache-v2-${{ matrix.abi }}-${{ forgejo.sha }}
+          restore-keys: |
+            zastogram-ccache-v2-${{ matrix.abi }}-
+
+      - name: Restore Gradle and Python build caches
+        uses: https://data.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            TMessagesProj/build/python
+          key: zastogram-gradle-v2-${{ matrix.abi }}-${{ forgejo.sha }}
+          restore-keys: |
+            zastogram-gradle-v2-${{ matrix.abi }}-
+
+      - name: Prepare Android build compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_SDK_ROOT/build-tools"
+          cp "$BT/30.0.3/dx" "$BT/35.0.0/dx"
+          cp "$BT/30.0.3/lib/dx.jar" "$BT/35.0.0/lib/dx.jar"
+
+      - name: Verify Telegram API credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TELEGRAM_API_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TELEGRAM_API_ID" != 4 ]]
+          [[ "$TELEGRAM_API_HASH" =~ ^[0-9a-fA-F]{32}$ ]]
+          [[ "${TELEGRAM_API_HASH,,}" != 014b35b6184100b085b0d0572f9b5103 ]]
+
+      - name: Run release guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Tools/check_mtproxy_all.py
+          python3 Tools/check_plugin_client_utils_contract.py
+          python3 Tools/check_plugin_android_utils_contract.py
+          python3 Tools/check_plugin_text_formatting_contract.py
+          python3 Tools/check_plugin_structured_settings.py
+          python3 Tools/check_plugin_exteragram_ui_bridge.py
+          python3 Tools/check_plugin_java_package_shims.py
+          python3 Tools/check_plugin_python_deps.py
+          python3 Tools/check_plugin_utils_javadoc.py
+          python3 Tools/check_android_string_format_contract.py
+          python3 Tools/check_login_firebase_independence.py
+          python3 Tools/check_telegram_api_identity.py
+          python3 Tools/check_logs_activity_compile_contract.py
+          python3 Tools/check_runtime_resilience.py
+          python3 Tools/check_zasto_edit_history_contract.py
+          python3 Tools/check_double_tap_reaction_toggle.py
+          python3 Tools/check_profile_avatar_blur_toggle.py
+          python3 Tools/check_forgejo_update_contract.py
+
+      - name: Build standalone APK for ${{ matrix.abi }}
+        shell: bash
+        env:
+          USE_CCACHE: '1'
+          CCACHE_COMPILERCHECK: content
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+          CCACHE_BASEDIR: ${{ forgejo.workspace }}
+          CCACHE_MAXSIZE: 10G
+          CCACHE_COMPRESS: 'true'
+          CCACHE_COMPRESSLEVEL: '6'
+          ZASTO_UPDATE_CHANNEL: dev
+          ZASTO_RELEASE_TAG: forgejo-build-${{ forgejo.run_number }}-${{ forgejo.run_attempt }}
+          ZASTO_BUILD_NUMBER: ${{ forgejo.run_number }}
+          ZASTO_FORGEJO_REPOSITORY: ${{ forgejo.repository }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --build-cache --no-configuration-cache --parallel --profile -PzastoAbiFilter=${{ matrix.abi }} ":TMessagesProj_AppStandalone:assemble${{ matrix.flavor }}Standalone" --stacktrace
+          mkdir -p dist
+          apk_dir="TMessagesProj_AppStandalone/build/outputs/apk/${{ matrix.flavor_dir }}/standalone"
+          apk="$(find "$apk_dir" -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          python3 Tools/check_apk_single_abi.py "$apk" "${{ matrix.abi }}"
+          # Android refuses to install a package whose versionCode is not above
+          # the installed one, and shows only "App not installed". A release
+          # built with a lower build number is therefore dead on arrival.
+          python3 Tools/check_apk_version_monotonic.py "$apk" --repo "${{ forgejo.repository }}"
+          # A changed signing certificate makes the update impossible to install
+          # and shows the user only "App not installed".
+          python3 Tools/check_apk_signing_identity.py "$apk"
+          cp "$apk" "dist/${{ matrix.artifact }}.apk"
+          sha256sum "dist/${{ matrix.artifact }}.apk" > "dist/${{ matrix.artifact }}.apk.sha256"
+          ccache --show-stats
+
+      - name: Upload compile proof
+        uses: https://data.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/${{ matrix.artifact }}.apk
+            dist/${{ matrix.artifact }}.apk.sha256
+            **/build/reports/profile/*.html

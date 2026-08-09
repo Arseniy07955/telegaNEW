@@ -93,30 +93,30 @@ void gaussian_noise_reduce(struct image * img_in, struct image * img_out)
 	max_y = w * (h - 2);
 	for (y = w * 2; y < max_y; y += w) {
 		for (x = 2; x < max_x; x++) {
-			img_out->pixel_data[x + y] = (2 * img_in->pixel_data[x + y - 2 - w - w] + 
-			4 * img_in->pixel_data[x + y - 1 - w - w] + 
-			5 * img_in->pixel_data[x + y - w - w] + 
-			4 * img_in->pixel_data[x + y + 1 - w - w] + 
-			2 * img_in->pixel_data[x + y + 2 - w - w] + 
-			4 * img_in->pixel_data[x + y - 2 - w] + 
-			9 * img_in->pixel_data[x + y - 1 - w] + 
-			12 * img_in->pixel_data[x + y - w] + 
-			9 * img_in->pixel_data[x + y + 1 - w] + 
-			4 * img_in->pixel_data[x + y + 2 - w] + 
-			5 * img_in->pixel_data[x + y - 2] + 
-			12 * img_in->pixel_data[x + y - 1] + 
-			15 * img_in->pixel_data[x + y] + 
-			12 * img_in->pixel_data[x + y + 1] + 
-			5 * img_in->pixel_data[x + y + 2] + 
-			4 * img_in->pixel_data[x + y - 2 + w] + 
-			9 * img_in->pixel_data[x + y - 1 + w] + 
-			12 * img_in->pixel_data[x + y + w] + 
-			9 * img_in->pixel_data[x + y + 1 + w] + 
-			4 * img_in->pixel_data[x + y + 2 + w] + 
-			2 * img_in->pixel_data[x + y - 2 + w + w] + 
-			4 * img_in->pixel_data[x + y - 1 + w + w] + 
-			5 * img_in->pixel_data[x + y + w + w] + 
-			4 * img_in->pixel_data[x + y + 1 + w + w] + 
+			img_out->pixel_data[x + y] = (2 * img_in->pixel_data[x + y - 2 - w - w] +
+			4 * img_in->pixel_data[x + y - 1 - w - w] +
+			5 * img_in->pixel_data[x + y - w - w] +
+			4 * img_in->pixel_data[x + y + 1 - w - w] +
+			2 * img_in->pixel_data[x + y + 2 - w - w] +
+			4 * img_in->pixel_data[x + y - 2 - w] +
+			9 * img_in->pixel_data[x + y - 1 - w] +
+			12 * img_in->pixel_data[x + y - w] +
+			9 * img_in->pixel_data[x + y + 1 - w] +
+			4 * img_in->pixel_data[x + y + 2 - w] +
+			5 * img_in->pixel_data[x + y - 2] +
+			12 * img_in->pixel_data[x + y - 1] +
+			15 * img_in->pixel_data[x + y] +
+			12 * img_in->pixel_data[x + y + 1] +
+			5 * img_in->pixel_data[x + y + 2] +
+			4 * img_in->pixel_data[x + y - 2 + w] +
+			9 * img_in->pixel_data[x + y - 1 + w] +
+			12 * img_in->pixel_data[x + y + w] +
+			9 * img_in->pixel_data[x + y + 1 + w] +
+			4 * img_in->pixel_data[x + y + 2 + w] +
+			2 * img_in->pixel_data[x + y - 2 + w + w] +
+			4 * img_in->pixel_data[x + y - 1 + w + w] +
+			5 * img_in->pixel_data[x + y + w + w] +
+			4 * img_in->pixel_data[x + y + 1 + w + w] +
 			2 * img_in->pixel_data[x + y + 2 + w + w]) / 159;
 		}
 	}
@@ -142,16 +142,16 @@ void calc_gradient_sobel(struct image * img_in, int g[], int dir[]) {
 	max_y = w * (h - 3);
 	for (y = w * 3; y < max_y; y += w) {
 		for (x = 3; x < max_x; x++) {
-			g_x = (2 * img_in->pixel_data[x + y + 1] 
+			g_x = (2 * img_in->pixel_data[x + y + 1]
 				+ img_in->pixel_data[x + y - w + 1]
 				+ img_in->pixel_data[x + y + w + 1]
-				- 2 * img_in->pixel_data[x + y - 1] 
+				- 2 * img_in->pixel_data[x + y - 1]
 				- img_in->pixel_data[x + y - w - 1]
 				- img_in->pixel_data[x + y + w - 1]);
-			g_y = 2 * img_in->pixel_data[x + y - w] 
+			g_y = 2 * img_in->pixel_data[x + y - w]
 				+ img_in->pixel_data[x + y - w + 1]
 				+ img_in->pixel_data[x + y - w - 1]
-				- 2 * img_in->pixel_data[x + y + w] 
+				- 2 * img_in->pixel_data[x + y + w]
 				- img_in->pixel_data[x + y + w + 1]
 				- img_in->pixel_data[x + y + w - 1];
 			#ifndef ABS_APPROX
@@ -202,8 +202,8 @@ void calc_gradient_sobel(struct image * img_in, int g[], int dir[]) {
 				}
 			}
 		}
-		
-	}	
+
+	}
 	#ifdef CLOCK
 	printf("Calculate gradient Sobel - time elapsed: %f\n", ((double)clock() - start) / CLOCKS_PER_SEC);
 	#endif
@@ -227,16 +227,16 @@ void calc_gradient_scharr(struct image * img_in, int g_x[], int g_y[], int g[], 
 	n = 0;
 	for (y = w; y < max_y; y += w) {
 		for (x = 1; x < max_x; x++) {
-			g_x[n] = (10 * img_in->pixel_data[x + y + 1] 
+			g_x[n] = (10 * img_in->pixel_data[x + y + 1]
 				+ 3 * img_in->pixel_data[x + y - w + 1]
 				+ 3 * img_in->pixel_data[x + y + w + 1]
-				- 10 * img_in->pixel_data[x + y - 1] 
+				- 10 * img_in->pixel_data[x + y - 1]
 				- 3 * img_in->pixel_data[x + y - w - 1]
 				- 3 * img_in->pixel_data[x + y + w - 1]);
-			g_y[n] = 10 * img_in->pixel_data[x + y - w] 
+			g_y[n] = 10 * img_in->pixel_data[x + y - w]
 				+ 3 * img_in->pixel_data[x + y - w + 1]
 				+ 3 * img_in->pixel_data[x + y - w - 1]
-				- 10 * img_in->pixel_data[x + y + w] 
+				- 10 * img_in->pixel_data[x + y + w]
 				- 3 * img_in->pixel_data[x + y + w + 1]
 				- 3 * img_in->pixel_data[x + y + w - 1];
 			#ifndef ABS_APPROX
@@ -273,7 +273,7 @@ void calc_gradient_scharr(struct image * img_in, int g_x[], int g_y[], int g[], 
 			}
 			n++;
 		}
-	}	
+	}
 	#ifdef CLOCK
 	printf("Calculate gradient Scharr - time elapsed: %f\n", ((double)clock() - start) / CLOCKS_PER_SEC);
 	#endif
@@ -333,7 +333,7 @@ void non_max_suppression(struct image * img, int g[], int dir[]) {//float theta[
 						} else {
 							img->pixel_data[x + y] = g[x + y];
 						}
-					} else { 
+					} else {
 						img->pixel_data[x + y] = 0x00;
 					}
 					break;
@@ -397,7 +397,7 @@ void estimate_threshold(struct image * img, int * high, int * low) {
 		printf("i %d count %d\n", i, histogram[i]);
 	}
 	#endif
-	
+
 	#ifdef CLOCK
 	printf("Estimate threshold - time elapsed: %f\n", ((double)clock() - start) / CLOCKS_PER_SEC);
 	#endif
@@ -465,7 +465,7 @@ void dilate_1d_h(struct image * img, struct image * img_out) {
 	for (y = 2 * img->width; y < y_max; y += img->width) {
 		for (x = 2; x < img->width - 2; x++) {
 			offset = x + y;
-			img_out->pixel_data[offset] = max(max(max(max(img->pixel_data[offset-2], img->pixel_data[offset-1]), img->pixel_data[offset]), img->pixel_data[offset+1]), img->pixel_data[offset+2]);	
+			img_out->pixel_data[offset] = max(max(max(max(img->pixel_data[offset-2], img->pixel_data[offset-1]), img->pixel_data[offset]), img->pixel_data[offset+1]), img->pixel_data[offset+2]);
 		}
 	}
 }
@@ -476,7 +476,7 @@ void dilate_1d_v(struct image * img, struct image * img_out) {
 	for (y = 2 * img->width; y < y_max; y += img->width) {
 		for (x = 2; x < img->width - 2; x++) {
 			offset = x + y;
-			img_out->pixel_data[offset] = max(max(max(max(img->pixel_data[offset-2 * img->width], img->pixel_data[offset-img->width]), img->pixel_data[offset]), img->pixel_data[offset+img->width]), img->pixel_data[offset+2*img->width]);	
+			img_out->pixel_data[offset] = max(max(max(max(img->pixel_data[offset-2 * img->width], img->pixel_data[offset-img->width]), img->pixel_data[offset]), img->pixel_data[offset+img->width]), img->pixel_data[offset+2*img->width]);
 		}
 	}
 }
@@ -487,7 +487,7 @@ void erode_1d_h(struct image * img, struct image * img_out) {
 	for (y = 2 * img->width; y < y_max; y += img->width) {
 		for (x = 2; x < img->width - 2; x++) {
 			offset = x + y;
-			img_out->pixel_data[offset] = min(min(min(min(img->pixel_data[offset-2], img->pixel_data[offset-1]), img->pixel_data[offset]), img->pixel_data[offset+1]), img->pixel_data[offset+2]);	
+			img_out->pixel_data[offset] = min(min(min(min(img->pixel_data[offset-2], img->pixel_data[offset-1]), img->pixel_data[offset]), img->pixel_data[offset+1]), img->pixel_data[offset+2]);
 		}
 	}
 }
@@ -498,7 +498,7 @@ void erode_1d_v(struct image * img, struct image * img_out) {
 	for (y = 2 * img->width; y < y_max; y += img->width) {
 		for (x = 2; x < img->width - 2; x++) {
 			offset = x + y;
-			img_out->pixel_data[offset] = min(min(min(min(img->pixel_data[offset-2 * img->width], img->pixel_data[offset-img->width]), img->pixel_data[offset]), img->pixel_data[offset+img->width]), img->pixel_data[offset+2*img->width]);	
+			img_out->pixel_data[offset] = min(min(min(min(img->pixel_data[offset-2 * img->width], img->pixel_data[offset-img->width]), img->pixel_data[offset]), img->pixel_data[offset+img->width]), img->pixel_data[offset+2*img->width]);
 		}
 	}
 }

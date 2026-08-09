@@ -1,14 +1,13 @@
 {
-  "version_code": 694200,
-  "version_name": "12.8.1 (v3.2)",
+  "version_code": 699200,
+  "version_name": "12.9.2 (v3.2)",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Обновление v3.2\n• Добавлены варианты иконок\n• Фиксы системы авто-прокси",
+  "changelog": "• Обновление",
   "proxies": [
     {
       "server": "nsk.cdn.catpaws.ru",
       "port": 443,
-      "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275",
-      "active": true
+      "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275"
     },
     {
       "server": "37.139.34.199",
@@ -41,14 +40,15 @@
       "delete": true
     },
     {
-      "server": "fast.proxytg.space",
-      "port": 8443,
-      "secret": "ee60a6bb02c869117fa6820902f61c82ff666173742e70726f787974672e7370616365"
-    },
-    {
       "server": "proxy.vmelectronics.ru",
       "port": 443,
-      "secret": "ee6164732e78352e72759c6509729477"
+      "secret": "ee6164732e78352e72759c6509729477",
+      "active": true
+    },
+    {
+      "server": "data.n3o.lol",
+      "port": 5432,
+      "secret": "04040404000044440000444404040000",
     }
   ]
 }

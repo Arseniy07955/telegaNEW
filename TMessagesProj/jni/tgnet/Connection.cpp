@@ -380,7 +380,8 @@ void Connection::connect() {
         return;
     }
     int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
-    if (connectionType != ConnectionTypeProxy && mtProxyReconnectHoldUntil > now) {
+    const bool mtProxyRouteActive = isMtProxyRouteActive();
+    if (mtProxyRouteActive && connectionType != ConnectionTypeProxy && mtProxyReconnectHoldUntil > now) {
         uint32_t delay = (uint32_t) (mtProxyReconnectHoldUntil - now);
         waitForReconnectTimer = true;
         reconnectTimer->setTimeout(delay, false);
@@ -389,6 +390,7 @@ void Connection::connect() {
         return;
     } else if (mtProxyReconnectHoldUntil != 0) {
         mtProxyReconnectHoldUntil = 0;
+        mtProxyReconnectBackoffMs = 0;
     }
     connectionInProcess = true;
     connectionState = TcpConnectionStageConnecting;
@@ -471,11 +473,18 @@ void Connection::connect() {
     lastPacketLength = 0;
     wasConnected = false;
     hasSomeDataSinceLastConnect = false;
-    int32_t mtProxyHandshakePriority = mtProxyHandshakePriorityForRequestClass(mtProxyRequestClassForConnectionType(connectionType));
-    if (((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy) {
-        mtProxyHandshakePriority = MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
+    if (mtProxyRouteActive) {
+        int32_t mtProxyHandshakePriority = mtProxyHandshakePriorityForRequestClass(mtProxyRequestClassForConnectionType(connectionType));
+        if (((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy) {
+            mtProxyHandshakePriority = MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
+        }
+        setMtProxyHandshakePriority(mtProxyHandshakePriority);
     }
-    setMtProxyHandshakePriority(mtProxyHandshakePriority);
+    // The WSS hostname must follow the authorization realm, not the amount or
+    // direction of file traffic. Upload connections use the regular temp key
+    // and therefore belong on kwsN; only connections that actually selected a
+    // media address/key belong on kwsN-1. Routing uploads by their file-lane
+    // classification makes the media relay reject the regular key with -404.
     openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), isMediaConnection);
     if (connectionType == ConnectionTypeProxy) {
         setTimeout(5);
@@ -539,7 +548,26 @@ bool Connection::allowsCustomPadding() {
     return currentProtocolType == ProtocolTypeTLS || currentProtocolType == ProtocolTypeDD || currentProtocolType == ProtocolTypeEF;
 }
 
+bool Connection::isMtProxyRouteActive() const {
+    if (((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy) {
+        return hasMtProxyOverride();
+    }
+    const ConnectionsManager &manager = ConnectionsManager::getInstance(currentDatacenter->instanceNum);
+    return !manager.proxyAddress.empty() && !manager.proxySecret.empty();
+}
+
 bool Connection::canSendRequestData(const char *reason) {
+    // Match tdesktop's transport boundary: MTProxy policy exists only while an
+    // MTProxy route is selected. Direct tgnet keeps its original send path and
+    // must never inherit proxy write gates or closing-state bookkeeping.
+    if (!isMtProxyRouteActive()) {
+        if (connectionState == TcpConnectionStageIdle
+                || connectionState == TcpConnectionStageReconnecting
+                || connectionState == TcpConnectionStageSuspended) {
+            connect();
+        }
+        return !isDisconnected();
+    }
     const char *safeReason = reason != nullptr ? reason : "unknown";
     if (connectionState == TcpConnectionStageSuspended) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup write_gate_closed reason=%s state=%d dead_for_writes=%d", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, safeReason, (int) connectionState, isClosingOrClosedForWrites() ? 1 : 0);
@@ -569,9 +597,14 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     uint32_t packetLength;
 
     uint8_t useSecret = 0;
-    bool forceProxyLikeInitForWss = isCurrentTransportWss();
     if (!firstPacketSent) {
-        if (!overrideProxyAddress.empty()) {
+        if (isCurrentTransportWss()) {
+            // WSS has its own official route and never inherits the secret of
+            // the TCP dcOption that happened to be selected before transport
+            // dispatch. Otherwise a direct WSS connection is accidentally
+            // encoded as MTProxy and media auth fails on every affected DC.
+            useSecret = 0;
+        } else if (!overrideProxyAddress.empty()) {
             if (!overrideProxySecret.empty()) {
                 useSecret = 1;
             } else if (!secret.empty()) {
@@ -657,7 +690,11 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
                     bytes[56] = bytes[57] = bytes[58] = bytes[59] = 0xee;
                 }
 
-                if (useSecret != 0 || forceProxyLikeInitForWss) {
+                // The official WebSocket hostname already selects both the
+                // datacenter and the traffic class (kwsN / kwsN-1). Match
+                // Telegram Web and keep bytes 60..61 random for direct WSS;
+                // a DC marker belongs only to MTProxy secret transports.
+                if (useSecret != 0) {
                     int16_t datacenterId;
                     if (isMediaConnection) {
                         if (ConnectionsManager::getInstance(currentDatacenter->instanceNum).testBackend) {
@@ -735,12 +772,22 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     }
 
     buffer->rewind();
-    writeBuffer(buffer);
     buff->rewind();
     AES_ctr128_encrypt(buff->bytes(), buff->bytes(), buff->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
-    writeBuffer(buff);
     if (buffer2 != nullptr) {
         AES_ctr128_encrypt(buffer2->bytes(), buffer2->bytes(), buffer2->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
+    }
+    // The bytes go into the shared outgoing stream like on any TCP transport,
+    // but WSS additionally needs to know where this packet ends: the relay
+    // parses only the first MTProto packet of a WebSocket frame and silently
+    // drops the rest, so frames must be cut exactly here. The 64-byte init
+    // prefix belongs to the same frame as the packet that carries it.
+    const uint32_t packetBytes = buffer->remaining() + buff->remaining()
+            + (buffer2 != nullptr ? buffer2->remaining() : 0);
+    noteWssPacketBoundary(packetBytes);
+    writeBuffer(buffer);
+    writeBuffer(buff);
+    if (buffer2 != nullptr) {
         writeBuffer(buffer2);
     }
     return !isClosingOrClosedForWrites();
@@ -812,10 +859,11 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
     notifyConnectionClosedOnce(reason, "onDisconnectedInternal");
     connectionToken = 0;
 
-    const char *mtProxyReconnectDiagnostic = getProxyCheckDiagnostic();
+    const bool mtProxyRouteActive = isMtProxyRouteActive();
+    const char *mtProxyReconnectDiagnostic = mtProxyRouteActive ? getProxyCheckDiagnostic() : "";
     uint32_t mtProxyReconnectDelay = 0;
-    uint32_t mtProxySuggestedHoldMs = consumeSuggestedReconnectHoldMs();
-    if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+    uint32_t mtProxySuggestedHoldMs = mtProxyRouteActive ? consumeSuggestedReconnectHoldMs() : 0;
+    if (mtProxyRouteActive && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
         MtProxyRetry::ReconnectHoldInput holdInput;
         holdInput.diagnostic = mtProxyReconnectDiagnostic;
@@ -827,10 +875,10 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
         mtProxyReconnectDelay = holdDecision.delayMs;
         mtProxyReconnectHoldUntil = now + mtProxyReconnectDelay;
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff phase=%s delay_ms=%u coordinator_hold_ms=%u failed=%u", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic, mtProxyReconnectDelay, mtProxySuggestedHoldMs, failedConnectionCount + 1);
-    } else if (connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+    } else if (mtProxyRouteActive && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff_suppressed phase=%s", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic);
     }
-    if (strcmp(mtProxyReconnectDiagnostic, "ignored_cancelled_generation") == 0) {
+    if (mtProxyRouteActive && strcmp(mtProxyReconnectDiagnostic, "ignored_cancelled_generation") == 0) {
         waitForReconnectTimer = false;
         usefullData = false;
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_cancelled_generation", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType);

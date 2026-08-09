@@ -9,6 +9,7 @@
 #include "BuffersStorage.h"
 #include "FileLog.h"
 #include "NativeByteBuffer.h"
+#include "ConnectionsManager.h"
 
 #include <time.h>
 
@@ -92,7 +93,21 @@ NativeByteBuffer *BuffersStorage::getFreeBuffer(uint32_t size) {
         }
         if (buffer == nullptr) {
             buffer = new NativeByteBuffer(byteCount);
-            if (LOGS_ENABLED) DEBUG_D("create new %u buffer", byteCount);
+            // Аллокации идут сотнями за секунду и полезной информации не несут:
+            // размеры повторяются, а счётчики пула и так публикуются отдельно.
+            // Пишем не чаще раза в секунду, указывая, сколько записей свёрнуто.
+            if (LOGS_ENABLED) {
+                static int64_t lastAllocLogTime = 0;
+                static uint32_t suppressedAllocLogs = 0;
+                int64_t now = ConnectionsManager::getInstance(0).getCurrentTimeMonotonicMillis();
+                if (now - lastAllocLogTime >= 1000) {
+                    DEBUG_D("create new %u buffer, allocations suppressed=%u", byteCount, suppressedAllocLogs);
+                    lastAllocLogTime = now;
+                    suppressedAllocLogs = 0;
+                } else {
+                    suppressedAllocLogs++;
+                }
+            }
         }
     }
     if (buffer != nullptr) {

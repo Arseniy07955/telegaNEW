@@ -11,10 +11,12 @@
 #include <netinet/in.h>
 #include <stdint.h>
 #include <time.h>
+#include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 #include "mtproxy/MtProxyStartupTimeline.h"
-#include "WssTransport.h"
+#include "wss/WssSocket.h"
 
 class ByteArray;
 class ByteStream;
@@ -142,8 +144,16 @@ public:
         bool active = false;
         int32_t datacenterId = 0;
         bool mediaConnection = false;
-        WssRouteConfig route;
-        std::unique_ptr<WssTransport> transport;
+        tgnet::wss::Route route;
+        std::unique_ptr<tgnet::transport::Socket> transport;
+        // Outgoing bytes live in the shared outgoingByteStream, but the relay
+        // handles only the FIRST MTProto packet of each WebSocket frame and
+        // silently drops the rest, so the stream must be cut back into frames
+        // exactly at packet boundaries. Sizes are recorded here as packets are
+        // queued. Measured 2026-08-09: msgs_ack and req_DH_params sent as two
+        // frames complete the handshake, the same pair coalesced into one frame
+        // gets no answer at all.
+        std::deque<uint32_t> outgoingPacketSizes;
     };
 
     struct AdmissionSubstate {

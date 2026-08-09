@@ -368,9 +368,8 @@ def main() -> int:
     require(
         "noteProxySettingsActivation(ProxyConnectionEvent.Origin origin)" in runtime
         and "noteProxyStartupRestoreActivation(int account)" in runtime
-        and "noteProxyLifecycleActivation(int account, ProxyConnectionEvent.Origin origin)" in runtime
         and "shouldIgnoreStaleActivationGeneration" in runtime,
-        "runtime store must own settings/startup/background activation generation floors",
+        "runtime store must own settings/startup activation generation floors",
         failures,
     )
     stale_generation_method = method_body(runtime, "static boolean shouldIgnoreStaleActivationGeneration")
@@ -407,13 +406,11 @@ def main() -> int:
     require(
         "int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount)" in java_connections
         and "ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName" in java_connections
-        and "int activationGeneration = ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin)" in java_connections
-        and "ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin)" in java_connections
+        and "boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address)" in java_connections
+        and "hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0" in java_connections
         and "native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName)" in java_connections
-        and "publishProxyActivationContext(ProxyConnectionEvent.Origin.BACKGROUND_KEEPALIVE)" in java_connections
-        and "publishProxyActivationContext(ProxyConnectionEvent.Origin.ACTIVE_SOCKET)" in java_connections
-        and "native_setProxyActivationContext(currentAccount, activationGeneration, activationOrigin.wireName)" in java_connections,
-        "Java must pass settings/startup/background generation and origin to native",
+        and "publishProxyActivationContext" not in java_connections,
+        "Java must pass settings/startup generations to native without lifecycle proxy mutation",
         failures,
     )
     require(
@@ -449,12 +446,12 @@ def main() -> int:
         failures,
     )
 
-    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs)")
+    java_stage = method_body(java_connections, "private static void processProxyConnectionStage(ProxyConnectionEvent event)")
     require(
         "ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event)" in java_stage
         and "if (!shouldNotifyProxyConnectionStage(decision))" in java_stage
         and "return;" in java_stage[java_stage.find("if (!shouldNotifyProxyConnectionStage(decision))"):],
-        "Java bridge must suppress UI notifications for telemetry-only reducer decisions",
+        "Java UI-stage processor must suppress notifications for telemetry-only reducer decisions",
         failures,
     )
     notify_method = method_body(java_connections, "private static boolean shouldNotifyProxyConnectionStage")

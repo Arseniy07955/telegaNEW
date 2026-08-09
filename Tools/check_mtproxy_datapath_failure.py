@@ -174,6 +174,23 @@ def main() -> int:
         "diagnostic status text/color must gate MTProxy connected status on data-path success",
         failures,
     )
+    successful_proxy_check = slice_between(
+        diagnostics,
+        "private static boolean hasFreshSuccessfulProxyCheck",
+        "private static boolean currentConnectionIsUsableForStatus",
+    )
+    require(
+        "proxyInfo.available" in successful_proxy_check
+        and "ProxyCheckScheduler.isFresh(proxyInfo)" in successful_proxy_check
+        and "OK.equals(normalize(proxyInfo.lastCheckDiagnostic))" in successful_proxy_check
+        and "hasFreshSuccessfulProxyCheck(proxyInfo)" in slice_between(
+            diagnostics,
+            "private static boolean currentConnectionIsUsableForStatus",
+            "public static boolean shouldAccelerateProxyRotation",
+        ),
+        "a fresh successful TL_ping proxy check must count as concrete MTProxy path evidence for connected status",
+        failures,
+    )
 
     require(
         "secretHashForLiveStage" in endpoint_key

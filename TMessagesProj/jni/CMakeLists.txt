@@ -9,7 +9,6 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto=full -Wl,--gc-
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libswscale.a,
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavformat.a,
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavcodec.a,
-${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavresample.a,
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavutil.a,
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libswresample.a,
 ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libvpx.a,
@@ -33,9 +32,6 @@ set_target_properties(avformat PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTO
 
 add_library(avcodec STATIC IMPORTED)
 set_target_properties(avcodec PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavcodec.a)
-
-add_library(avresample STATIC IMPORTED)
-set_target_properties(avresample PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libavresample.a)
 
 add_library(swresample STATIC IMPORTED)
 set_target_properties(swresample PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libswresample.a)
@@ -189,6 +185,7 @@ set_target_properties(tdutils PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTOR
 # "mtproxy/MtProxyX.h". Java/socket layers link against this, never vice versa.
 add_library(mtproxy_core STATIC
         mtproxy/MtProxyAdaptivePolicy.cpp
+        mtproxy/MtProxyClientHelloPolicy.cpp
         mtproxy/MtProxyDataPathShaper.cpp
         mtproxy/MtProxyEndpointRecorder.cpp
         mtproxy/MtProxyEndpointPolicy.cpp
@@ -228,7 +225,7 @@ add_library(tgnet STATIC
         tgnet/ConnectionsManager.cpp
         tgnet/ConnectionSocket.cpp
         tgnet/ConnectionSocketStateMachine.cpp
-        tgnet/WssTransport.cpp
+        tgnet/wss/WssSocket.cpp
         tgnet/Datacenter.cpp
         tgnet/EventObject.cpp
         tgnet/FileLog.cpp
@@ -248,6 +245,8 @@ target_compile_definitions(tgnet PUBLIC
         HAVE_PTHREAD)
 target_include_directories(tgnet PUBLIC
         boringssl/include/)
+target_include_directories(tgnet PRIVATE
+        voip/webrtc)
 target_link_libraries(tgnet
         mtproxy_core
         ssl
@@ -402,7 +401,6 @@ add_library(${NATIVE_LIB} SHARED
         audio.c
         webm_encoder.c
         image.cpp
-        video.c
         intro/IntroRenderer.c
         SqliteWrapper.cpp
         utilities.cpp
@@ -687,7 +685,6 @@ target_link_libraries(${NATIVE_LIB}
         swscale
         avformat
         avcodec
-        avresample
         swresample
         libvpx
         libdav1d

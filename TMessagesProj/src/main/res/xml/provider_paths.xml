@@ -3,5 +3,7 @@
     <external-path name="media" path="."/>
     <files-path name="logs" path="/logs/"/>
     <files-path name="cache" path="/cache/"/>
+    <!-- Legacy Forgejo updater versions may leave a completed APK in Context.getCacheDir(). -->
+    <cache-path name="update_cache" path="."/>
     <root-path name="external_files" path="/storage/" />
 </paths>

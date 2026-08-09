@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="AppName">telegaNEW</string>
+    <string name="AppName">ZaStoGram</string>
     <string name="AppNameBeta">Telegram Beta</string>
     <string name="LanguageName">English</string>
     <string name="English">English</string>
@@ -2404,10 +2404,10 @@
     <string name="ResetCustomNotificationsAlert">Are you sure you want to reset notification settings to default?</string>
     <string name="TextSizeHeader">Message text size</string>
     <string name="AskAQuestion">Ask a Question</string>
-    <string name="DurovLalka">TelegaNew info</string>
+    <string name="DurovLalka">Дуров лалка</string>
     <string name="OurChannel">Наш канал</string>
     <string name="OurVpn">Наш VPN</string>
-    <string name="ZapretVpnSponsorSetting">Показывать спонсора</string>
+    <string name="ZapretVpnSponsorSetting">Показывать спонсора прокси</string>
     <string name="ZapretProxySponsorOn">Вкл</string>
     <string name="ZapretProxySponsorOff">Выкл</string>
     <string name="HideMainScreenStories">Скрывать сторисы на главном экране</string>

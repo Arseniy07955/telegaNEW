@@ -472,7 +472,10 @@ def main():
     resolved_end = socket.find("void ConnectionSocket::openConnectionInternal", resolved_start)
     resolved_body = socket[resolved_start:resolved_end]
     cache_after_delegate_failure = resolved_body.find("mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6, &blockedZeroAddress)")
-    host_resolve_failure = resolved_body.find('proxyCheckDiagnostic = "host_resolve_failed"')
+    host_resolve_failure = resolved_body.find(
+        'proxyCheckDiagnostic = "host_resolve_failed"',
+        cache_after_delegate_failure,
+    )
     store_resolved = resolved_body.find("mtProxyEndpointStoreResolvedAddress(host, ip)")
     require(
         cache_after_delegate_failure != -1
@@ -609,14 +612,11 @@ def main():
     )
     require(
         "MT_PROXY_TLS_PROFILE_LEGACY_NO_GREASE" in adaptive_policy
-        and "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in adaptive_policy
-        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy,
-        "phase-adaptive recipe must switch to another known-compatible TLS profile",
-    )
-    require(
-        "MT_PROXY_TLS_PROFILE_ANDROID_CHROME" in adaptive_policy
-        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy,
-        "phase-adaptive ClientHello failures must be able to switch between Android Chrome and Firefox Android TLS profiles",
+        and "MT_PROXY_TLS_PROFILE_YANDEX" in adaptive_policy
+        and "MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID" in adaptive_policy
+        and "MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP" in adaptive_policy
+        and "mtProxyEffectiveWireTlsProfile" in adaptive_policy,
+        "phase-adaptive recipe must switch only through measured-safe effective TLS profiles",
     )
     require(
         "recipeId(const CompatibilityRecipe" in adaptive_policy

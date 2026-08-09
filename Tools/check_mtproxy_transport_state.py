@@ -415,10 +415,8 @@ def main() -> int:
         failures,
     )
 
-    open_connection_body = method_body(socket, "void ConnectionSocket::openConnection(std::string address", "void ConnectionSocket::openConnectionInternal")
+    open_connection_body = method_body(socket, "void ConnectionSocket::openConnection(std::string address", "int32_t ConnectionSocket::checkSocketError")
     for action in (
-        "create_wss_socket",
-        "create_wss_ipv6_socket",
         "create_proxy_socket",
         "create_direct_socket",
     ):
@@ -427,6 +425,12 @@ def main() -> int:
             f"{action} must use the socket-creation transport action policy",
             failures,
         )
+    require(
+        'const char *createAction = ipv6 ? "create_wss_ipv6_socket" : "create_wss_socket"' in open_connection_body
+        and "canCreateSocket(createAction)" in open_connection_body,
+        "WSS IPv4/IPv6 socket creation must use the selected transport action policy",
+        failures,
+    )
     require(
         "NoSocket" in header_source
         and "TransportSocketPolicy::NoSocket" in state_source
@@ -1030,10 +1034,14 @@ def main() -> int:
         "canSendWssFrame must delegate WSS mode/ready/fd/epoll checks to the action policy",
         failures,
     )
+    flush_wss_body = method_body(socket, "bool ConnectionSocket::flushWssStream", "void ConnectionSocket::publishSanitizedSecretDomainIfNeeded")
     require(
-        "if (!canSendWssFrame())" in on_event_body
-        and "currentWssTransport->sendFrame" in on_event_body,
-        "WSS outbound frame send must use the transport action policy",
+        "!canSendWssFrame()" in flush_wss_body
+        and "currentWssTransport->write" in flush_wss_body
+        and "outgoingByteStream->hasData()" in flush_wss_body
+        and "outgoingByteStream->discard" in flush_wss_body
+        and "flushWssStream" in on_event_body,
+        "WSS outbound send must pull the shared byte stream under the transport action policy",
         failures,
     )
     write_raw_body = method_body(socket, "void ConnectionSocket::writeBuffer(uint8_t *data", "void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer)")
@@ -1092,7 +1100,8 @@ def main() -> int:
         and "epoll_ctl_del" in action_table_body
         and "close_native_socket" in action_table_body
         and "releaseProxyHandshakeAdmission" in action_table_body
-        and "writeBufferRaw" in action_table_body,
+        and "writeBufferRaw" in action_table_body
+        and '{"writeTransportPacket"' not in action_table_body,
         "transport action states must be table-driven through allowedActionStates",
         failures,
     )

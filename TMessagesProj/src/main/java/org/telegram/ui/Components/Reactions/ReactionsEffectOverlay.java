@@ -754,7 +754,7 @@ public class ReactionsEffectOverlay {
         if (cell == null || visibleReaction == null || baseFragment == null || baseFragment.getParentActivity() == null) {
             return;
         }
-        boolean animationEnabled = MessagesController.getGlobalMainSettings().getBoolean("view_animations", true);
+        boolean animationEnabled = MessagesController.getGlobalMainSettings().getBoolean("view_animations", false);
         if (!animationEnabled) {
             return;
         }

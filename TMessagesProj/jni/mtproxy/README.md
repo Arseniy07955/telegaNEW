@@ -12,6 +12,12 @@ single retry-hold authority, handshake planning and scheduling, secret
 parsing, server-flight parsing, startup timeline, probe coordination,
 terminal-diagnostic derivation, failure evidence.
 
+`MtProxyClientHelloPolicy` also owns the pre-send FakeTLS relay contract:
+517..4096-byte structural bounds, a 32-byte session id, TLS 1.3 as the
+first real cipher after relay-shaped GREASE, exact SNI equality with the
+`ee` secret, and the measured-safe effective profile (Yandex by default;
+exact Chromium-shaped profiles are withheld).
+
 ## Boundary rules (enforced by `Tools/check_mtproxy_module_boundary.py`)
 
 - Files here may include only other `mtproxy/` headers — zero tgnet
@@ -72,7 +78,8 @@ terminal-diagnostic derivation, failure evidence.
    and RUNS the binary as part of `check_mtproxy_all.py`. Covered: retry-hold
    computation (base/cap/coordinator-merge envelopes), terminal-diagnostic
    derivation (pre-I/O preservation, errno split, timeline fallback) and the
-   generated skip-list invariants. The RAND_bytes stub is a deterministic
+   generated skip-list invariants, the ClientHello relay contract and the
+   effective-profile withholding policy. The RAND_bytes stub is a deterministic
    xorshift stream — never all-zero (rejection sampling would spin forever)
    and never asserted exactly (tests use jitter envelopes).
 
