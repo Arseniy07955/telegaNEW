@@ -260,6 +260,7 @@ public class ConnectionsManager extends BaseController {
 
         public final List<String> ipv4;
         public final List<String> ipv6;
+        private int nextAddressIndex;
         final long expiresAtMs;
         final long staleExpiresAtMs;
         final String source;
@@ -285,8 +286,16 @@ public class ConnectionsManager extends BaseController {
         }
 
         public String getAddress() {
-            List<String> addresses = !ipv4.isEmpty() ? ipv4 : ipv6;
-            return addresses.get(Utilities.random.nextInt(addresses.size()));
+            // IPv6 первым, когда он есть: у веб-релеев Telegram IPv4-адрес
+            // обычно единственный и режется целиком, а IPv6 их сразу два и
+            // блокируют их заметно реже. Если IPv6 у устройства нет, резолвер
+            // его и не вернёт, и остаётся прежнее поведение.
+            List<String> addresses = !ipv6.isEmpty() ? ipv6 : ipv4;
+            // По кругу, а не случайно: повторное обращение к имени означает,
+            // что предыдущий адрес не сработал, и следующая попытка обязана
+            // прийтись на другого кандидата, а не на того же с вероятностью 1/2.
+            int index = Math.abs(nextAddressIndex++) % addresses.size();
+            return addresses.get(index);
         }
     }
 
@@ -1948,6 +1957,75 @@ public class ConnectionsManager extends BaseController {
     }
 
     @SuppressLint("NewApi")
+    private static ArrayList<String> queryAndroidDnsResolverAaaa(ResolveContext context) {
+        ArrayList<String> empty = new ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return empty;
+        }
+        // Без собственного IPv6 у устройства AAAA-адрес недостижим, и выдать
+        // его значило бы заменить рабочий путь на заведомо мёртвый.
+        if (!deviceHasGlobalIpv6()) {
+            return empty;
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<ArrayList<String>> result = new AtomicReference<>();
+        CancellationSignal cancellationSignal = new CancellationSignal();
+        try {
+            DnsResolver.getInstance().query(null, context.host, DnsResolver.TYPE_AAAA, DnsResolver.FLAG_EMPTY, DNS_DIRECT_EXECUTOR, cancellationSignal, new DnsResolver.Callback<List<InetAddress>>() {
+                @Override
+                public void onAnswer(List<InetAddress> answer, int rcode) {
+                    result.set(filterIpv6Addresses(answer, context));
+                    latch.countDown();
+                }
+
+                @Override
+                public void onError(DnsResolver.DnsException e) {
+                    latch.countDown();
+                }
+            });
+            if (!latch.await(HOST_RESOLVER_SYSTEM_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                cancellationSignal.cancel();
+                logHostResolverExpectedFailure("system", context.host, "android_aaaa_timeout");
+                return empty;
+            }
+        } catch (InterruptedException e) {
+            cancellationSignal.cancel();
+            Thread.currentThread().interrupt();
+            return empty;
+        } catch (Throwable e) {
+            cancellationSignal.cancel();
+            return empty;
+        }
+        ArrayList<String> addresses = result.get();
+        return addresses != null ? addresses : empty;
+    }
+
+    private static boolean deviceHasGlobalIpv6() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
+                    InetAddress inetAddress = interfaceAddress.getAddress();
+                    if (!(inetAddress instanceof Inet6Address)) {
+                        continue;
+                    }
+                    if (inetAddress.isLinkLocalAddress() || inetAddress.isLoopbackAddress()
+                            || inetAddress.isMulticastAddress() || inetAddress.isSiteLocalAddress()) {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        return false;
+    }
+
+    @SuppressLint("NewApi")
     private static ResolvedDomain tryAndroidDnsResolverA(ResolveContext context) {
         String hostName = context.host;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -1991,7 +2069,14 @@ public class ConnectionsManager extends BaseController {
             logHostResolverExpectedFailure("system", hostName, "android_" + resolverError.getClass().getSimpleName());
             return null;
         }
-        ResolvedDomain resolvedDomain = resolvedDomainFromIpv4Addresses(result.get(), "system");
+        // AAAA спрашиваем отдельным запросом: без него список IPv6 всегда пуст,
+        // и клиент не может воспользоваться шестым протоколом, даже когда он
+        // есть у устройства. У веб-релеев Telegram единичные IPv4-адреса,
+        // которые режутся целиком, поэтому IPv6-путь часто оказывается
+        // единственным рабочим.
+        ArrayList<String> ipv6Addresses = queryAndroidDnsResolverAaaa(context);
+        ResolvedDomain resolvedDomain = resolvedDomainFromAddresses(
+                result.get(), ipv6Addresses, "system", HOST_RESOLVER_MAX_FRESH_TTL_MS);
         if (resolvedDomain == null) {
             logHostResolverExpectedFailure("system", hostName, "android_no_ipv4_answer");
         }

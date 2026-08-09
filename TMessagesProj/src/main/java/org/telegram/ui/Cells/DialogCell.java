@@ -556,6 +556,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
     private int lock2Left;
 
     private boolean promoDialog;
+    private boolean zastogramPromo;
 
     private boolean drawCheck1;
     private boolean drawCheck2;
@@ -734,6 +735,10 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
             buildLayout();
             requestLayout();
         }
+    }
+
+    public void setZastogramPromo(boolean value) {
+        zastogramPromo = value;
     }
 
     public void setDialog(TLRPC.Dialog dialog, int type, int folder) {
@@ -2225,6 +2230,11 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                         thumbsCount = 0;
                     }
                 }
+            }
+            if (zastogramPromo && dialogsType == DialogsActivity.DIALOGS_TYPE_DEFAULT) {
+                drawPinBackground = true;
+                promoDialog = true;
+                timeString = getString(R.string.AppName);
             }
 
             if (titleOverride != null) {
