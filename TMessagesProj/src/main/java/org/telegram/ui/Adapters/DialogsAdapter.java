@@ -264,6 +264,10 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         return filteredDialogs != null ? filteredDialogs : dialogs;
     }
 
+    private boolean isArchiveDialog(TLRPC.Dialog dialog) {
+        return dialog instanceof TLRPC.TL_dialogFolder || dialog != null && DialogObject.isFolderDialogId(dialog.id);
+    }
+
     private ArrayList<TLRPC.Dialog> removeZastogramPromoDialogFromArray(ArrayList<TLRPC.Dialog> dialogs, MessagesController messagesController) {
         if (!shouldShowZastogramPromo()) {
             return dialogs;
@@ -290,8 +294,16 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         if (!shouldShowZastogramPromo() || getZastogramPromoDialogId(messagesController) == 0) {
             return;
         }
-        itemInternals.add(0, new ItemInternal(VIEW_TYPE_ZASTOGRAM_PROMO));
-        zastogramPromoItemPosition = 0;
+        int insertIndex = 0;
+        for (int i = 0; i < itemInternals.size(); i++) {
+            ItemInternal item = itemInternals.get(i);
+            if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null) {
+                insertIndex = isArchiveDialog(item.dialog) ? i + 1 : i;
+                break;
+            }
+        }
+        itemInternals.add(insertIndex, new ItemInternal(VIEW_TYPE_ZASTOGRAM_PROMO));
+        zastogramPromoItemPosition = insertIndex;
     }
 
     private long getZastogramPromoDialogId(MessagesController messagesController) {

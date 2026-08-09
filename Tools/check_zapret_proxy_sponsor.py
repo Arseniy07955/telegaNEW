@@ -86,8 +86,8 @@ def main() -> int:
     require(
         "removeZastogramPromoDialogFromArray(" in dialogs_adapter
         and "insertZastogramPromoItem(" in dialogs_adapter
-        and "itemInternals.add(0, new ItemInternal(VIEW_TYPE_ZASTOGRAM_PROMO))" in dialogs_adapter,
-        "DialogsAdapter must keep ZaStoGram as a separate first item without replacing chats",
+        and "isArchiveDialog(item.dialog) ? i + 1 : i" in dialogs_adapter,
+        "DialogsAdapter must keep ZaStoGram before chats but after the archive row",
     )
     is_promo_method = dialogs_adapter[
         dialogs_adapter.find("public boolean isZastogramPromoDialog"):
