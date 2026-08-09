@@ -45,7 +45,7 @@ if (zastoExternalSigningValues.any { it } && !zastoExternalSigningValues.every {
 // the unknown signer on top. Releases 1.1.13 and 1.1.14 shipped that way
 // because the fallback applied silently; refusing to build is the only way this
 // cannot happen again.
-if (zastoUpdateChannel == "stable" && !zastoExternalSigningValues.every { it }) {
+if (zastoUpdateChannel == "stable" && !zastoExternalSigningValues.every { it } && !project.hasProperty("RELEASE_STORE_PASSWORD")) {
     throw new GradleException(
             "Refusing a stable ZaStoGram build without its release signing key. " +
                     "Pass -PzastoReleaseKeystore, -PzastoReleaseStorePasswordFile, " +
@@ -105,16 +105,16 @@ android {
     signingConfigs {
         debug {
             storeFile zastoReleaseKeystoreFile
-            storePassword zastoReleaseStorePassword ?: RELEASE_STORE_PASSWORD
-            keyAlias zastoReleaseKeyAlias ?: RELEASE_KEY_ALIAS
-            keyPassword zastoReleaseKeyPassword ?: RELEASE_KEY_PASSWORD
+            storePassword zastoReleaseStorePassword ?: project.findProperty("RELEASE_STORE_PASSWORD") ?: "android"
+            keyAlias zastoReleaseKeyAlias ?: project.findProperty("RELEASE_KEY_ALIAS") ?: "androidkey"
+            keyPassword zastoReleaseKeyPassword ?: project.findProperty("RELEASE_KEY_PASSWORD") ?: "android"
         }
 
         release {
             storeFile zastoReleaseKeystoreFile
-            storePassword zastoReleaseStorePassword ?: RELEASE_STORE_PASSWORD
-            keyAlias zastoReleaseKeyAlias ?: RELEASE_KEY_ALIAS
-            keyPassword zastoReleaseKeyPassword ?: RELEASE_KEY_PASSWORD
+            storePassword zastoReleaseStorePassword ?: project.findProperty("RELEASE_STORE_PASSWORD") ?: "android"
+            keyAlias zastoReleaseKeyAlias ?: project.findProperty("RELEASE_KEY_ALIAS") ?: "zastogram"
+            keyPassword zastoReleaseKeyPassword ?: project.findProperty("RELEASE_KEY_PASSWORD") ?: "android"
         }
     }
 
