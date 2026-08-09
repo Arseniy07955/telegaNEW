@@ -256,11 +256,16 @@ public class ConnectionsManager extends BaseController {
         });
     }
 
+    // Насколько быстрый повторный запрос имени считать признаком того, что
+    // выданный адрес не сработал.
+    private static final long ADDRESS_RETRY_WINDOW_MS = 20_000L;
+
     private static class ResolvedDomain {
 
         public final List<String> ipv4;
         public final List<String> ipv6;
-        private int nextAddressIndex;
+        private int preferredIndex;
+        private long lastHandOutTime;
         final long expiresAtMs;
         final long staleExpiresAtMs;
         final String source;
@@ -291,10 +296,18 @@ public class ConnectionsManager extends BaseController {
             // блокируют их заметно реже. Если IPv6 у устройства нет, резолвер
             // его и не вернёт, и остаётся прежнее поведение.
             List<String> addresses = !ipv6.isEmpty() ? ipv6 : ipv4;
-            // По кругу, а не случайно: повторное обращение к имени означает,
-            // что предыдущий адрес не сработал, и следующая попытка обязана
-            // прийтись на другого кандидата, а не на того же с вероятностью 1/2.
-            int index = Math.abs(nextAddressIndex++) % addresses.size();
+            // Держимся адреса, который работает, и уходим с него только при
+            // отказе. Признак отказа — повторный запрос того же имени вскоре
+            // после предыдущего: успешное соединение живёт минутами и заново
+            // резолвить имя не заставляет, а неудачная попытка возвращается
+            // сюда почти сразу. Случайный выбор здесь хуже: он и с рабочего
+            // адреса уходит, и на мёртвый попадает по второму разу.
+            long now = SystemClock.elapsedRealtime();
+            if (lastHandOutTime != 0 && now - lastHandOutTime < ADDRESS_RETRY_WINDOW_MS) {
+                preferredIndex++;
+            }
+            lastHandOutTime = now;
+            int index = Math.abs(preferredIndex) % addresses.size();
             return addresses.get(index);
         }
     }
