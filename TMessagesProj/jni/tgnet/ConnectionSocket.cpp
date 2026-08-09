@@ -3394,17 +3394,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             manager.testBackend,
             &selectedWssRoute);
 
-    if (shouldUseWss && manager.getIpStratagy() != USE_IPV4_ONLY) {
-        // Когда у устройства есть IPv6, подключаемся к релею по имени, а не по
-        // захардкоженному IPv4: резолвер отдаёт AAAA первым. У веб-релеев
-        // Telegram IPv4-адреса единичные и режутся целиком (у DC1 и DC5 TCP к
-        // ним не устанавливается вовсе), а IPv6-префиксы блокируют реже.
-        if (!selectedWssRoute.relayHostFallback.empty()) {
-            selectedWssRoute.viaFallback = true;
-            selectedWssRoute.connectHost = selectedWssRoute.relayHostFallback;
-        }
-    }
-
     if (shouldUseWss) {
         currentTransportWss = true;
         stateMachine.setTransportMode(TransportMode::Wss);

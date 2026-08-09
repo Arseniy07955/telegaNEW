@@ -78,6 +78,54 @@ bool preferFallback(const Route &route) {
     return it->second.preferFallback;
 }
 
+// Отдельный от выбора адреса учёт: у датацентра может не открываться ни один
+// адрес релея (у DC1 порт 443 закрыт целиком у части провайдеров). Держать
+// такой датацентр в вечных попытках бессмысленно — медиа оттуда не загрузится
+// никогда, хотя прямое соединение может работать. После нескольких подряд
+// неудач, ни одна из которых не дошла даже до TCP, маршрут WSS для этого
+// датацентра временно отключается, и клиент идёт к нему обычным путём.
+constexpr uint32_t kRouteFailuresBeforeSuppress = 3;
+constexpr int64_t kRouteSuppressTtlMs = 10 * 60 * 1000;
+
+struct RouteHealth {
+    uint32_t consecutiveFailures = 0;
+    int64_t suppressedUntil = 0;
+};
+
+std::map<std::string, RouteHealth> routeHealth;
+
+bool routeSuppressed(const std::string &domain) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    auto it = routeHealth.find(domain);
+    if (it == routeHealth.end() || it->second.suppressedUntil == 0) {
+        return false;
+    }
+    if (it->second.suppressedUntil <= monotonicMillis()) {
+        it->second.suppressedUntil = 0;
+        it->second.consecutiveFailures = 0;
+        return false;
+    }
+    return true;
+}
+
+void recordRouteUnreachable(const Route &route) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    RouteHealth &health = routeHealth[route.domain];
+    if (health.suppressedUntil > monotonicMillis()) {
+        return;
+    }
+    if (++health.consecutiveFailures >= kRouteFailuresBeforeSuppress) {
+        health.suppressedUntil = monotonicMillis() + kRouteSuppressTtlMs;
+    }
+}
+
+void recordRouteReachable(const Route &route) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    RouteHealth &health = routeHealth[route.domain];
+    health.consecutiveFailures = 0;
+    health.suppressedUntil = 0;
+}
+
 void recordAttemptFailed(const Route &route) {
     if (!hasFallback(route)) {
         return;
@@ -211,6 +259,10 @@ bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *
     result.relayHostFallback = result.domain;
     result.viaFallback = preferFallback(result);
     result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
+    if (routeSuppressed(result.domain)) {
+        // Релей этого датацентра недоступен; пусть соединение идёт напрямую.
+        return false;
+    }
     *route = std::move(result);
     return true;
 }
@@ -742,12 +794,23 @@ void Socket::noteAttemptFailed() {
     if (!failureRecorded && state != State::Ready) {
         failureRecorded = true;
         recordAttemptFailed(routeConfig);
+        if (phase == transport::HandshakePhase::None) {
+            // Не дошли даже до установленного TCP: адрес релея недоступен, а не
+            // протокол сломан. Несколько таких подряд — и датацентр уходит на
+            // прямое соединение, вместо того чтобы навсегда остаться без медиа.
+            recordRouteUnreachable(routeConfig);
+            if (LOGS_ENABLED) {
+                DEBUG_D("wss_socket route_unreachable domain=%s relay=%s",
+                        routeConfig.domain.c_str(), routeConfig.connectHost.c_str());
+            }
+        }
     }
 }
 
 void Socket::noteUpgradeSucceeded() {
     failureRecorded = false;
     recordUpgradeSucceeded(routeConfig);
+    recordRouteReachable(routeConfig);
 }
 
 void Socket::setIoWait(IoWait wait, const char *operation) {
