@@ -165,6 +165,13 @@ private:
     std::list<EventObject *> events;
 
     std::map<uint32_t, Datacenter *> datacenters;
+    // Троттлинг записи о запросах, ждущих ключ датацентра: состояние статичное,
+    // а очередь перебирается на каждом проходе цикла событий.
+    struct NoAuthKeyLogWindow {
+        int64_t lastLogTime = 0;
+        uint32_t suppressed = 0;
+    };
+    std::map<uint32_t, NoAuthKeyLogWindow> noAuthKeyLogWindows;
     std::map<int32_t, std::vector<std::int32_t>> quickAckIdToRequestIds;
     int32_t pingTime;
     int64_t pingTimeMs;

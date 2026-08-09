@@ -3189,8 +3189,24 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 if (std::find(neededDatacenters.begin(), neededDatacenters.end(), pair) == neededDatacenters.end()) {
                     neededDatacenters.push_back(pair);
                 }
-                if (LOGS_ENABLED)
-                    DEBUG_D("skip queue, token = %d: no authkey for dc", request->requestToken);
+                // Пока ключа для датацентра нет, очередь перебирается заново на
+                // каждом проходе цикла событий, и эта строка писалась для КАЖДОГО
+                // ждущего запроса. В логе пользователя вышло 98926 записей за 61
+                // секунду — они вытесняли из файла всю остальную диагностику.
+                // Состояние статичное, поэтому достаточно одной записи в секунду
+                // на датацентр, с числом свёрнутых повторов.
+                if (LOGS_ENABLED) {
+                    int64_t now = getCurrentTimeMonotonicMillis();
+                    NoAuthKeyLogWindow &window = noAuthKeyLogWindows[requestDatacenter->getDatacenterId()];
+                    if (now - window.lastLogTime >= 1000) {
+                        DEBUG_D("skip queue: no authkey for dc%u, waiting requests suppressed=%u",
+                                requestDatacenter->getDatacenterId(), window.suppressed);
+                        window.lastLogTime = now;
+                        window.suppressed = 0;
+                    } else {
+                        window.suppressed++;
+                    }
+                }
                 iter++;
                 continue;
             } else if (!(request->requestFlags & RequestFlagEnableUnauthorized) && !requestDatacenter->authorized && request->datacenterId != DEFAULT_DATACENTER_ID && request->datacenterId != currentDatacenterId) {
