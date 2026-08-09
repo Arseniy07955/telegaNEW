@@ -108,7 +108,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             VIEW_TYPE_FORWARD_TO_STORIES_CELL = 21,
             VIEW_TYPE_ZAPRET_VPN_SPONSOR = 22;
 
-    public static final String ZAPRET_VPN_SPONSOR_USERNAME = "zapretvpns_bot";
+    public static final String ZAPRET_VPN_SPONSOR_USERNAME = "SenkapopkaVpnBot";
+    public static final String ZASTOGRAM_PROMO_USERNAME = ZAPRET_VPN_SPONSOR_USERNAME;
 
     private Context mContext;
     private ArchiveHintCell archiveHintCell;

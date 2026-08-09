@@ -10,6 +10,7 @@ import org.telegram.messenger.browser.Browser;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.Adapters.DialogsAdapter;
 import org.telegram.ui.Components.IconBackgroundColors;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.UItem;
@@ -77,7 +78,7 @@ public class FreeProxySettingsActivity extends BaseFragment {
                 presentFragment(new ProxyListActivity());
                 break;
             case 27:
-                getMessagesController().openByUserName("zapretvpns_bot", this, 1);
+                getMessagesController().openByUserName(DialogsAdapter.ZAPRET_VPN_SPONSOR_USERNAME, this, 1);
                 break;
             case 28:
                 Browser.openUrl(getParentActivity(), "https://t.me/MTProxy_everyday");
