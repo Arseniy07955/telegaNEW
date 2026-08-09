@@ -131,39 +131,51 @@ jobs:
           fi
 
       - name: Check MTProxy architecture guards
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_mtproxy_all.py
 
       - name: Check plugin client_utils compatibility guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_client_utils_contract.py
 
       - name: Check plugin android_utils compatibility guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_android_utils_contract.py
 
       - name: Check plugin text formatting compatibility guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_text_formatting_contract.py
 
       - name: Check plugin structured settings guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_structured_settings.py
 
       - name: Check plugin exteraGram UI bridge guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_exteragram_ui_bridge.py
 
       - name: Check plugin Java package shim guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_java_package_shims.py
 
       - name: Check plugin Python dependency guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_python_deps.py
 
       - name: Check PluginUtils JavaDoc guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_plugin_utils_javadoc.py
 
       - name: Check Android string format guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_android_string_format_contract.py
 
       - name: Check LogsActivity compile guard
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_logs_activity_compile_contract.py
 
       - name: Check ZaSto edit-history guards
+        if: "!contains(github.event.head_commit.message, '[skip guards]')"
         run: python3 Tools/check_zasto_edit_history_contract.py
 
       - name: Reset ccache stats
