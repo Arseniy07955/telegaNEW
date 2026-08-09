@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static guard for the Zapret VPN real sponsor dialog and free proxy links."""
+"""Static guard for the permanent ZaStoGram promo and free-proxy shortcuts."""
 
 from pathlib import Path
 import re
@@ -12,12 +12,11 @@ DIALOGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/DialogsAc
 DIALOG_CELL = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Cells/DialogCell.java"
 SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
 FREE_PROXY_SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/FreeProxySettingsActivity.java"
-SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 
 
 EXPECTED_STRINGS = {
-    "ZapretVpnSponsorSetting": "Показывать спонсора прокси",
+    "ZapretVpnBot": "ZaSto VPN",
     "FreeProxyChannels": "Бесплатные прокси",
     "FreeProxyMtProxyEveryday": "MTProxy everyday",
     "FreeProxyProxyMtProto": "Proxy MTProto",
@@ -47,7 +46,6 @@ def main() -> int:
     dialog_cell = DIALOG_CELL.read_text(encoding="utf-8")
     settings_activity = SETTINGS_ACTIVITY.read_text(encoding="utf-8")
     free_proxy_settings_activity = FREE_PROXY_SETTINGS_ACTIVITY.read_text(encoding="utf-8")
-    shared_config = SHARED_CONFIG.read_text(encoding="utf-8")
     strings = STRINGS.read_text(encoding="utf-8")
     errors: list[str] = []
 
@@ -62,29 +60,23 @@ def main() -> int:
         )
 
     require(
-        "public static boolean showZapretVpnSponsor = true;" in shared_config,
-        "SharedConfig must expose showZapretVpnSponsor defaulting to true",
+        "VIEW_TYPE_ZASTOGRAM_PROMO" in dialogs_adapter,
+        "ZaStoGram promo must use a stable dedicated item type",
     )
     require(
-        'getBoolean("showZapretVpnSponsor", true)' in shared_config,
-        "showZapretVpnSponsor must load as enabled by default",
+        "shouldShowZastogramPromo()" in dialogs_adapter,
+        "DialogsAdapter must gate the ZaStoGram row to the default chat list",
+    )
+    should_show_start = dialogs_adapter.find("private boolean shouldShowZastogramPromo()")
+    should_show_end = dialogs_adapter.find("public boolean isZastogramPromoDialog", should_show_start)
+    should_show_body = dialogs_adapter[should_show_start:should_show_end]
+    require(
+        "SharedConfig" not in should_show_body and "ZaStoPrivacy" not in should_show_body,
+        "ZaStoGram promo must not depend on proxy, ad, or user-toggle state",
     )
     require(
-        'putBoolean("showZapretVpnSponsor", showZapretVpnSponsor)' in shared_config,
-        "showZapretVpnSponsor must be persisted",
-    )
-
-    require(
-        "VIEW_TYPE_ZAPRET_VPN_SPONSOR" in dialogs_adapter,
-        "Sponsor must use a stable dedicated item type",
-    )
-    require(
-        "shouldShowZapretVpnSponsor()" in dialogs_adapter,
-        "DialogsAdapter must gate the sponsor row to the default chat list",
-    )
-    require(
-        'ZAPRET_VPN_SPONSOR_USERNAME = "zapretvpns_bot"' in dialogs_adapter,
-        "DialogsAdapter must use the real Zapret VPNs username",
+        'ZASTOGRAM_PROMO_USERNAME = "zastogram"' in dialogs_adapter,
+        "DialogsAdapter must use the real ZaStoGram channel username",
     )
     require(
         "filterLegacyProxySponsorDialogs(" in dialogs_adapter
@@ -92,44 +84,41 @@ def main() -> int:
         "DialogsAdapter must remove the legacy Telegram proxy promo dialog",
     )
     require(
-        "removeZapretVpnSponsorDialogFromArray(" in dialogs_adapter
-        and "insertZapretVpnSponsorItem(" in dialogs_adapter
-        and "isArchiveDialog(item.dialog)" in dialogs_adapter,
-        "DialogsAdapter must keep a separate sponsor item below the archive row without replacing chats",
+        "removeZastogramPromoDialogFromArray(" in dialogs_adapter
+        and "insertZastogramPromoItem(" in dialogs_adapter
+        and "itemInternals.add(0, new ItemInternal(VIEW_TYPE_ZASTOGRAM_PROMO))" in dialogs_adapter,
+        "DialogsAdapter must keep ZaStoGram as a separate first item without replacing chats",
     )
-    require(
-        "SharedConfig.showZapretVpnSponsor" in dialogs_adapter,
-        "DialogsAdapter must honor the hide setting",
-    )
-    is_sponsor_method = dialogs_adapter[
-        dialogs_adapter.find("public boolean isZapretVpnSponsorDialog"):
+    is_promo_method = dialogs_adapter[
+        dialogs_adapter.find("public boolean isZastogramPromoDialog"):
         dialogs_adapter.find("private ArrayList<TLRPC.Dialog> filterLegacyProxySponsorDialogs")
     ]
     require(
-        "!shouldShowZapretVpnSponsor()" in is_sponsor_method,
-        "Sponsor row detection must turn off when the setting is hidden",
+        "!shouldShowZastogramPromo()" in is_promo_method,
+        "ZaStoGram row detection must be limited to the main chat list",
     )
     require(
-        "DialogCell.CustomDialog" not in extract_zapret_adapter_region(dialogs_adapter)
-        and "customDialog.name" not in extract_zapret_adapter_region(dialogs_adapter)
-        and "customDialog.message" not in extract_zapret_adapter_region(dialogs_adapter),
-        "Sponsor row must not be rendered as a fake CustomDialog",
+        "DialogCell.CustomDialog" not in extract_promo_adapter_region(dialogs_adapter)
+        and "customDialog.name" not in extract_promo_adapter_region(dialogs_adapter)
+        and "customDialog.message" not in extract_promo_adapter_region(dialogs_adapter),
+        "ZaStoGram row must not be rendered as a fake CustomDialog",
     )
     require(
-        "getUserNameResolver().resolve(ZAPRET_VPN_SPONSOR_USERNAME" in dialogs_adapter
+        "getUserNameResolver().resolve(ZASTOGRAM_PROMO_USERNAME" in dialogs_adapter
         and "messagesController.dialogs_dict.get(dialogId)" in dialogs_adapter,
-        "DialogsAdapter must resolve the username and prefer an existing real dialog",
+        "DialogsAdapter must resolve @zastogram and prefer an existing real dialog",
     )
     require(
-        "cell.setDialog(sponsorDialog, dialogsType, folderId)" in dialogs_adapter
-        and "cell.setDialog(zapretVpnSponsorDialogId, null, 0, false, false)" in dialogs_adapter,
-        "Sponsor row must bind either the real dialog or the resolved real peer, never a placeholder dialog",
+        "cell.setZastogramPromo(true)" in dialogs_adapter
+        and "cell.setDialog(promoDialog, dialogsType, folderId)" in dialogs_adapter
+        and "cell.setDialog(zastogramPromoDialogId, null, 0, false, false)" in dialogs_adapter
+        and "timeString = getString(R.string.AppName)" in dialog_cell,
+        "ZaStoGram row must bind the real peer and render the app-name promo badge",
     )
     require(
-        "isZapretVpnSponsorDialog(position)" in dialogs_activity
-        and "openByUserName(DialogsAdapter.ZAPRET_VPN_SPONSOR_USERNAME" in dialogs_activity
-        and 'Browser.openUrl(getContext(), "https://t.me/zapretvpns_bot")' not in dialogs_activity,
-        "DialogsActivity must open the sponsor through Telegram username resolution, not Browser.openUrl",
+        "isZastogramPromoDialog(position)" in dialogs_activity
+        and "openByUserName(DialogsAdapter.ZASTOGRAM_PROMO_USERNAME" in dialogs_activity,
+        "DialogsActivity must open @zastogram through Telegram username resolution",
     )
     custom_dialog_start = dialog_cell.find("public void setDialog(CustomDialog dialog)")
     custom_dialog_end = dialog_cell.find("private void checkOnline()", custom_dialog_start)
@@ -169,18 +158,20 @@ def main() -> int:
         "FreeProxySettingsActivity must include the FreeProxyChannels block",
     )
     require(
-        re.search(
-            r"SettingCell\.Factory\.of\(27,[^;]+LocaleController\.getString\(R\.string\.ZapretVpnSponsorSetting\)[^;]+SharedConfig\.showZapretVpnSponsor",
-            free_proxy_settings_activity,
-            re.DOTALL,
-        )
-        is not None,
-        "FreeProxySettingsActivity must include a row that toggles the sponsor visibility",
+        "SettingCell.Factory.of(27," in free_proxy_settings_activity
+        and "LocaleController.getString(R.string.ZapretVpnBot)" in free_proxy_settings_activity
+        and '"@zapretvpns_bot"' in free_proxy_settings_activity,
+        "FreeProxySettingsActivity must pin the ZaSto VPN bot above the catalog",
     )
     require(
-        "SharedConfig.showZapretVpnSponsor = !SharedConfig.showZapretVpnSponsor" in free_proxy_settings_activity
-        and "SharedConfig.saveConfig()" in free_proxy_settings_activity,
-        "FreeProxySettingsActivity must toggle and persist sponsor visibility",
+        free_proxy_settings_activity.find("SettingCell.Factory.of(27,")
+        < free_proxy_settings_activity.find("SettingCell.Factory.of(1002,")
+        < free_proxy_settings_activity.find("items.add(UItem.asHeader(LocaleController.getString(R.string.FreeProxyChannels)))"),
+        "ZaSto VPN bot must be the first row in FreeProxySettingsActivity",
+    )
+    require(
+        'getMessagesController().openByUserName("zapretvpns_bot", this, 1)' in free_proxy_settings_activity,
+        "FreeProxySettingsActivity must open the pinned bot inside Telegram",
     )
 
     for item_id, (string_name, url) in EXPECTED_LINKS.items():
@@ -213,8 +204,8 @@ def main() -> int:
     return 0
 
 
-def extract_zapret_adapter_region(dialogs_adapter: str) -> str:
-    start = dialogs_adapter.find("ZAPRET")
+def extract_promo_adapter_region(dialogs_adapter: str) -> str:
+    start = dialogs_adapter.find("ZASTOGRAM_PROMO")
     if start < 0:
         return ""
     end = dialogs_adapter.find("case VIEW_TYPE_FORWARD_TO_STORIES_CELL", start)

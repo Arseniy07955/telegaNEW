@@ -151,6 +151,7 @@
 #define currentMediaConnection stateMachine.wss.mediaConnection
 #define currentWssRoute stateMachine.wss.route
 #define currentWssTransport stateMachine.wss.transport
+#define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -188,10 +189,9 @@ static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
-// WSS is a continuous byte-stream transport: outgoing MTProto bytes are pulled
-// from outgoingByteStream and cut into frames of at most WSS_STREAM_CHUNK_BYTES.
-// Pulling pauses while the socket already holds this much serialized output.
-static constexpr uint32_t WSS_STREAM_CHUNK_BYTES = 64 * 1024;
+// Outgoing MTProto bytes are pulled from outgoingByteStream and emitted one
+// packet per WebSocket frame. Pulling pauses while the socket already holds
+// this much serialized output.
 static constexpr size_t WSS_MAX_BUFFERED_OUTPUT_BYTES = 256 * 1024;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_CHANGE_CIPHER_SPEC = 0x14;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_ALERT = 0x15;
@@ -3933,9 +3933,11 @@ bool ConnectionSocket::flushWssStream(std::string *diagnostic) {
     if (!isCurrentTransportWss() || !currentWssTransport->isReady()) {
         return true;
     }
-    // WSS carries the same continuous MTProto byte stream as every TCP
-    // transport; WebSocket frames are chunking only and never encode packet
-    // boundaries.
+    // Outgoing bytes are queued in the shared stream like on any TCP transport,
+    // but frames are cut back at the recorded packet boundaries: the relay
+    // parses only the first MTProto packet of a frame and drops the rest with
+    // no error at all. Coalescing msgs_ack with the next handshake step this
+    // way stalled key creation for a whole datacenter.
     uint32_t flushedBytes = 0;
     while (outgoingByteStream->hasData()
             && currentWssTransport->queuedOutputBytes() < WSS_MAX_BUFFERED_OUTPUT_BYTES) {
@@ -3952,15 +3954,19 @@ bool ConnectionSocket::flushWssStream(std::string *diagnostic) {
         }
         uint32_t offset = 0;
         while (offset < available
+                && !outgoingWssPacketSizes.empty()
                 && currentWssTransport->queuedOutputBytes() < WSS_MAX_BUFFERED_OUTPUT_BYTES) {
-            uint32_t chunk = available - offset;
-            if (chunk > WSS_STREAM_CHUNK_BYTES) {
-                chunk = WSS_STREAM_CHUNK_BYTES;
+            // One MTProto packet per frame: the relay parses only the first
+            // packet of a frame and silently discards whatever follows it.
+            const uint32_t packetSize = outgoingWssPacketSizes.front();
+            if (packetSize == 0 || offset + packetSize > available) {
+                break;
             }
-            if (!currentWssTransport->write(buffer->bytes() + offset, chunk, diagnostic)) {
+            if (!currentWssTransport->write(buffer->bytes() + offset, packetSize, diagnostic)) {
                 return false;
             }
-            offset += chunk;
+            outgoingWssPacketSizes.pop_front();
+            offset += packetSize;
         }
         if (offset == 0) {
             break;
@@ -4387,6 +4393,7 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     currentTransportWss = false;
     currentWssTransport.reset();
     currentWssRoute = tgnet::wss::Route();
+    outgoingWssPacketSizes.clear();
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -4969,6 +4976,13 @@ void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
     }
     outgoingByteStream->append(buffer);
     queueAdjustWriteOpAfterOutboundAppend("writeBuffer");
+}
+
+void ConnectionSocket::noteWssPacketBoundary(uint32_t size) {
+    if (!isCurrentTransportWss() || size == 0) {
+        return;
+    }
+    outgoingWssPacketSizes.push_back(size);
 }
 
 void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend(const char *reason) {

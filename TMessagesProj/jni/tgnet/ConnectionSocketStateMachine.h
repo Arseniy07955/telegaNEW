@@ -146,9 +146,14 @@ public:
         bool mediaConnection = false;
         tgnet::wss::Route route;
         std::unique_ptr<tgnet::transport::Socket> transport;
-        // Outgoing MTProto bytes live in the shared outgoingByteStream, same
-        // as every TCP transport: the relay forwards a continuous byte stream
-        // and WebSocket frames are chunking only, never packet boundaries.
+        // Outgoing bytes live in the shared outgoingByteStream, but the relay
+        // handles only the FIRST MTProto packet of each WebSocket frame and
+        // silently drops the rest, so the stream must be cut back into frames
+        // exactly at packet boundaries. Sizes are recorded here as packets are
+        // queued. Measured 2026-08-09: msgs_ack and req_DH_params sent as two
+        // frames complete the handshake, the same pair coalesced into one frame
+        // gets no answer at all.
+        std::deque<uint32_t> outgoingPacketSizes;
     };
 
     struct AdmissionSubstate {

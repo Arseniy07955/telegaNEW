@@ -140,14 +140,15 @@ def main() -> None:
             and "wss_socket tls_ready" in wss_cpp
             and "wss_socket timeout" in wss_cpp,
             "WSS diagnostics must identify TCP, TLS, and timeout phases")
-    require("writeTransportPacket" not in socket_cpp
-            and "outgoingWssMessages" not in socket_cpp
-            and "wssHandshakePrefixSize" not in connection_cpp
-            and '{"writeTransportPacket"' not in socket_state_cpp
-            and "flushWssStream" in socket_cpp
+    # Измерено 2026-08-09: релей разбирает только ПЕРВЫЙ MTProto-пакет кадра и
+    # молча выбрасывает остальные. msgs_ack, склеенный со следующим шагом
+    # рукопожатия, оставлял датацентр без ключа навсегда.
+    require("flushWssStream" in socket_cpp
             and "outgoingByteStream->get" in socket_cpp
-            and "WSS_STREAM_CHUNK_BYTES" in socket_cpp,
-            "WSS must carry MTProto as one continuous byte stream; frames are chunking only")
+            and "outgoingWssPacketSizes" in socket_cpp
+            and "noteWssPacketBoundary" in socket_cpp
+            and "noteWssPacketBoundary" in connection_cpp,
+            "WSS frames must be cut exactly at MTProto packet boundaries")
     require("queuedOutputBytes" in wss_cpp
             and "readFailed" in wss_cpp
             and "EPOLLRDHUP" in wss_cpp

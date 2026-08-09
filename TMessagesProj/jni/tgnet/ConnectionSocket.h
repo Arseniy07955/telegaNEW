@@ -34,6 +34,7 @@ public:
 
     void writeBuffer(uint8_t *data, uint32_t size);
     void writeBuffer(NativeByteBuffer *buffer);
+    void noteWssPacketBoundary(uint32_t size);
     void openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType, int32_t datacenterId = 0, bool mediaConnection = false);
     void setTimeout(time_t timeout);
     time_t getTimeout();

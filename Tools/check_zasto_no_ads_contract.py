@@ -123,11 +123,6 @@ def main() -> int:
     )
 
     require(
-        "ZaStoPrivacy.DISABLE_ADS" in dialogs_adapter
-        and "return false;" in method_body(dialogs_adapter, "private boolean shouldShowZapretVpnSponsor"),
-        "DialogsAdapter must hide the local Zapret VPN sponsor row while DISABLE_ADS is enabled",
-    )
-    require(
         "ZaStoPrivacy.DISABLE_ADS" in method_body(dialogs_adapter, "private ArrayList<TLRPC.Dialog> filterLegacyProxySponsorDialogs"),
         "DialogsAdapter must remove legacy Telegram proxy sponsor dialogs while DISABLE_ADS is enabled",
     )

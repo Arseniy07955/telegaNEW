@@ -244,11 +244,12 @@ def main():
     )
     require(
         "WARMUP_DECISION_LOG_DEDUP_MS" in warmup
-        and "lastDecisionLogKey" in warmup
         and "shouldLogDecisionLocked" in warmup
-        and "DECISION_RAMP.equals(decision)" in warmup
-        and "DECISION_DELAY.equals(decision)" in warmup,
-        "ProxyWarmupGate must deduplicate repetitive ramp/delay logs by account/class/endpoint bucket",
+        and "decisionLogWindows" in warmup
+        and "DECISION_LOG_KEYS_LIMIT" in warmup
+        and "suppressedDecisionLogs" in warmup
+        and 'append(" repeated=")' in warmup,
+        "ProxyWarmupGate must throttle every decision log per key and report folded repeats",
         failures,
     )
     for body, owner in (

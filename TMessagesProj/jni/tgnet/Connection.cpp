@@ -777,8 +777,14 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     if (buffer2 != nullptr) {
         AES_ctr128_encrypt(buffer2->bytes(), buffer2->bytes(), buffer2->limit(), &encryptKey, encryptIv, encryptCount, &encryptNum);
     }
-    // Every transport, WSS included, carries the obfuscated MTProto stream as
-    // continuous bytes; chunking into wire units happens at the socket layer.
+    // The bytes go into the shared outgoing stream like on any TCP transport,
+    // but WSS additionally needs to know where this packet ends: the relay
+    // parses only the first MTProto packet of a WebSocket frame and silently
+    // drops the rest, so frames must be cut exactly here. The 64-byte init
+    // prefix belongs to the same frame as the packet that carries it.
+    const uint32_t packetBytes = buffer->remaining() + buff->remaining()
+            + (buffer2 != nullptr ? buffer2->remaining() : 0);
+    noteWssPacketBoundary(packetBytes);
     writeBuffer(buffer);
     writeBuffer(buff);
     if (buffer2 != nullptr) {
