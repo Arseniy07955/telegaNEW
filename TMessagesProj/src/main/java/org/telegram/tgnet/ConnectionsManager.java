@@ -295,13 +295,19 @@ public class ConnectionsManager extends BaseController {
             // обычно единственный и режется целиком, а IPv6 их сразу два и
             // блокируют их заметно реже. Если IPv6 у устройства нет, резолвер
             // его и не вернёт, и остаётся прежнее поведение.
-            // Сначала IPv4, следом IPv6. Наличие у устройства глобального
-            // IPv6-адреса ещё не значит, что маршрут до конкретного релея
-            // работает: у пользователя телефон отвечал по IPv6 в сети, но до
-            // kws1-1 не доходил ни разу. Поэтому IPv6 идёт дополнительным
-            // кандидатом, а не заменой рабочему пути.
-            List<String> addresses = new ArrayList<>(ipv4);
-            addresses.addAll(ipv6);
+            // Порядок семейств выбирается по тому, что у устройства реально
+            // есть. При отключённом IPv4 начинать с него — значит тратить
+            // попытку впустую на каждом соединении: диалоги и медиа грузятся
+            // ощутимо дольше. При работающем IPv4 он идёт первым, потому что
+            // глобальный IPv6-адрес ещё не означает маршрут до релея.
+            List<String> addresses;
+            if (!ipv6.isEmpty() && !deviceHasGlobalIpv4()) {
+                addresses = new ArrayList<>(ipv6);
+                addresses.addAll(ipv4);
+            } else {
+                addresses = new ArrayList<>(ipv4);
+                addresses.addAll(ipv6);
+            }
             if (addresses.isEmpty()) {
                 addresses = ipv4.isEmpty() ? ipv6 : ipv4;
             }
@@ -2019,6 +2025,31 @@ public class ConnectionsManager extends BaseController {
         }
         ArrayList<String> addresses = result.get();
         return addresses != null ? addresses : empty;
+    }
+
+    private static boolean deviceHasGlobalIpv4() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
+                    InetAddress inetAddress = interfaceAddress.getAddress();
+                    if (!(inetAddress instanceof Inet4Address)) {
+                        continue;
+                    }
+                    if (inetAddress.isLinkLocalAddress() || inetAddress.isLoopbackAddress()
+                            || inetAddress.isMulticastAddress()) {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        return false;
     }
 
     private static boolean deviceHasGlobalIpv6() {

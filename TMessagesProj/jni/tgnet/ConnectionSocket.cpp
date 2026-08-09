@@ -3394,6 +3394,16 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             manager.testBackend,
             &selectedWssRoute);
 
+    if (shouldUseWss && manager.getIpStratagy() == USE_IPV6_ONLY
+            && !selectedWssRoute.relayHostFallback.empty()) {
+        // У устройства нет IPv4 вообще, а зашитые адреса релеев — только IPv4.
+        // Начинать с них значит гарантированно терять попытку на каждом
+        // соединении: у пользователя с отключённым IPv4 из-за этого заметно
+        // медленнее грузились диалоги. Идём сразу по имени, DNS отдаст AAAA.
+        selectedWssRoute.viaFallback = true;
+        selectedWssRoute.connectHost = selectedWssRoute.relayHostFallback;
+    }
+
     if (shouldUseWss) {
         currentTransportWss = true;
         stateMachine.setTransportMode(TransportMode::Wss);
