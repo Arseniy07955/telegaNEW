@@ -598,10 +598,15 @@ public class SharedConfig {
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
             mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 0), 0, 2);
+            // WSS включён по умолчанию: на большинстве сетей он и нужен, а там,
+            // где релей датацентра закрыт, транспорт сам отходит на прямое
+            // соединение для этого датацентра. Осознанный выбор пользователя
+            // сохраняется: если тумблер уже трогали, берётся его значение.
             final boolean hasWssToggle = preferences.contains("wssTransportEnabled");
             wssTransportEnabled = hasWssToggle
-                    ? preferences.getBoolean("wssTransportEnabled", false)
-                    : preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY) != TRANSPORT_LEGACY_PROXY;
+                    ? preferences.getBoolean("wssTransportEnabled", true)
+                    : preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY) != TRANSPORT_LEGACY_PROXY
+                            || !preferences.contains("wssTransportMode");
             if (!hasWssToggle
                     || preferences.contains("wssTransportMode")
                     || preferences.contains("wssHost")

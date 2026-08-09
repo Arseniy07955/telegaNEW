@@ -866,6 +866,15 @@ JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeNati
             rtcServer.password = tgvoip::jni::JavaStringToStdString(env, endpointObject.getStringField("password"));
             rtcServer.isTurn = true;
             rtcServer.isTcp = endpointObject.getBooleanField("tcp");
+            if (!rtcServer.isTcp) {
+                // Тот же рефлектор, но запасным путём — по TCP. Сервер отдаёт
+                // рефлекторы как UDP, и там, где UDP режут, звонок не поднимается
+                // вовсе. Кандидат relay-tcp по приоритету ниже relay-udp, поэтому
+                // ICE берёт его только когда UDP не заработал.
+                RtcServer tcpServer = rtcServer;
+                tcpServer.isTcp = true;
+                descriptor.rtcServers.push_back(std::move(tcpServer));
+            }
             descriptor.rtcServers.push_back(std::move(rtcServer));
 
             Endpoint endpoint;

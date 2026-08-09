@@ -26,8 +26,9 @@ def main() -> None:
     connections_java = CONNECTIONS_JAVA.read_text(encoding="utf-8", errors="replace")
     file_loader = FILE_LOADER.read_text(encoding="utf-8", errors="replace")
 
-    require('preferences.getBoolean("wssTransportEnabled", false)' in shared_config,
-            "WSS must be opt-in by default")
+    require('preferences.getBoolean("wssTransportEnabled", true)' in shared_config
+            and "WSS включён по умолчанию" in shared_config,
+            "WSS must be enabled by default while keeping an explicit user choice")
     require('preferences.getInt("wssTransportMode"' in shared_config,
             "legacy WSS mode must migrate to the checkbox")
     require('.remove("wssHost")' in shared_config and '.remove("wssPath")' in shared_config,
