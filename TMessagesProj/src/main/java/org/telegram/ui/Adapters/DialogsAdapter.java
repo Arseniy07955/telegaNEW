@@ -28,6 +28,7 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import androidx.collection.LongSparseArray;
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager.widget.ViewPager;
@@ -39,6 +40,7 @@ import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
@@ -153,6 +155,10 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     private boolean zastogramPromoResolveRequested;
     private long zastogramPromoDialogId;
     private int zastogramPromoItemPosition = -1;
+    private boolean zastogramPromoPostRequestInFlight;
+    private boolean zastogramPromoPostLoaded;
+    private long zastogramPromoPostLastRequestTime;
+    private MessageObject zastogramPromoPost;
 
     private TLRPC.RequestPeerType requestPeerType;
     public boolean isEmpty;
@@ -365,6 +371,52 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             zastogramPromoDialogId = peerId;
             notifyDataSetChanged();
         });
+    }
+
+    private void requestZastogramPromoPost(MessagesController messagesController) {
+        if (zastogramPromoDialogId == 0 || zastogramPromoPostLoaded || zastogramPromoPostRequestInFlight) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (zastogramPromoPostLastRequestTime != 0 && now - zastogramPromoPostLastRequestTime < 60_000) {
+            return;
+        }
+        TLRPC.InputPeer inputPeer = messagesController.getInputPeer(zastogramPromoDialogId);
+        if (inputPeer == null) {
+            return;
+        }
+        zastogramPromoPostRequestInFlight = true;
+        zastogramPromoPostLastRequestTime = now;
+
+        TLRPC.TL_messages_getHistory request = new TLRPC.TL_messages_getHistory();
+        request.peer = inputPeer;
+        request.limit = 1;
+        ConnectionsManager.getInstance(currentAccount).sendRequest(request, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+            zastogramPromoPostRequestInFlight = false;
+            if (!(response instanceof TLRPC.messages_Messages)) {
+                return;
+            }
+            TLRPC.messages_Messages messages = (TLRPC.messages_Messages) response;
+            zastogramPromoPostLoaded = true;
+            messagesController.putUsers(messages.users, false);
+            messagesController.putChats(messages.chats, false);
+            if (!messages.messages.isEmpty()) {
+                LongSparseArray<TLRPC.User> users = new LongSparseArray<>();
+                LongSparseArray<TLRPC.Chat> chats = new LongSparseArray<>();
+                for (int i = 0; i < messages.users.size(); i++) {
+                    TLRPC.User user = messages.users.get(i);
+                    users.put(user.id, user);
+                }
+                for (int i = 0; i < messages.chats.size(); i++) {
+                    TLRPC.Chat chat = messages.chats.get(i);
+                    chats.put(chat.id, chat);
+                }
+                TLRPC.Message message = messages.messages.get(0);
+                message.dialog_id = zastogramPromoDialogId;
+                zastogramPromoPost = new MessageObject(currentAccount, message, users, chats, false, true);
+            }
+            notifyDataSetChanged();
+        }));
     }
 
     public int getDialogsCount() {
@@ -1057,7 +1109,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 if (promoDialog != null) {
                     cell.setDialog(promoDialog, dialogsType, folderId);
                 } else if (dialogId != 0) {
-                    cell.setDialog(zastogramPromoDialogId, null, 0, false, false);
+                    requestZastogramPromoPost(messagesController);
+                    cell.setDialog(zastogramPromoDialogId, zastogramPromoPost, zastogramPromoPost != null ? zastogramPromoPost.messageOwner.date : 0, false, false);
                 }
                 cell.checkHeight();
                 break;
