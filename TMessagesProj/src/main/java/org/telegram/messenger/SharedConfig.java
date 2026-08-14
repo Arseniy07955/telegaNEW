@@ -338,6 +338,7 @@ public class SharedConfig {
     public static int mtProxyTimingMode;
     public static int mtProxyStartupCoverMode;
     public static boolean wssTransportEnabled;
+    public static boolean callRelayTcpTlsEnabled;
     public static int messageSeenHintCount;
     public static int emojiInteractionsHintCount;
     public static int dayNightThemeSwitchHintCount;
@@ -408,6 +409,11 @@ public class SharedConfig {
 
     public static void setWssTransportEnabled(boolean enabled) {
         wssTransportEnabled = enabled;
+        saveConfig();
+    }
+
+    public static void setCallRelayTcpTlsEnabled(boolean enabled) {
+        callRelayTcpTlsEnabled = enabled;
         saveConfig();
     }
 
@@ -525,6 +531,7 @@ public class SharedConfig {
                 editor.putInt("mtProxyTimingMode", mtProxyTimingMode);
                 editor.putInt("mtProxyStartupCoverMode", mtProxyStartupCoverMode);
                 editor.putBoolean("wssTransportEnabled", wssTransportEnabled);
+                editor.putBoolean("callRelayTcpTlsEnabled", callRelayTcpTlsEnabled);
 
                 if (pendingAppUpdate != null) {
                     try {
@@ -624,6 +631,10 @@ public class SharedConfig {
                         .remove("wss_default_applied")
                         .apply();
             }
+            // Экспериментально и потому выключено по умолчанию: TURN-серверы звонка
+            // сервер отдаёт как UDP, а дублирование их в TCP и TLS помогает только
+            // там, где UDP режут, и ощутимо стоит в качестве связи.
+            callRelayTcpTlsEnabled = preferences.getBoolean("callRelayTcpTlsEnabled", false);
             String authKeyString = preferences.getString("pushAuthKey", null);
             if (!TextUtils.isEmpty(authKeyString)) {
                 pushAuthKey = Base64.decode(authKeyString, Base64.DEFAULT);

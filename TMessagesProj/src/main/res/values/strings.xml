@@ -11118,6 +11118,8 @@
     <string name="UseWssTransport">Use WSS transport</string>
     <string name="WssTransportOfficial">Official</string>
     <string name="WssTransportInfo">Uses Telegram WebSocket relays for supported data centers. This is a client transport, not a proxy, and does not require a local port or custom gateway.</string>
+    <string name="CallRelayTcpTls">Calls over TCP/TLS (experimental)</string>
+    <string name="CallRelayTcpTlsInfo">Also tries the call relays over TCP and TLS, not just UDP. Helps where UDP is blocked entirely. These routes are used only if UDP fails, and they noticeably degrade call quality.</string>
 
     <string name="Community">Community</string>
     <string name="CommunityAddGroupToCommunity">Add Group to a Community</string>

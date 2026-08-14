@@ -155,6 +155,7 @@ public final class Instance {
         public final int maxApiLayer;
         public final boolean enableSm;
         public final String customParameters;
+        public final boolean relayTcpTls;
 
         public Config(
             double initializationTimeout,
@@ -169,7 +170,8 @@ public final class Instance {
             String logPath,
             String statsLogPath,
             int maxApiLayer,
-            String customParameters
+            String customParameters,
+            boolean relayTcpTls
         ) {
             this.initializationTimeout = initializationTimeout;
             this.receiveTimeout = receiveTimeout;
@@ -184,6 +186,7 @@ public final class Instance {
             this.maxApiLayer = maxApiLayer;
             this.enableSm = enableSm;
             this.customParameters = customParameters;
+            this.relayTcpTls = relayTcpTls;
         }
 
         @Override
@@ -202,6 +205,7 @@ public final class Instance {
                     ", maxApiLayer=" + maxApiLayer +
                     ", enableSm=" + enableSm +
                     ", customParameters=" + customParameters +
+                    ", relayTcpTls=" + relayTcpTls +
                     '}';
         }
     }

@@ -619,12 +619,25 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     for (auto &server : _rtcServers) {
         if (server.isTurn) {
-            turnServers.push_back(cricket::RelayServerConfig(
+            cricket::ProtocolType proto = cricket::PROTO_UDP;
+            if (server.isTls) {
+                proto = cricket::PROTO_TLS;
+            } else if (server.isTcp) {
+                proto = cricket::PROTO_TCP;
+            }
+            cricket::RelayServerConfig relayConfig(
                 rtc::SocketAddress(server.host, server.port),
                 server.login,
                 server.password,
-                server.isTcp ? cricket::PROTO_TCP : cricket::PROTO_UDP
-            ));
+                proto
+            );
+            if (server.isTls) {
+                // Сервер адресуется по IP, а не по имени, поэтому проверять цепочку
+                // сертификата не по чему. TLS здесь не защищает медиа — оно и так
+                // зашифровано выше по стеку — а только придаёт трафику вид HTTPS.
+                relayConfig.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
+            }
+            turnServers.push_back(std::move(relayConfig));
         } else {
             rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
             stunServers.insert(stunAddress);

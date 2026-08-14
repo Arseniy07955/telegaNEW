@@ -845,6 +845,8 @@ JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeNati
     };
     descriptor.version = v;
 
+    const bool relayTcpTls = configObject.getBooleanField("relayTcpTls") == JNI_TRUE;
+
     for (int i = 0, size = env->GetArrayLength(endpoints); i < size; i++) {
         JavaObject endpointObject(env, env->GetObjectArrayElement(endpoints, i));
         bool isRtc = endpointObject.getBooleanField("isRtc");
@@ -856,6 +858,20 @@ JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeNati
             rtcServer.login = tgvoip::jni::JavaStringToStdString(env, endpointObject.getStringField("username"));
             rtcServer.password = tgvoip::jni::JavaStringToStdString(env, endpointObject.getStringField("password"));
             rtcServer.isTurn = endpointObject.getBooleanField("turn");
+            if (relayTcpTls && rtcServer.isTurn) {
+                // Тот же TURN, но по TCP и по TLS. Сервер отдаёт его как UDP, и там,
+                // где UDP режут целиком, звонок не поднимается вовсе. Кандидаты
+                // relay-tcp и relay-tls по приоритету ниже relay-udp, поэтому ICE
+                // берёт их только когда UDP не заработал.
+                RtcServer tcpServer = rtcServer;
+                tcpServer.isTcp = true;
+                descriptor.rtcServers.push_back(std::move(tcpServer));
+
+                RtcServer tlsServer = rtcServer;
+                tlsServer.isTcp = true;
+                tlsServer.isTls = true;
+                descriptor.rtcServers.push_back(std::move(tlsServer));
+            }
             descriptor.rtcServers.push_back(std::move(rtcServer));
         } else {
             RtcServer rtcServer;
