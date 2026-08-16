@@ -792,7 +792,8 @@ JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeNati
                     .maxApiLayer = configObject.getIntField("maxApiLayer"),
                     .enableHighBitrateVideo = true,
                     .preferredVideoCodecs = {cricket::kVp9CodecName},
-                    .customParameters = tgvoip::jni::JavaStringToStdString(env, configObject.getStringField("customParameters"))
+                    .customParameters = tgvoip::jni::JavaStringToStdString(env, configObject.getStringField("customParameters")),
+                    .relayTcpTls = configObject.getBooleanField("relayTcpTls") == JNI_TRUE
             },
             .encryptionKey = EncryptionKey(
                     std::move(encryptionKeyValue),

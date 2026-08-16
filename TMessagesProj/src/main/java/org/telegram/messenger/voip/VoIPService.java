@@ -3448,6 +3448,23 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			if (forceTcp) {
 				AndroidUtilities.runOnUIThread(() -> Toast.makeText(VoIPService.this, "This call uses TCP which will degrade its quality.", Toast.LENGTH_SHORT).show());
 			}
+			// Без этого нельзя понять, почему звонок пошёл тем или иным путём: версия
+			// решает, какая реализация собирает кандидаты, а состав connections —
+			// есть ли вообще TURN-серверы, которые можно продублировать в TCP и TLS.
+			if (BuildVars.LOGS_ENABLED) {
+				final StringBuilder connectionsInfo = new StringBuilder();
+				for (TLRPC.PhoneConnection connection : privateCall.connections) {
+					connectionsInfo
+							.append(connection instanceof TLRPC.TL_phoneConnectionWebrtc ? " webrtc" : " reflector")
+							.append(":").append(connection.port)
+							.append(connection.turn ? "/turn" : "")
+							.append(connection.stun ? "/stun" : "")
+							.append(connection.tcp ? "/tcp" : "");
+				}
+				FileLog.d("VoIP: version=" + privateCall.protocol.library_versions.get(0)
+						+ ", relayTcpTls=" + SharedConfig.callRelayTcpTlsEnabled
+						+ ", connections =" + connectionsInfo);
+			}
 
 			// proxy
 			Instance.Proxy proxy = null;

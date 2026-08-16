@@ -125,6 +125,9 @@ struct Config {
     std::vector<std::string> preferredVideoCodecs;
     ProtocolVersion protocolVersion = ProtocolVersion::V0;
     std::string customParameters = "";
+    // Разрешает резервные маршруты к релеям по TCP и TLS. Без него реализации
+    // берут только UDP-адреса, как в апстриме.
+    bool relayTcpTls = false;
 };
 
 struct EncryptionKey {

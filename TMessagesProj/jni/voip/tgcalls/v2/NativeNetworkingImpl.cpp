@@ -637,6 +637,8 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
                 // зашифровано выше по стеку — а только придаёт трафику вид HTTPS.
                 relayConfig.tls_cert_policy = cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK;
             }
+            RTC_LOG(LS_INFO) << "Adding TURN server: " << server.host << ":" << server.port
+                             << " proto=" << (server.isTls ? "tls" : (server.isTcp ? "tcp" : "udp"));
             turnServers.push_back(std::move(relayConfig));
         } else {
             rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
