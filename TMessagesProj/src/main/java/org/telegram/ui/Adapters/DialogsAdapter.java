@@ -117,6 +117,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             VIEW_TYPE_DIALOG_COMMUNITY = 24;
 
     public static final String ZASTOGRAM_PROMO_USERNAME = "zastogram";
+    private static final long ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL = 60_000L;
 
     private Context mContext;
     private ArchiveHintCell archiveHintCell;
@@ -156,9 +157,16 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     private long zastogramPromoDialogId;
     private int zastogramPromoItemPosition = -1;
     private boolean zastogramPromoPostRequestInFlight;
-    private boolean zastogramPromoPostLoaded;
+    private boolean zastogramPromoPostRefreshScheduled;
     private long zastogramPromoPostLastRequestTime;
     private MessageObject zastogramPromoPost;
+    private final Runnable zastogramPromoPostRefreshRunnable = () -> {
+        zastogramPromoPostRefreshScheduled = false;
+        if (parentFragment != null && parentFragment.isPaused()) {
+            return;
+        }
+        requestZastogramPromoPost(MessagesController.getInstance(currentAccount));
+    };
 
     private TLRPC.RequestPeerType requestPeerType;
     public boolean isEmpty;
@@ -373,13 +381,25 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         });
     }
 
+    private void scheduleZastogramPromoPostRefresh(long delay) {
+        if (zastogramPromoPostRefreshScheduled || !shouldShowZastogramPromo()) {
+            return;
+        }
+        zastogramPromoPostRefreshScheduled = true;
+        AndroidUtilities.runOnUIThread(zastogramPromoPostRefreshRunnable, Math.max(0, delay));
+    }
+
     private void requestZastogramPromoPost(MessagesController messagesController) {
-        if (zastogramPromoDialogId == 0 || zastogramPromoPostLoaded || zastogramPromoPostRequestInFlight) {
+        if (zastogramPromoDialogId == 0 || zastogramPromoPostRequestInFlight) {
             return;
         }
         long now = SystemClock.elapsedRealtime();
-        if (zastogramPromoPostLastRequestTime != 0 && now - zastogramPromoPostLastRequestTime < 60_000) {
-            return;
+        if (zastogramPromoPostLastRequestTime != 0) {
+            long elapsed = now - zastogramPromoPostLastRequestTime;
+            if (elapsed < ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL) {
+                scheduleZastogramPromoPostRefresh(ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL - elapsed);
+                return;
+            }
         }
         TLRPC.InputPeer inputPeer = messagesController.getInputPeer(zastogramPromoDialogId);
         if (inputPeer == null) {
@@ -393,27 +413,32 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         request.limit = 1;
         ConnectionsManager.getInstance(currentAccount).sendRequest(request, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
             zastogramPromoPostRequestInFlight = false;
+            scheduleZastogramPromoPostRefresh(ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL);
             if (!(response instanceof TLRPC.messages_Messages)) {
                 return;
             }
             TLRPC.messages_Messages messages = (TLRPC.messages_Messages) response;
-            zastogramPromoPostLoaded = true;
             messagesController.putUsers(messages.users, false);
             messagesController.putChats(messages.chats, false);
-            if (!messages.messages.isEmpty()) {
-                LongSparseArray<TLRPC.User> users = new LongSparseArray<>();
-                LongSparseArray<TLRPC.Chat> chats = new LongSparseArray<>();
-                for (int i = 0; i < messages.users.size(); i++) {
-                    TLRPC.User user = messages.users.get(i);
-                    users.put(user.id, user);
-                }
-                for (int i = 0; i < messages.chats.size(); i++) {
-                    TLRPC.Chat chat = messages.chats.get(i);
-                    chats.put(chat.id, chat);
-                }
-                TLRPC.Message message = messages.messages.get(0);
-                message.dialog_id = zastogramPromoDialogId;
-                zastogramPromoPost = new MessageObject(currentAccount, message, users, chats, false, true);
+            if (messages.messages.isEmpty()) {
+                return;
+            }
+            LongSparseArray<TLRPC.User> users = new LongSparseArray<>();
+            LongSparseArray<TLRPC.Chat> chats = new LongSparseArray<>();
+            for (int i = 0; i < messages.users.size(); i++) {
+                TLRPC.User user = messages.users.get(i);
+                users.put(user.id, user);
+            }
+            for (int i = 0; i < messages.chats.size(); i++) {
+                TLRPC.Chat chat = messages.chats.get(i);
+                chats.put(chat.id, chat);
+            }
+            TLRPC.Message message = messages.messages.get(0);
+            message.dialog_id = zastogramPromoDialogId;
+            int previousId = zastogramPromoPost != null ? zastogramPromoPost.getId() : 0;
+            zastogramPromoPost = new MessageObject(currentAccount, message, users, chats, false, true);
+            if (zastogramPromoPost.getId() == previousId) {
+                return;
             }
             notifyDataSetChanged();
         }));
