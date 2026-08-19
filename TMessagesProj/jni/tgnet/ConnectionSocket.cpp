@@ -3920,6 +3920,7 @@ bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &pa
         if (payload.empty()) {
             continue;
         }
+        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
             ConnectionsManager::getInstance(instanceNum).delegate->onBytesReceived((int32_t) payload.size(), currentNetworkType, instanceNum);
         }
@@ -5078,9 +5079,14 @@ void ConnectionSocket::adjustWriteOp() {
     }
     bool hasPendingClientHello = pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize;
     bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
-    bool hasPendingWssWrite = currentTransportWss && currentWssTransport != nullptr
-            && currentWssTransport->wantsWrite();
-    if ((proxyAuthState == 0 && (hasPendingTlsFrame || hasPendingWssWrite || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
+    if (isCurrentTransportWss()) {
+        const bool hasPendingWssWrite = currentWssTransport->wantsWrite();
+        const bool canWriteQueuedApplicationData = outgoingByteStream->hasData()
+                && currentWssTransport->canWriteApplicationData();
+        if (hasPendingWssWrite || canWriteQueuedApplicationData) {
+            eventMask.events |= EPOLLOUT;
+        }
+    } else if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;

@@ -337,7 +337,7 @@ public class SharedConfig {
     public static int mtProxyRecordSizingMode;
     public static int mtProxyTimingMode;
     public static int mtProxyStartupCoverMode;
-    public static boolean wssTransportEnabled;
+    public static volatile boolean wssTransportEnabled;
     public static boolean callRelayTcpTlsEnabled;
     public static int messageSeenHintCount;
     public static int emojiInteractionsHintCount;

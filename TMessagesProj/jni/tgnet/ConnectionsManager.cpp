@@ -2887,7 +2887,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 }
                 break;
             case ConnectionTypeDownload: {
-                auto map = request->isCancelRequest() ? downloadCancelRunningRequestCount : downloadRunningRequestCount;
+                auto &map = request->isCancelRequest() ? downloadCancelRunningRequestCount : downloadRunningRequestCount;
                 uint32_t currentCount;
                 auto dcIter = map.find(datacenterId);
                 if (dcIter != map.end()) {
@@ -3277,7 +3277,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 break;
             case ConnectionTypeDownload: {
                 uint32_t currentCount;
-                auto map = request->isCancelRequest() ? downloadCancelRunningRequestCount : downloadRunningRequestCount;
+                auto &map = request->isCancelRequest() ? downloadCancelRunningRequestCount : downloadRunningRequestCount;
                 auto dcIter = map.find(datacenterId);
                 if (dcIter != map.end()) {
                     currentCount = dcIter->second;
@@ -3304,7 +3304,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                         DEBUG_D("skip queue, token = %d: download type: running download requests >= %d", request->requestToken, max);
                     continue;
                 }
-                downloadRunningRequestCount[datacenterId] = currentCount + 1;
+                map[datacenterId] = currentCount + 1;
                 break;
             }
             case ConnectionTypeProxy:
@@ -4326,6 +4326,9 @@ void ConnectionsManager::pauseNetwork() {
 
 void ConnectionsManager::setNetworkAvailable(bool value, int32_t type, bool slow) {
     scheduleTask([&, value, type, slow] {
+        if (networkAvailable == value && currentNetworkType == type && networkSlow == slow) {
+            return;
+        }
         networkAvailable = value;
         currentNetworkType = type;
         networkSlow = slow;
@@ -4348,6 +4351,9 @@ void ConnectionsManager::setNetworkAvailable(bool value, int32_t type, bool slow
 
 void ConnectionsManager::setIpStrategy(uint8_t value) {
     scheduleTask([&, value] {
+        if (ipStrategy == value) {
+            return;
+        }
         lastProtocolUsefullData = false;
         ipStrategy = value;
     });

@@ -36,6 +36,7 @@ public:
     virtual size_t queuedOutputBytes() const = 0;
     virtual bool isReady() const = 0;
     virtual bool wantsWrite() const = 0;
+    virtual bool canWriteApplicationData() const = 0;
     virtual bool isClosed() const = 0;
     virtual HandshakePhase handshakePhase() const = 0;
     virtual const char *transportName() const = 0;

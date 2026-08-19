@@ -890,6 +890,7 @@ public class ConnectionsManager extends BaseController {
             FileLog.d("selected ip strategy " + selectedStrategy);
         }
         native_setIpStrategy(currentAccount, selectedStrategy);
+        native_setWssTransportEnabled(currentAccount, isWssTransportActive());
         native_setNetworkAvailable(currentAccount, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), ApplicationLoader.isConnectionSlow());
     }
 
@@ -1570,16 +1571,23 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setWssTransportEnabled() {
+        boolean enabled = isWssTransportActive();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            native_setWssTransportEnabled(a, SharedConfig.wssTransportEnabled);
+            native_setWssTransportEnabled(a, enabled);
         }
+    }
+
+    public static boolean isWssTransportActive() {
+        return SharedConfig.wssTransportEnabled
+                && !SharedConfig.isProxyEnabled()
+                && !ApplicationLoader.isVpnActive();
     }
 
     public static boolean supportsCdnFileRedirects() {
         // Public Telegram WebSocket relays address the five regular DCs, not
         // the separate CDN DC ids. With WSS selected, ask the source DC to
         // serve the file through its media relay instead of redirecting it.
-        return !SharedConfig.wssTransportEnabled;
+        return !isWssTransportActive();
     }
 
     static int resolveMtProxyClientHelloFragmentationMode() {

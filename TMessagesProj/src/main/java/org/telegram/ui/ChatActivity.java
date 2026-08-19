@@ -34409,7 +34409,10 @@ public class ChatActivity extends BaseFragment implements
         appendTechnicalDetail(result, "connection_state", technicalConnectionState(ConnectionsManager.getInstance(currentAccount).getConnectionState()));
         appendTechnicalDetail(result, "network_type", ApplicationLoader.getCurrentNetworkType());
         appendTechnicalDetail(result, "network_online", ApplicationLoader.isNetworkOnline());
+        appendTechnicalDetail(result, "vpn_active", ApplicationLoader.isVpnActive());
         appendTechnicalDetail(result, "wss_configured", SharedConfig.wssTransportEnabled);
+        appendTechnicalDetail(result, "wss_active", ConnectionsManager.isWssTransportActive());
+        appendTechnicalDetail(result, "cdn_redirects_supported", ConnectionsManager.supportsCdnFileRedirects());
         boolean proxyEnabled = SharedConfig.isProxyEnabled();
         appendTechnicalDetail(result, "proxy_enabled", proxyEnabled);
         if (proxyEnabled && SharedConfig.currentProxy != null) {

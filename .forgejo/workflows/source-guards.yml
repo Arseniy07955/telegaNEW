@@ -26,6 +26,7 @@ jobs:
           checks=(
             Tools/check_mtproxy_all.py
             Tools/check_wss_transport_mode.py
+            Tools/check_transport_throughput_contract.py
             Tools/check_plugin_client_utils_contract.py
             Tools/check_plugin_android_utils_contract.py
             Tools/check_plugin_text_formatting_contract.py

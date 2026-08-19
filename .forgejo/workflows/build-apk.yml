@@ -81,6 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 Tools/check_mtproxy_all.py
+          python3 Tools/check_transport_throughput_contract.py
           python3 Tools/check_plugin_client_utils_contract.py
           python3 Tools/check_plugin_android_utils_contract.py
           python3 Tools/check_plugin_text_formatting_contract.py

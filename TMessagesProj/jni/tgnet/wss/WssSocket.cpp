@@ -769,6 +769,10 @@ bool Socket::wantsWrite() const {
             || (!pendingOutput.empty() && ioWait != IoWait::Read);
 }
 
+bool Socket::canWriteApplicationData() const {
+    return state == State::Ready && ioWait != IoWait::Read;
+}
+
 bool Socket::isClosed() const {
     return state == State::Closed;
 }
