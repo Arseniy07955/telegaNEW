@@ -745,6 +745,8 @@ public class ChatActivity extends BaseFragment implements
     private boolean forceScrollToFirst;
     private int loadedPinnedMessagesCount;
     private int totalPinnedMessagesCount;
+    private int pinnedMessagesGeneration;
+    private boolean pinnedTopicDataLoaded;
     public boolean loadingPinnedMessagesList;
     private boolean pinnedEndReached;
 
@@ -752,10 +754,18 @@ public class ChatActivity extends BaseFragment implements
         pinnedMessageIds.clear();
         pinnedMessageObjects.clear();
         currentPinnedMessageId = 0;
+        maxPinnedMessageId = 0;
         loadedPinnedMessagesCount = 0;
         totalPinnedMessagesCount = 0;
+        pinnedEndReached = false;
+        pinnedTopicDataLoaded = false;
+        loadingPinnedMessagesList = false;
+        if (isTopic) {
+            pinnedMessagesGeneration++;
+        }
         updatePinnedMessageView(true);
-        getMediaDataController().loadPinnedMessages(getDialogId(), 0, chatInfo == null ? 0 : chatInfo.pinned_msg_id);
+        long topicId = isTopic ? getTopicId() : 0;
+        getMediaDataController().loadPinnedMessages(getDialogId(), topicId, 0, topicId == 0 && chatInfo != null ? chatInfo.pinned_msg_id : 0, topicId != 0 ? pinnedMessagesGeneration : 0);
         loadingPinnedMessagesList = true;
         updatePinnedTopicStarterMessage();
     }
@@ -1242,6 +1252,7 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_VIEW_STATISTICS = 115;
     public final static int OPTION_ZASTO_EDIT_HISTORY = 200;
     public final static int OPTION_SAVE_CLEAN_ROUND_VIDEO = 201;
+    public final static int OPTION_MESSAGE_TECHNICAL_DETAILS = 202;
 
     private final static int[] allowedNotificationsDuringChatListAnimations = new int[]{
             NotificationCenter.messagesRead,
@@ -11575,6 +11586,9 @@ public class ChatActivity extends BaseFragment implements
         }
         bundle.putInt("chatMode", MODE_PINNED);
         ChatActivity fragment = new ChatActivity(bundle);
+        if (isTopic) {
+            ForumUtilities.applyTopic(fragment, MessagesStorage.TopicKey.of(getDialogId(), getTopicId()));
+        }
         fragment.pinnedMessageIds = new ArrayList<>(pinnedMessageIds);
         fragment.pinnedMessageObjects = new HashMap<>(pinnedMessageObjects);
         for (int a = 0, N = pinnedMessageIds.size(); a < N; a++) {
@@ -11593,8 +11607,11 @@ public class ChatActivity extends BaseFragment implements
             }
         }
         fragment.loadedPinnedMessagesCount = loadedPinnedMessagesCount;
-        fragment.totalPinnedMessagesCount = isTopic ? pinnedMessageIds.size() : totalPinnedMessagesCount;
+        fragment.totalPinnedMessagesCount = totalPinnedMessagesCount;
         fragment.pinnedEndReached = pinnedEndReached;
+        fragment.maxPinnedMessageId = maxPinnedMessageId;
+        fragment.pinnedMessagesGeneration = pinnedMessagesGeneration;
+        fragment.pinnedTopicDataLoaded = pinnedTopicDataLoaded;
         fragment.userInfo = userInfo;
         fragment.chatInfo = chatInfo;
         fragment.chatActivityDelegate = new ChatActivityDelegate() {
@@ -11630,7 +11647,6 @@ public class ChatActivity extends BaseFragment implements
                     showPinBulletin = true;
                     int tag = ++pinBullerinTag;
                     int oldTotalPinnedCount = isTopic ? fragment.getPinnedMessagesCount() : getPinnedMessagesCount();
-                    ArrayList<Integer> pinnedMessageIdsToUnpin = new ArrayList<>(isTopic ? fragment.pinnedMessageIds : pinnedMessageIds);
                     pinBulletin = BulletinFactory.createUnpinAllMessagesBulletin(ChatActivity.this, oldTotalPinnedCount, hide,
                             () -> {
                                 if (hide) {
@@ -11647,9 +11663,7 @@ public class ChatActivity extends BaseFragment implements
                             () -> {
                                 if (!hide) {
                                     if (isTopic) {
-                                        for (int i = 0; i < pinnedMessageIdsToUnpin.size(); i++) {
-                                            getMessagesController().pinMessage(currentChat, currentUser, pinnedMessageIdsToUnpin.get(i), true, false, false);
-                                        }
+                                        getMessagesController().unpinAllMessages(currentChat, currentUser, (int) getTopicId());
                                     } else {
                                         getMessagesController().unpinAllMessages(currentChat, currentUser);
                                     }
@@ -16191,7 +16205,7 @@ public class ChatActivity extends BaseFragment implements
             }
             currentPinnedMessageId = findClosest(pinnedMessageIds, forceNextPinnedMessageId != 0 ? forceNextPinnedMessageId : maxVisibleId, currentPinnedMessageIndex);
             if (!inMenuMode && !loadingPinnedMessagesList && !pinnedEndReached && (isTopic || (!pinnedMessageIds.isEmpty() && currentPinnedMessageIndex[0] > pinnedMessageIds.size() - 2))) {
-                getMediaDataController().loadPinnedMessages(dialog_id, maxPinnedMessageId, 0);
+                getMediaDataController().loadPinnedMessages(dialog_id, isTopic ? getTopicId() : 0, maxPinnedMessageId, 0, isTopic ? pinnedMessagesGeneration : 0);
                 loadingPinnedMessagesList = true;
             }
         }
@@ -22528,7 +22542,7 @@ public class ChatActivity extends BaseFragment implements
                         avatarContainer.updateSubtitle();
                     }
                     if (!inMenuMode && !loadingPinnedMessagesList && !pinnedMessageIds.isEmpty() && chatInfo.pinned_msg_id > pinnedMessageIds.get(0)) {
-                        getMediaDataController().loadPinnedMessages(dialog_id, 0, chatInfo.pinned_msg_id);
+                        getMediaDataController().loadPinnedMessages(dialog_id, isTopic ? getTopicId() : 0, 0, isTopic ? 0 : chatInfo.pinned_msg_id, isTopic ? pinnedMessagesGeneration : 0);
                         loadingPinnedMessagesList = true;
                     }
                 }
@@ -23325,6 +23339,22 @@ public class ChatActivity extends BaseFragment implements
                     int maxId = (Integer) args[5];
                     int totalPinnedCount = (Integer) args[6];
                     boolean endReached = (Boolean) args[7];
+                    long loadedTopicId = args.length > 8 ? (Long) args[8] : 0;
+                    int nextMaxId = args.length > 9 ? (Integer) args[9] : 0;
+                    int loadedGeneration = args.length > 10 ? (Integer) args[10] : 0;
+                    boolean requestSucceeded = args.length <= 11 || (Boolean) args[11];
+                    if ((loadedTopicId != 0 && (!isTopic || loadedTopicId != getTopicId() || loadedGeneration != pinnedMessagesGeneration)) || (loadedTopicId == 0 && isTopic && replaceObjects != null)) {
+                        return;
+                    }
+                    if (!requestSucceeded) {
+                        if (loadedTopicId == 0) {
+                            loadingPinnedMessagesList = false;
+                        }
+                        return;
+                    }
+                    if (loadedTopicId != 0) {
+                        pinnedTopicDataLoaded = true;
+                    }
                     HashMap<Integer, MessageObject> oldPinned = new HashMap<>(pinnedMessageObjects);
                     if (replaceObjects != null) {
                         loadingPinnedMessagesList = false;
@@ -23333,7 +23363,7 @@ public class ChatActivity extends BaseFragment implements
                             pinnedMessageObjects.clear();
                         }
                         totalPinnedMessagesCount = totalPinnedCount;
-                        pinnedEndReached = endReached;
+                        pinnedEndReached = maxId == 0 ? endReached : pinnedEndReached || endReached;
                     }
                     boolean updated = false;
                     if (arrayList != null) {
@@ -23403,11 +23433,17 @@ public class ChatActivity extends BaseFragment implements
                         }
                         updated = true;
                     }
-                    if (updated) {
+                    loadedPinnedMessagesCount = pinnedMessageIds.size();
+                    if (updated || replaceObjects != null) {
+                        Collections.sort(pinnedMessageIds, (o1, o2) -> o2.compareTo(o1));
+                        if (nextMaxId != 0) {
+                            maxPinnedMessageId = nextMaxId;
+                        } else if (maxId == 0 || maxPinnedMessageId == 0) {
+                            maxPinnedMessageId = pinnedMessageIds.isEmpty() ? 0 : pinnedMessageIds.get(pinnedMessageIds.size() - 1);
+                        }
                         if (chatMode == MODE_PINNED && avatarContainer != null) {
                             avatarContainer.setTitle(LocaleController.formatPluralString("PinnedMessagesCount", getPinnedMessagesCount()));
                         }
-                        Collections.sort(pinnedMessageIds, (o1, o2) -> o2.compareTo(o1));
                         if (pinnedMessageIds.isEmpty()) {
                             hidePinnedMessageView(true);
                         } else {
@@ -23419,6 +23455,17 @@ public class ChatActivity extends BaseFragment implements
                         if (pin) {
                             if (arrayList != null) {
                                 processNewMessages(arrayList);
+                            } else if (replaceObjects != null && !replaceObjects.isEmpty()) {
+                                ArrayList<MessageObject> loadedObjects = new ArrayList<>();
+                                for (int a = 0, N = ids.size(); a < N; a++) {
+                                    MessageObject object = replaceObjects.get(ids.get(a));
+                                    if (object != null) {
+                                        loadedObjects.add(object);
+                                    }
+                                }
+                                if (!loadedObjects.isEmpty()) {
+                                    processNewMessages(loadedObjects);
+                                }
                             }
                         } else {
                             processDeletedMessages(ids, ChatObject.isChannel(currentChat) ? dialog_id : 0, false);
@@ -23804,20 +23851,21 @@ public class ChatActivity extends BaseFragment implements
         } else if (id == NotificationCenter.pinnedInfoDidLoad) {
             long did = (Long) args[0];
             if (did == dialog_id) {
+                if (isTopic && pinnedTopicDataLoaded) {
+                    return;
+                }
                 ArrayList<Integer> pinnedMessages = (ArrayList<Integer>) args[1];
-                if (chatMode == MODE_PINNED) {
+                if (chatMode == MODE_PINNED || isTopic) {
                     pinnedMessageIds = new ArrayList<>(pinnedMessages);
                     pinnedMessageObjects = new HashMap<>((HashMap<Integer, MessageObject>) args[2]);
                 } else {
                     pinnedMessageIds = pinnedMessages;
                     pinnedMessageObjects = (HashMap<Integer, MessageObject>) args[2];
                 }
-                maxPinnedMessageId = pinnedMessageIds.size() > 0 ? pinnedMessageIds.get(pinnedMessageIds.size() - 1) : 0;
                 int fallbackId = pinnedMessageIds.isEmpty() ? 0 : pinnedMessageIds.get(0);
                 if (isTopic) {
-                    int size = pinnedMessageIds.size();
                     for (int i = 0; i < pinnedMessageIds.size(); i++) {
-                        int messageId = pinnedMessages.get(i);
+                        int messageId = pinnedMessageIds.get(i);
                         MessageObject messageObject = pinnedMessageObjects.get(messageId);
                         if (messageObject == null) {
                             pinnedMessageIds.remove(i);
@@ -23835,13 +23883,14 @@ public class ChatActivity extends BaseFragment implements
                 }
 
                 loadedPinnedMessagesCount = pinnedMessageIds.size();
-                totalPinnedMessagesCount = (Integer) args[3];
-                pinnedEndReached = (Boolean) args[4];
+                maxPinnedMessageId = pinnedMessageIds.isEmpty() ? 0 : pinnedMessageIds.get(pinnedMessageIds.size() - 1);
+                totalPinnedMessagesCount = isTopic ? loadedPinnedMessagesCount : (Integer) args[3];
+                pinnedEndReached = !isTopic && (Boolean) args[4];
 
                 getMediaDataController().loadReplyMessagesForMessages(new ArrayList<>(pinnedMessageObjects.values()), dialog_id, 0, 0, null, classGuid, null);
 
-                if (!inMenuMode && !loadingPinnedMessagesList && totalPinnedMessagesCount == 0 && !pinnedEndReached) {
-                    getMediaDataController().loadPinnedMessages(dialog_id, 0, fallbackId);
+                if (!inMenuMode && !loadingPinnedMessagesList && (isTopic || totalPinnedMessagesCount == 0 && !pinnedEndReached)) {
+                    getMediaDataController().loadPinnedMessages(dialog_id, isTopic ? getTopicId() : 0, 0, isTopic ? 0 : fallbackId, isTopic ? pinnedMessagesGeneration : 0);
                     loadingPinnedMessagesList = true;
                 }
             }
@@ -23892,7 +23941,7 @@ public class ChatActivity extends BaseFragment implements
                 }
                 checkActionBarMenu(fragmentOpened);
                 if (!inMenuMode && !loadingPinnedMessagesList && !pinnedMessageIds.isEmpty() && userInfo.pinned_msg_id > pinnedMessageIds.get(0)) {
-                    getMediaDataController().loadPinnedMessages(dialog_id, 0, userInfo.pinned_msg_id);
+                    getMediaDataController().loadPinnedMessages(dialog_id, isTopic ? getTopicId() : 0, 0, isTopic ? 0 : userInfo.pinned_msg_id, isTopic ? pinnedMessagesGeneration : 0);
                     loadingPinnedMessagesList = true;
                 }
                 updateVisibleWallpaperActions();
@@ -33290,6 +33339,10 @@ public class ChatActivity extends BaseFragment implements
                 showZastoEditHistory(selectedObject);
                 break;
             }
+            case OPTION_MESSAGE_TECHNICAL_DETAILS: {
+                showMessageTechnicalDetails(selectedObject);
+                break;
+            }
             case OPTION_COPY: {
                 final TL_iv.RichMessage copyRichMessage = selectedObject.messageOwner != null ? selectedObject.messageOwner.rich_message : null;
                 if (selectedObject.isDice()) {
@@ -34297,6 +34350,105 @@ public class ChatActivity extends BaseFragment implements
         } else {
             onLoad.run();
         }
+    }
+
+    private void showMessageTechnicalDetails(MessageObject messageObject) {
+        if (messageObject == null || messageObject.messageOwner == null || getParentActivity() == null) {
+            return;
+        }
+        String details = buildMessageTechnicalDetails(messageObject);
+        TextView textView = new TextView(getParentActivity());
+        textView.setText(details);
+        textView.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
+        textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        textView.setTextIsSelectable(true);
+        textView.setTypeface(android.graphics.Typeface.MONOSPACE);
+        textView.setPadding(dp(24), dp(8), dp(24), dp(8));
+
+        android.widget.ScrollView scrollView = new android.widget.ScrollView(getParentActivity());
+        scrollView.addView(textView, LayoutHelper.createScroll(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
+        AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity(), themeDelegate);
+        builder.setTitle(LocaleController.getString(R.string.MessageTechnicalDetailsTitle));
+        builder.setView(scrollView);
+        builder.setPositiveButton(LocaleController.getString(R.string.MessageTechnicalDetailsCopy), (dialog, which) -> AndroidUtilities.addToClipboard(details));
+        builder.setNegativeButton(LocaleController.getString(R.string.Close), null);
+        showDialog(builder.create());
+    }
+
+    private String buildMessageTechnicalDetails(MessageObject object) {
+        TLRPC.Message message = object.messageOwner;
+        TLRPC.Document document = object.getDocument();
+        TLRPC.Photo photo = object.getPhoto();
+        int dcId = document != null ? document.dc_id : photo != null ? photo.dc_id : 0;
+        boolean hasMedia = document != null || photo != null;
+        StringBuilder result = new StringBuilder(768);
+        appendTechnicalDetail(result, "message_id", message.id);
+        appendTechnicalDetail(result, "dialog_id", object.getDialogId());
+        appendTechnicalDetail(result, "peer", technicalPeer(message.peer_id));
+        appendTechnicalDetail(result, "from", technicalPeer(message.from_id));
+        appendTechnicalDetail(result, "date", message.date);
+        appendTechnicalDetail(result, "grouped_id", message.grouped_id);
+        appendTechnicalDetail(result, "random_id", message.random_id);
+        appendTechnicalDetail(result, "message_type", object.type);
+        appendTechnicalDetail(result, "media_type", message.media != null ? message.media.getClass().getSimpleName() : "none");
+
+        if (document != null) {
+            appendTechnicalDetail(result, "document_id", document.id);
+            appendTechnicalDetail(result, "document_access_hash", document.access_hash);
+            appendTechnicalDetail(result, "mime_type", document.mime_type);
+            appendTechnicalDetail(result, "file_name", FileLoader.getDocumentFileName(document));
+            appendTechnicalDetail(result, "file_size", document.size);
+            appendTechnicalDetail(result, "file_reference", technicalFileReference(document.file_reference));
+        }
+        if (photo != null) {
+            appendTechnicalDetail(result, "photo_id", photo.id);
+            appendTechnicalDetail(result, "photo_access_hash", photo.access_hash);
+            appendTechnicalDetail(result, "photo_sizes", photo.sizes != null ? photo.sizes.size() : 0);
+            appendTechnicalDetail(result, "video_sizes", photo.video_sizes != null ? photo.video_sizes.size() : 0);
+            appendTechnicalDetail(result, "file_reference", technicalFileReference(photo.file_reference));
+        }
+        if (hasMedia) {
+            appendTechnicalDetail(result, "media_dc", dcId);
+            appendTechnicalDetail(result, "wss_enabled", SharedConfig.wssTransportEnabled);
+            if (dcId >= 1 && dcId <= 5) {
+                appendTechnicalDetail(result, "wss_server", "wss://kws" + dcId + "-1.web.telegram.org/apiws");
+                appendTechnicalDetail(result, "wss_relay", technicalWssRelay(dcId) + ":443");
+                appendTechnicalDetail(result, "transport", SharedConfig.wssTransportEnabled ? "WSS media (with direct fallback)" : "direct TCP");
+            } else {
+                appendTechnicalDetail(result, "transport", "direct/non-standard media DC");
+            }
+            java.io.File localFile = FileLoader.getInstance(currentAccount).getPathToMessage(message);
+            appendTechnicalDetail(result, "local_path", localFile != null ? localFile.getAbsolutePath() : "none");
+            appendTechnicalDetail(result, "local_exists", localFile != null && localFile.exists());
+            appendTechnicalDetail(result, "local_bytes", localFile != null && localFile.exists() ? localFile.length() : 0);
+        }
+        return result.toString();
+    }
+
+    private static void appendTechnicalDetail(StringBuilder builder, String key, Object value) {
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(key).append(": ").append(value != null ? value : "null");
+    }
+
+    private static String technicalPeer(TLRPC.Peer peer) {
+        if (peer == null) return "none";
+        if (peer.user_id != 0) return "user:" + peer.user_id;
+        if (peer.chat_id != 0) return "chat:" + peer.chat_id;
+        if (peer.channel_id != 0) return "channel:" + peer.channel_id;
+        return peer.getClass().getSimpleName();
+    }
+
+    private static String technicalFileReference(byte[] reference) {
+        return reference == null ? "none" : "bytes=" + reference.length + ", sha256=" + org.telegram.messenger.Utilities.bytesToHex(org.telegram.messenger.Utilities.computeSHA256(reference));
+    }
+
+    private static String technicalWssRelay(int dcId) {
+        if (dcId == 1 || dcId == 3) return "149.154.174.100";
+        if (dcId == 2 || dcId == 4) return "149.154.167.220";
+        if (dcId == 5) return "149.154.170.100";
+        return "unknown";
     }
 
     private void hideAds() {
@@ -46108,6 +46260,9 @@ public class ChatActivity extends BaseFragment implements
                 icons.add(deleteIconRes);
             }
         }
+        items.add(LocaleController.getString(R.string.MessageTechnicalDetails));
+        options.add(OPTION_MESSAGE_TECHNICAL_DETAILS);
+        icons.add(R.drawable.msg_info);
     }
 
     private void updateBotforumTabsBottomMargin() {

@@ -26,7 +26,13 @@ def main() -> int:
     plugins = read("TMessagesProj/src/main/java/org/telegram/plugins/PluginsController.java")
     logs = read("TMessagesProj/src/main/java/org/telegram/messenger/FileLog.java")
     filter_tabs = read("TMessagesProj/src/main/java/org/telegram/ui/Components/FilterTabsView.java")
+    dialogs = read("TMessagesProj/src/main/java/org/telegram/ui/DialogsActivity.java")
+    main_tabs = read("TMessagesProj/src/main/java/org/telegram/ui/MainTabsActivity.java")
+    zasto_privacy = read("TMessagesProj/src/main/java/org/telegram/messenger/ZaStoPrivacy.java")
     lite_mode = read("TMessagesProj/src/main/java/org/telegram/messenger/LiteMode.java")
+    media_data = read("TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java")
+    messages_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java")
+    chat_activity = read("TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java")
 
     require("CONSTRAINED_HEAP_MB = 128" in policy and "isLowRamDevice()" in policy,
             "resource policy must treat both a 128 MiB heap and Android low-RAM as constrained", errors)
@@ -63,6 +69,34 @@ def main() -> int:
             and filter_tabs.count("resetDefaultTabTitle();") >= 2
             and "findDefaultTab().setTitle" not in filter_tabs,
             "tab-counter updates must tolerate a deliberately hidden All Chats tab", errors)
+
+    require("public int getStableIdForTabId(int tabId)" in filter_tabs
+            and "int position = idToPosition.get(tabId, -1);" in filter_tabs
+            and "public boolean scrollToTabWithId(int id)" in filter_tabs
+            and "positionToStableId.clear();" in filter_tabs
+            and "filterTabsView.scrollToTabWithId(tabId);" in dialogs
+            and "if (!filterTabsView.selectTabWithStableId(stableId))" in dialogs
+            and "if (viewPages[0].selectedType != id)" in dialogs,
+            "folder navigation must resolve logical tab IDs through the visible-tab mapping", errors)
+    require("int filterIndex1 = tab1.id;" in filter_tabs
+            and "int filterIndex2 = tab2.id;" in filter_tabs
+            and "filters.set(filterIndex1, filter2);" in filter_tabs
+            and "filters.set(filterIndex2, filter1);" in filter_tabs,
+            "folder reordering must map visible tabs back to logical filter IDs", errors)
+    require("public static boolean shouldHideAllChatsTab(int filterCount)" in zasto_privacy
+            and "ZaStoPrivacy.shouldHideAllChatsTab(filters.size())" in dialogs
+            and "ZaStoPrivacy.shouldHideAllChatsTab(filters.size())" in main_tabs,
+            "all folder entry points must share the hidden All Chats visibility policy", errors)
+
+    require("req.top_msg_id = (int) topicId;" in media_data
+            and "PinnedMessagesRequestKey(dialogId, topicId, generation)" in media_data
+            and "endReached = false;" in media_data
+            and "loadedTopicId != getTopicId()" in chat_activity,
+            "topic pinned-message loading must stay scoped, retryable, and stale-response safe", errors)
+    require("public void unpinAllMessages(TLRPC.Chat chat, TLRPC.User user, int topicId)" in messages_controller
+            and "req.top_msg_id = topicId;" in messages_controller
+            and "unpinAllMessages(currentChat, currentUser, (int) getTopicId())" in chat_activity,
+            "unpin-all must use Telegram's topic-scoped API so unloaded pins are removed too", errors)
 
     flags_chat = next(
         (line for line in lite_mode.splitlines() if "int FLAGS_CHAT =" in line),

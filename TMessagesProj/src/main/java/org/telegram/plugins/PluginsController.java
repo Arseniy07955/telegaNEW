@@ -23,6 +23,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -146,6 +147,7 @@ public class PluginsController {
                 Python.start(new AndroidPlatform(appContext));
             }
             loader = Python.getInstance().getModule("_plugin_loader");
+            loader.callAttr("configure", new File(appContext.getFilesDir(), "plugin_libs").getAbsolutePath());
             pythonStarted = true;
         } catch (Throwable t) {
             FileLog.e("zasto plugins: failed to start python", t);
@@ -181,8 +183,8 @@ public class PluginsController {
             if (!isValidId(id)) {
                 continue;
             }
-            File f = new File(pluginsDir(), id + ".plugin");
-            if (!f.exists()) {
+            File f = installedFileForId(id);
+            if (f == null) {
                 continue;
             }
             PluginInfo info = parseMetadata(f);
@@ -195,10 +197,11 @@ public class PluginsController {
             list.add(info);
             seen.add(id);
         }
-        // 2) Adopt any .plugin file on disk that the index lost (e.g. a partial backup/restore),
-        //    so the FILE is the source of truth and plugins survive even a wiped prefs index.
+        // 2) Adopt any .plugin/.py file on disk that the index lost (e.g. a partial
+        //    backup/restore), so the file is the source of truth after wiped prefs.
         File[] files = pluginsDir().listFiles();
         if (files != null) {
+            Arrays.sort(files, (left, right) -> Long.compare(right.lastModified(), left.lastModified()));
             for (File f : files) {
                 String fn = f.getName();
                 if (fn.startsWith("_import_") && fn.endsWith(".tmp")) {
@@ -206,10 +209,13 @@ public class PluginsController {
                     f.delete(); // sweep leftover staging files from an interrupted install (runs once at init)
                     continue;
                 }
-                if (!fn.endsWith(".plugin")) {
+                boolean pluginExtension = fn.endsWith(".plugin");
+                boolean pythonExtension = fn.endsWith(".py") && !fn.endsWith(".tmp.py");
+                if (!pluginExtension && !pythonExtension) {
                     continue;
                 }
-                String id = fn.substring(0, fn.length() - ".plugin".length());
+                String extension = pluginExtension ? ".plugin" : ".py";
+                String id = fn.substring(0, fn.length() - extension.length());
                 if (seen.contains(id) || !isValidId(id)) {
                     continue;
                 }
@@ -229,6 +235,66 @@ public class PluginsController {
             plugins.addAll(list);
         }
         persistIndex(); // re-sync the index to match what is actually on disk
+    }
+
+    /** Prefer the most recently written extension when a manager leaves both behind. */
+    private File installedFileForId(String id) {
+        File plugin = new File(pluginsDir(), id + ".plugin");
+        File python = new File(pluginsDir(), id + ".py");
+        if (plugin.exists() && python.exists()) {
+            return python.lastModified() > plugin.lastModified() ? python : plugin;
+        }
+        if (plugin.exists()) {
+            return plugin;
+        }
+        return python.exists() ? python : null;
+    }
+
+    /**
+     * Re-discover files written directly by exteraGram-compatible plugin managers.
+     * Their Python engine API stores plugins as {@code <id>.py} and then asks the
+     * engine to reload; normal ZaStoGram imports continue to use {@code .plugin}.
+     */
+    public void reloadPluginsFromDisk() {
+        if (appContext == null || queue == null) {
+            return;
+        }
+        List<PluginInfo> oldSnapshot;
+        synchronized (plugins) {
+            oldSnapshot = new ArrayList<>(plugins);
+        }
+        try {
+            scanInstalled();
+        } catch (Throwable t) {
+            FileLog.e(t);
+            return;
+        }
+        queue.postRunnable(() -> {
+            for (PluginInfo old : oldSnapshot) {
+                unloadPluginInternal(old);
+            }
+            List<PluginInfo> newSnapshot;
+            synchronized (plugins) {
+                newSnapshot = new ArrayList<>(plugins);
+            }
+            boolean hasEnabled = false;
+            for (PluginInfo info : newSnapshot) {
+                if (info.enabled && isCompatible(info)) {
+                    hasEnabled = true;
+                    break;
+                }
+            }
+            if (hasEnabled) {
+                ensurePythonStarted();
+                for (PluginInfo info : newSnapshot) {
+                    if (info.enabled && isCompatible(info)) {
+                        loadPluginInternal(info);
+                    }
+                }
+            }
+            refreshRequestHooks();
+            notifyChanged();
+        });
     }
 
     private void persistIndex() {
@@ -418,6 +484,17 @@ public class PluginsController {
                     //noinspection ResultOfMethodCallIgnored
                     f.delete();
                 }
+                // Managers may leave the previous extension beside the active file.
+                File pluginVariant = new File(pluginsDir(), id + ".plugin");
+                File pythonVariant = new File(pluginsDir(), id + ".py");
+                if (pluginVariant.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    pluginVariant.delete();
+                }
+                if (pythonVariant.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    pythonVariant.delete();
+                }
             } catch (Throwable t) {
                 FileLog.e(t);
             }
@@ -490,12 +567,19 @@ public class PluginsController {
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getSettingsModel(String id) {
+        return getSettingsModel(id, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getSettingsModel(String id, String screenToken) {
         List<Map<String, Object>> out = new ArrayList<>();
         if (!isPythonReady()) {
             return out;
         }
         try {
-            PyObject model = loader.callAttr("get_settings_model", id);
+            PyObject model = TextUtils.isEmpty(screenToken)
+                    ? loader.callAttr("get_settings_model", id)
+                    : loader.callAttr("get_settings_model_for_screen", id, screenToken);
             if (model == null) {
                 return out;
             }
@@ -515,11 +599,15 @@ public class PluginsController {
 
     /** Called on the UI thread when the user toggles/edits a setting row. */
     public void onSettingChange(String id, String key, Object value) {
+        onSettingChange(id, key, value, null);
+    }
+
+    public void onSettingChange(String id, String key, Object value, String screenToken) {
         if (!isPythonReady()) {
             return;
         }
         try {
-            loader.callAttr("on_setting_change", id, key, value);
+            loader.callAttr("on_setting_change", id, key, value, screenToken);
         } catch (Throwable t) {
             logError(id, "on_setting_change", t);
         }
@@ -527,13 +615,32 @@ public class PluginsController {
 
     /** Called on the UI thread when the user clicks a Text settings row; view anchors menus. */
     public void onSettingClick(String id, int index, Object view) {
+        onSettingClick(id, index, view, null);
+    }
+
+    public void onSettingClick(String id, int index, Object view, String screenToken) {
         if (!isPythonReady()) {
             return;
         }
         try {
-            loader.callAttr("on_setting_click", id, index, view);
+            loader.callAttr("on_setting_click", id, index, view, screenToken);
         } catch (Throwable t) {
             logError(id, "on_setting_click", t);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> createSubSettings(String id, String screenToken, int index) {
+        if (!isPythonReady()) {
+            return null;
+        }
+        try {
+            PyObject result = loader.callAttr("create_sub_settings", id, screenToken, index);
+            Object java = result != null ? result.toJava(Map.class) : null;
+            return java instanceof Map ? (Map<String, Object>) java : null;
+        } catch (Throwable t) {
+            FileLog.e(t);
+            return null;
         }
     }
 

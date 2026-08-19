@@ -252,6 +252,8 @@ Chaquopy. Установка:
   `ui.bulletin`;
 - `send_request()` и `RequestCallback`;
 - `requests`, Pillow/PIL и `pyfiglet` внутри APK;
+- автоматическая установка объявленных в `__requirements__` pure-Python
+  зависимостей из универсальных PyPI wheel (`none-any`);
 - Java hooks через Pine и Xposed-compatible API;
 - post-response hook для пропуска, замены или отмены ответа.
 

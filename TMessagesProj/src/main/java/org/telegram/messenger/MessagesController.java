@@ -9557,11 +9557,19 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void unpinAllMessages(TLRPC.Chat chat, TLRPC.User user) {
+        unpinAllMessages(chat, user, 0);
+    }
+
+    public void unpinAllMessages(TLRPC.Chat chat, TLRPC.User user, int topicId) {
         if (chat == null && user == null) {
             return;
         }
         TLRPC.TL_messages_unpinAllMessages req = new TLRPC.TL_messages_unpinAllMessages();
         req.peer = getInputPeer(chat != null ? -chat.id : user.id);
+        if (topicId != 0) {
+            req.flags |= 1;
+            req.top_msg_id = topicId;
+        }
         getConnectionsManager().sendRequest(req, (response, error) -> {
             if (response != null) {
                 TLRPC.TL_messages_affectedHistory res = (TLRPC.TL_messages_affectedHistory) response;
@@ -9570,8 +9578,9 @@ public class MessagesController extends BaseController implements NotificationCe
                 } else {
                     processNewDifferenceParams(-1, res.pts, -1, res.pts_count);
                 }
-                ArrayList<Integer> ids = new ArrayList<>();
-                getMessagesStorage().updatePinnedMessages(chat != null ? -chat.id : user.id, null, false, 0, 0, false, null);
+                if (topicId == 0) {
+                    getMessagesStorage().updatePinnedMessages(chat != null ? -chat.id : user.id, null, false, 0, 0, false, null);
+                }
             }
         });
     }

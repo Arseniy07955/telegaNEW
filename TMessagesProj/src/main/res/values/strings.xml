@@ -11350,4 +11350,7 @@
     <string name="LoginCodeRequestTimeout">Telegram did not answer the code request. Check the proxy connection and try again.</string>
     <string name="LoginApiCredentialsError">Telegram rejected this build’s API ID (API_ID_PUBLISHED_FLOOD). Install the latest official ZaStoGram release and try again. If it is already installed, the release API credentials must be replaced.</string>
     <string name="ZaStoGramVersion">ZaStoGram %1$s (build %2$d)</string>
+    <string name="MessageTechnicalDetails">Technical details</string>
+    <string name="MessageTechnicalDetailsTitle">Message details</string>
+    <string name="MessageTechnicalDetailsCopy">Copy details</string>
 </resources>

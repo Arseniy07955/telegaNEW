@@ -32,6 +32,7 @@ jobs:
             Tools/check_plugin_exteragram_ui_bridge.py
             Tools/check_plugin_java_package_shims.py
             Tools/check_plugin_python_deps.py
+            Tools/check_plugin_runtime_requirements.py
             Tools/check_plugin_utils_javadoc.py
             Tools/check_android_string_format_contract.py
             Tools/check_login_firebase_independence.py

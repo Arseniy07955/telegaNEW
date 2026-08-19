@@ -50,6 +50,19 @@ def main() -> int:
     plugin._context = context
 
     errors: list[str] = []
+    metadata = BasePlugin.parse_plugin_metadata(
+        b'__id__ = "sample"\n__app_version__ = ">=12.5.1"\n'
+        b'__requirements__ = "sample-lib==1.2"\n'
+    )
+    if metadata.get("requirements") != "sample-lib==1.2":
+        errors.append("BasePlugin metadata parser must expose __requirements__")
+    if metadata.get("min_version") != "12.5.1":
+        errors.append("BasePlugin metadata parser must normalize __app_version__")
+
+    plugin.add_on_send_message_hook()
+    if not plugin.remove_hook("on_send_message_hook") or plugin._send_message_hook:
+        errors.append("BasePlugin.remove_hook must unregister the named send hook")
+
     default_data = {"manual": [], "subs": [], "active_uri": ""}
 
     missing = plugin.get_setting("vless_data", default_data)

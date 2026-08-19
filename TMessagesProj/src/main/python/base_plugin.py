@@ -208,6 +208,41 @@ class BasePlugin:
         """Outgoing message params just before send. Return HookResult (MODIFY w/ .params / CANCEL)."""
         return HookResult(strategy=HookStrategy.DEFAULT)
 
+    @staticmethod
+    def parse_plugin_metadata(content):
+        """Parse literal exteraGram metadata from source without executing it."""
+        if isinstance(content, (bytes, bytearray)):
+            source = bytes(content).decode("utf-8-sig", errors="replace")
+        else:
+            source = str(content)
+        tree = ast.parse(source)
+        aliases = {
+            "id": "id", "name": "name", "description": "description",
+            "author": "author", "version": "version", "icon": "icon",
+            "min_version": "min_version", "app_version": "app_version",
+            "requirements": "requirements", "sdk_version": "sdk_version",
+        }
+        result = {}
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            try:
+                value = ast.literal_eval(node.value)
+            except (TypeError, ValueError):
+                continue
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                name = target.id
+                if name.startswith("__") and name.endswith("__"):
+                    key = aliases.get(name[2:-2])
+                    if key:
+                        result[key] = value
+        if "min_version" not in result and "app_version" in result:
+            result["min_version"] = str(result["app_version"]).lstrip(">= ")
+        return result
+
     # ------------------------------------------------------------------ method hooking
 
     def hook_method(self, method, hook):
@@ -239,6 +274,16 @@ class BasePlugin:
     def add_on_send_message_hook(self, priority=0):
         """Enable on_send_message_hook for this plugin."""
         self._send_message_hook = True
+
+    def remove_hook(self, hook_name):
+        """Remove a named high-level hook using exteraGram's compatibility API."""
+        if hook_name == "on_send_message_hook":
+            self._send_message_hook = False
+            return True
+        if hook_name in ("pre_request_hook", "post_request_hook"):
+            self._request_hooks.clear()
+            return True
+        return False
 
     def _matches_request(self, request_name):
         if not self._request_hooks:

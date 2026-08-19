@@ -16,6 +16,12 @@ public class PluginsController {
 
     /** id -> Plugin, mirroring exteraGram's public field. Kept fresh by refresh(). */
     public final LinkedHashMap<String, Plugin> plugins = new LinkedHashMap<>();
+    /** Engine registry used by managers which write plugin files directly. */
+    public final LinkedHashMap<String, PythonPluginsEngine> engines = new LinkedHashMap<>();
+
+    private PluginsController() {
+        engines.put("python", new PythonPluginsEngine());
+    }
 
     public static PluginsController getInstance() {
         INSTANCE.refresh();
@@ -42,6 +48,11 @@ public class PluginsController {
     public Plugin getPlugin(String id) {
         refresh();
         return plugins.get(id);
+    }
+
+    public void setPluginEnabled(String id, boolean enabled, Object ignored) {
+        org.telegram.plugins.PluginsController.getInstance().setEnabled(id, enabled);
+        refresh();
     }
 
     public static void openPluginSettings(String id) {

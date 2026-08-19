@@ -3846,7 +3846,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
                 @Override
                 public void onDeletePressed(int id) {
-                    showDeleteAlert(getMessagesController().getDialogFilters().get(id));
+                    ArrayList<MessagesController.DialogFilter> filters = getMessagesController().getDialogFilters();
+                    if (id >= 0 && id < filters.size()) {
+                        showDeleteAlert(filters.get(id));
+                    }
                 }
             });
         }
@@ -3979,7 +3982,13 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     });
                     showDialog(sheet);
                 } else if (id == remove_from_folder) {
-                    MessagesController.DialogFilter filter = getMessagesController().getDialogFilters().get(viewPages[0].selectedType);
+                    ArrayList<MessagesController.DialogFilter> filters = getMessagesController().getDialogFilters();
+                    int selectedType = viewPages[0].selectedType;
+                    if (selectedType < 0 || selectedType >= filters.size()) {
+                        hideActionMode(true);
+                        return;
+                    }
+                    MessagesController.DialogFilter filter = filters.get(selectedType);
                     ArrayList<Long> neverShow = FiltersListBottomSheet.getDialogsCount(DialogsActivity.this, filter, selectedDialogs, false, false);
 
                     int currentCount;
@@ -6786,24 +6795,18 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 return;
             }
         }
-        int index = filterTabsView.getTabsCount() - 1;
+        int tabId = -1;
         ArrayList<MessagesController.DialogFilter> filters = getMessagesController().getDialogFilters();
         for (int i = 0; i < filters.size(); ++i) {
             if (filters.get(i).id == fid) {
-                index = i;
+                tabId = i;
                 break;
             }
         }
-
-        FilterTabsView.Tab tab = filterTabsView.getTab(index);
-        if (tab != null) {
-            if (viewPages != null && viewPages.length > 0 && viewPages[0].selectedType == tab.id) {
-                return;
-            }
-            filterTabsView.scrollToTab(tab, index);
-        } else {
-            filterTabsView.selectLastTab();
+        if (tabId < 0 || viewPages != null && viewPages.length > 0 && viewPages[0].selectedType == tabId) {
+            return;
         }
+        filterTabsView.scrollToTabWithId(tabId);
     }
 
     public void switchToCurrentSelectedMode(boolean animated) {
@@ -6875,13 +6878,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 updateFilterTabsVisibility(animated);
                 int id = filterTabsView.getCurrentTabId();
                 int stableId = filterTabsView.getCurrentTabStableId();
-                boolean selectWithStableId = false;
-                if (id != filterTabsView.getDefaultTabId() && id >= filters.size()) {
-                    filterTabsView.resetTabId();
-                    selectWithStableId = true;
-                }
                 filterTabsView.removeTabs();
-                boolean hideAllChatsTab = ZaStoPrivacy.HIDE_ALL_CHATS && filters.size() > 1;
+                boolean hideAllChatsTab = ZaStoPrivacy.shouldHideAllChatsTab(filters.size());
                 for (int a = 0, N = filters.size(); a < N; a++) {
                     if (filters.get(a).isDefault()) {
                         if (!hideAllChatsTab) {
@@ -6896,19 +6894,20 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     id = filterTabsView.getFirstTabId();
                     updateCurrentTab = true;
                     viewPages[0].selectedType = id;
-                    filterTabsView.selectTabWithStableId(filterTabsView.getStableId(0));
+                    filterTabsView.selectTabWithStableId(filterTabsView.getStableIdForTabId(id));
                 } else if (stableId >= 0) {
-                    if (selectWithStableId) {
-                        if (!filterTabsView.selectTabWithStableId(stableId)) {
-                            while (id >= 0 && !filterTabsView.selectTabWithStableId(filterTabsView.getStableId(id))) {
-                                id--;
-                            }
-                            if (id < 0) {
-                                id = 0;
-                            }
+                    if (!filterTabsView.selectTabWithStableId(stableId)) {
+                        while (id >= 0 && !filterTabsView.selectTabWithStableId(filterTabsView.getStableIdForTabId(id))) {
+                            id--;
                         }
+                        if (id < 0) {
+                            id = filterTabsView.getFirstTabId();
+                            filterTabsView.selectTabWithStableId(filterTabsView.getStableIdForTabId(id));
+                        }
+                    } else {
+                        id = filterTabsView.getCurrentTabId();
                     }
-                    if (filterTabsView.getStableId(viewPages[0].selectedType) != stableId) {
+                    if (viewPages[0].selectedType != id) {
                         updateCurrentTab = true;
                         viewPages[0].selectedType = id;
                     }
