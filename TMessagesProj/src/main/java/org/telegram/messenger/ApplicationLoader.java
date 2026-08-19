@@ -379,13 +379,26 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            SharedPreferences legacyPreferences = MessagesController.getNotificationsSettings(UserConfig.selectedAccount);
+            if (legacyPreferences.contains("pushService")) {
+                enabled = legacyPreferences.getBoolean("pushService", false);
+                // Migrate the explicit per-account value written by older UI.
+                // There is only one process service, so its policy is global.
+                preferences.edit().putBoolean("pushService", enabled).commit();
+            } else {
+                enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            }
         }
         if (enabled) {
             try {
-                applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
-            } catch (Throwable ignore) {
-
+                Intent serviceIntent = new Intent(applicationContext, NotificationsService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    applicationContext.startForegroundService(serviceIntent);
+                } else {
+                    applicationContext.startService(serviceIntent);
+                }
+            } catch (Throwable error) {
+                FileLog.e(error);
             }
         } else {
             applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));

@@ -15,15 +15,16 @@ import android.content.Intent;
 public class AppStartReceiver extends BroadcastReceiver {
 
     public void onReceive(Context context, Intent intent) {
-        if (intent != null && Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-            AndroidUtilities.runOnUIThread(() -> {
-                SharedConfig.loadConfig();
-                if (SharedConfig.passcodeHash.length() > 0) {
-                    SharedConfig.appLocked = true;
-                    SharedConfig.saveConfig();
-                }
-                ApplicationLoader.startPushService();
-            });
+        if (intent != null && (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) || "org.telegram.start".equals(intent.getAction()))) {
+            // A BOOT_COMPLETED receiver has a temporary exemption for starting
+            // a foreground service. Start it before onReceive() returns instead
+            // of posting work which may run after that exemption is gone.
+            SharedConfig.loadConfig();
+            if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) && SharedConfig.passcodeHash.length() > 0) {
+                SharedConfig.appLocked = true;
+                SharedConfig.saveConfig();
+            }
+            ApplicationLoader.startPushService();
         }
     }
 }

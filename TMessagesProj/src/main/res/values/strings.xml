@@ -2587,6 +2587,9 @@
     <string name="NotificationsServiceConnectionInfo">Keep a low impact background connection to Telegram for reliable notifications.</string>
     <string name="NotificationsBackgroundNetworkAlwaysOn">Keep network always on</string>
     <string name="NotificationsBackgroundNetworkAlwaysOnInfo">Do not pause Telegram network timers or proxy connections when the app is in the background.</string>
+    <string name="NotificationsBackgroundConnectionChannel">Background connection</string>
+    <string name="NotificationsBackgroundConnectionChannelInfo">Keeps ZaStoGram connected while the app is in the background.</string>
+    <string name="NotificationsBackgroundConnectionActive">Background connection is active</string>
     <string name="SortBy">Sort By</string>
     <string name="ImportContacts">Import Contacts</string>
     <string name="SortFirstName">First name</string>

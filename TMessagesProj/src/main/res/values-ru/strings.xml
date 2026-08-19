@@ -276,6 +276,9 @@
     <string name="Available">Доступен</string>
     <string name="NotificationsBackgroundNetworkAlwaysOn">Не усыплять сеть в фоне</string>
     <string name="NotificationsBackgroundNetworkAlwaysOnInfo">Не останавливает сетевые таймеры Telegram и подключения к прокси, когда приложение свернуто.</string>
+    <string name="NotificationsBackgroundConnectionChannel">Фоновое подключение</string>
+    <string name="NotificationsBackgroundConnectionChannelInfo">Поддерживает подключение ZaStoGram, когда приложение свернуто.</string>
+    <string name="NotificationsBackgroundConnectionActive">Фоновое подключение активно</string>
     <string name="ProxyStatusConnectingSlow">Подключаемся, это может занять время</string>
     <string name="ProxyStatusCheckingConnection">Проверяем подключение...</string>
     <string name="ProxyStatusAdmissionQueue">Ждём слот подключения к прокси...</string>

@@ -444,7 +444,25 @@ public class ConnectionsManager extends BaseController {
         if (preferences.contains("pushConnection")) {
             return preferences.getBoolean("pushConnection", true);
         } else {
+            SharedPreferences legacyPreferences = MessagesController.getNotificationsSettings(UserConfig.selectedAccount);
+            if (legacyPreferences.contains("pushConnection")) {
+                boolean enabled = legacyPreferences.getBoolean("pushConnection", false);
+                // Older builds displayed this as an account setting even though
+                // native startup consumed it globally. Preserve that explicit
+                // choice once, then use one source of truth for every account.
+                preferences.edit().putBoolean("pushConnection", enabled).commit();
+                return enabled;
+            }
             return MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("backgroundConnection", false);
+        }
+    }
+
+    public static void applyPushConnectionPolicyForAllAccounts() {
+        for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+            if (UserConfig.getInstance(a).isClientActivated()) {
+                ConnectionsManager manager = getInstance(a);
+                manager.setPushConnectionEnabled(manager.isPushConnectionEnabled());
+            }
         }
     }
 
@@ -923,6 +941,14 @@ public class ConnectionsManager extends BaseController {
         }
 
         native_init(currentAccount, version, layer, apiId, deviceModel, systemVersion, appVersion, langCode, systemLangCode, configPath, logPath, regId, cFingerprint, installer, packageId, timezoneOffset, userId, userPremium, enablePushConnection, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), SharedConfig.measureDevicePerformanceClass());
+        // native_init stores the flag but does not create the dedicated type-8
+        // push connection. Apply it explicitly so service-only cold starts can
+        // receive updates without waiting for an Activity or settings change.
+        setPushConnectionEnabled(enablePushConnection);
+        // Native initialization deliberately starts paused. Re-apply the persisted
+        // policy here as every account is created, including cold starts which do
+        // not have an Activity.onResume() callback to cancel the sleep timer.
+        applyBackgroundNetworkPolicy();
         checkConnection();
     }
 
