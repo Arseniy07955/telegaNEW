@@ -2099,10 +2099,43 @@ void ConnectionsManager::attachConnection(ConnectionSocket *connection) {
 }
 
 void ConnectionsManager::detachConnection(ConnectionSocket *connection) {
+    if (connection != nullptr && connection->getDatacenterId() > 0) {
+        recentConnectionDiagnostics[(uint32_t) connection->getDatacenterId()] = connection->getDiagnosticSnapshot();
+    }
     auto iter = std::find(activeConnections.begin(), activeConnections.end(), connection);
     if (iter != activeConnections.end()) {
         activeConnections.erase(iter);
     }
+}
+
+std::string ConnectionsManager::collectConnectionDiagnostics(uint32_t datacenterId) {
+    std::string result;
+    uint32_t index = 0;
+    for (ConnectionSocket *connection : activeConnections) {
+        if (connection == nullptr || connection->getDatacenterId() != (int32_t) datacenterId) {
+            continue;
+        }
+        if (!result.empty()) {
+            result += '\n';
+        }
+        result += "connection[" + std::to_string(index++) + "]: ";
+        result += connection->getDiagnosticSnapshot();
+    }
+    auto recent = recentConnectionDiagnostics.find(datacenterId);
+    if (recent != recentConnectionDiagnostics.end()) {
+        if (!result.empty()) {
+            result += '\n';
+        }
+        result += "recent_closed: ";
+        result += recent->second;
+    }
+    return result.empty() ? "none" : result;
+}
+
+void ConnectionsManager::collectConnectionDiagnosticsAsync(uint32_t datacenterId, std::function<void(std::string)> completion) {
+    scheduleTask([this, datacenterId, completion = std::move(completion)]() mutable {
+        completion(collectConnectionDiagnostics(datacenterId));
+    });
 }
 
 bool ConnectionsManager::shouldDebounceTransportSettingsReconnect(int64_t now) {

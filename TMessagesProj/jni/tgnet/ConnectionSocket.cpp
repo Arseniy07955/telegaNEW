@@ -4081,6 +4081,63 @@ std::string ConnectionSocket::proxyConnectionStageSocketRole() {
     return "control_main";
 }
 
+std::string ConnectionSocket::getDiagnosticSnapshot() {
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    std::string transport;
+    std::string connectHost;
+    uint16_t connectPort = currentPort;
+    if (currentTransportWss) {
+        transport = "wss";
+        connectHost = currentWssRoute.connectHost;
+        connectPort = currentWssRoute.relayPort;
+    } else if (isCurrentMtProxyConnection()) {
+        transport = currentSecretIsFakeTls ? "mtproxy_faketls" : "mtproxy";
+        connectHost = !overrideProxyAddress.empty() ? overrideProxyAddress : manager.proxyAddress;
+        connectPort = !overrideProxyAddress.empty() ? overrideProxyPort : manager.proxyPort;
+    } else if (!overrideProxyAddress.empty() || !manager.proxyAddress.empty()) {
+        transport = "socks5";
+        connectHost = !overrideProxyAddress.empty() ? overrideProxyAddress : manager.proxyAddress;
+        connectPort = !overrideProxyAddress.empty() ? overrideProxyPort : manager.proxyPort;
+    } else {
+        transport = "direct_tcp";
+        connectHost = currentAddress;
+    }
+
+    std::string result;
+    result.reserve(512);
+    auto append = [&](const char *key, const std::string &value) {
+        if (!result.empty()) result += ' ';
+        result += key;
+        result += '=';
+        result += value.empty() ? "none" : value;
+    };
+    auto appendNumber = [&](const char *key, int64_t value) {
+        append(key, std::to_string(value));
+    };
+    append("role", proxyConnectionStageSocketRole());
+    appendNumber("dc", currentDatacenterId);
+    appendNumber("media", currentMediaConnection ? 1 : 0);
+    append("transport", transport);
+    append("state", transportStateName(currentTransportState));
+    append("connect", connectHost + ":" + std::to_string(connectPort));
+    append("target", currentAddress + ":" + std::to_string(currentPort));
+    appendNumber("ipv6", isIpv6 ? 1 : 0);
+    appendNumber("socket_open", socketFd >= 0 ? 1 : 0);
+    appendNumber("epoll", epollRegistered ? 1 : 0);
+    appendNumber("connected", onConnectedSent ? 1 : 0);
+    append("diagnostic", proxyCheckDiagnostic);
+    if (currentTransportWss) {
+        append("wss_url", "wss://" + currentWssRoute.domain + currentWssRoute.path);
+        append("wss_relay", currentWssRoute.connectHost + ":" + std::to_string(currentWssRoute.relayPort));
+        appendNumber("wss_fallback", currentWssRoute.viaFallback ? 1 : 0);
+    }
+    appendNumber("endpoint_selected", currentMtProxyEndpointKey.empty() ? 0 : 1);
+    appendNumber("probe_active", currentMtProxyProbeKey.empty() ? 0 : 1);
+    appendNumber("activation_generation", proxyActivationGeneration);
+    appendNumber("network_type", currentNetworkType);
+    return result;
+}
+
 bool ConnectionSocket::matchesMtProxyEndpointKey(const std::string &endpointKey) {
     if (endpointKey.empty() || !isCurrentMtProxyConnection()) {
         return false;
@@ -5045,6 +5102,10 @@ time_t ConnectionSocket::getTimeout() {
 
 int32_t ConnectionSocket::getCurrentNetworkType() const {
     return currentNetworkType;
+}
+
+int32_t ConnectionSocket::getDatacenterId() const {
+    return stateMachine.wss.datacenterId;
 }
 
 bool ConnectionSocket::checkTimeout(int64_t now) {

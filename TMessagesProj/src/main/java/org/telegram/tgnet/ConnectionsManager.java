@@ -483,6 +483,14 @@ public class ConnectionsManager extends BaseController {
         return native_getCurrentDatacenterId(currentAccount);
     }
 
+    public String getDatacenterConnectionDiagnostics(int datacenterId) {
+        if (datacenterId == 0) {
+            return "none";
+        }
+        String result = native_getDatacenterConnectionDiagnostics(currentAccount, datacenterId);
+        return TextUtils.isEmpty(result) ? "none" : result;
+    }
+
     public long getCurrentAuthKeyId() {
         return native_getCurrentAuthKeyId(currentAccount);
     }
@@ -1667,6 +1675,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getCurrentTime(int currentAccount);
     public static native int native_getCurrentPingTime(int currentAccount);
     public static native int native_getCurrentDatacenterId(int currentAccount);
+    public static native String native_getDatacenterConnectionDiagnostics(int currentAccount, int datacenterId);
     public static native long native_getCurrentAuthKeyId(int currentAccount);
     public static native int native_getTimeDifference(int currentAccount);
     public static native void native_sendRequest(int currentAccount, long object, int flags, int datacenterId, int connectionType, boolean immediate, int requestToken);

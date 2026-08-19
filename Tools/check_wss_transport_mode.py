@@ -140,6 +140,19 @@ def main() -> None:
             and "wss_socket tls_ready" in wss_cpp
             and "wss_socket timeout" in wss_cpp,
             "WSS diagnostics must identify TCP, TLS, and timeout phases")
+    require("getDiagnosticSnapshot" in socket_h
+            and 'append("wss_url"' in socket_cpp
+            and 'append("wss_relay"' in socket_cpp
+            and "collectConnectionDiagnostics" in manager_h + manager_cpp
+            and "native_getDatacenterConnectionDiagnostics" in connections
+            and 'native_getDatacenterConnectionDiagnostics", "(II)Ljava/lang/String;"' in wrapper,
+            "message diagnostics must expose the live native WSS route through a bounded JNI snapshot")
+    require('append("connect"' in socket_cpp
+            and 'append("target"' in socket_cpp
+            and "currentSecret=" not in socket_cpp[socket_cpp.index("std::string ConnectionSocket::getDiagnosticSnapshot"):socket_cpp.index("bool ConnectionSocket::matchesMtProxyEndpointKey")]
+            and 'append("endpoint_key"' not in socket_cpp
+            and 'append("probe_key"' not in socket_cpp,
+            "connection snapshots must identify endpoints without exposing proxy secrets")
     # Измерено 2026-08-09: релей разбирает только ПЕРВЫЙ MTProto-пакет кадра и
     # молча выбрасывает остальные. msgs_ack, склеенный со следующим шагом
     # рукопожатия, оставлял датацентр без ключа навсегда.

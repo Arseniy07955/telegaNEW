@@ -39,6 +39,7 @@ public:
     void setTimeout(time_t timeout);
     time_t getTimeout();
     int32_t getCurrentNetworkType() const;
+    int32_t getDatacenterId() const;
     bool isDisconnected();
     bool isCurrentMtProxyConnection();
     bool isCurrentDirectConnection() const;
@@ -50,6 +51,7 @@ public:
     const char *getProxyCheckDiagnostic();
     bool isProxyCloseDiagnosticSuppressed();
     bool isClosingOrClosedForWrites() const;
+    std::string getDiagnosticSnapshot();
     // Remaining coordinator terminal hold (budget backoff / profiles exhausted)
     // captured on the pre-TCP close path; consumed once by the Connection layer
     // so the reconnect timer waits out the coordinator's clock instead of a

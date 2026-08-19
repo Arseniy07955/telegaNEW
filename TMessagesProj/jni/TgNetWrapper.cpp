@@ -13,6 +13,11 @@
 #include <openssl/bn.h>
 #include <openssl/pem.h>
 #include <openssl/aes.h>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 JavaVM *java;
 
@@ -117,6 +122,59 @@ jint getCurrentPingTime(JNIEnv *env, jclass c, jint instanceNum) {
 
 jint getCurrentDatacenterId(JNIEnv *env, jclass c, jint instanceNum) {
     return ConnectionsManager::getInstance(instanceNum).getCurrentDatacenterId();
+}
+
+struct ConnectionDiagnosticsRequest {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool completed = false;
+    std::string result;
+};
+
+static std::mutex connectionDiagnosticsPendingMutex;
+struct PendingConnectionDiagnostics {
+    uint64_t token;
+    std::chrono::steady_clock::time_point started;
+};
+static uint64_t connectionDiagnosticsToken;
+static std::unordered_map<int32_t, PendingConnectionDiagnostics> connectionDiagnosticsPendingAccounts;
+
+jstring getDatacenterConnectionDiagnostics(JNIEnv *env, jclass c, jint instanceNum, jint datacenterId) {
+    uint64_t requestToken;
+    {
+        std::lock_guard<std::mutex> lock(connectionDiagnosticsPendingMutex);
+        auto now = std::chrono::steady_clock::now();
+        auto pending = connectionDiagnosticsPendingAccounts.find(instanceNum);
+        if (pending != connectionDiagnosticsPendingAccounts.end()
+                && std::chrono::duration_cast<std::chrono::seconds>(now - pending->second.started).count() < 5) {
+            return env->NewStringUTF("snapshot_pending (retry_after_5s)");
+        }
+        requestToken = ++connectionDiagnosticsToken;
+        connectionDiagnosticsPendingAccounts[instanceNum] = {requestToken, now};
+    }
+    auto request = std::make_shared<ConnectionDiagnosticsRequest>();
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    manager.collectConnectionDiagnosticsAsync((uint32_t) datacenterId, [request, instanceNum, requestToken](std::string result) {
+        {
+            std::lock_guard<std::mutex> lock(request->mutex);
+            request->result = std::move(result);
+            request->completed = true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(connectionDiagnosticsPendingMutex);
+            auto pending = connectionDiagnosticsPendingAccounts.find(instanceNum);
+            if (pending != connectionDiagnosticsPendingAccounts.end() && pending->second.token == requestToken) {
+                connectionDiagnosticsPendingAccounts.erase(pending);
+            }
+        }
+        request->ready.notify_one();
+    });
+
+    std::unique_lock<std::mutex> lock(request->mutex);
+    if (!request->ready.wait_for(lock, std::chrono::milliseconds(750), [&request] { return request->completed; })) {
+        return env->NewStringUTF("snapshot_timeout");
+    }
+    return env->NewStringUTF(request->result.c_str());
 }
 
 jlong getCurrentAuthKeyId(JNIEnv *env, jclass c, jint instanceNum) {
@@ -627,6 +685,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_getCurrentTime", "(I)I", (void *) getCurrentTime},
         {"native_getCurrentPingTime", "(I)I", (void *) getCurrentPingTime},
         {"native_getCurrentDatacenterId", "(I)I", (void *) getCurrentDatacenterId},
+        {"native_getDatacenterConnectionDiagnostics", "(II)Ljava/lang/String;", (void *) getDatacenterConnectionDiagnostics},
         {"native_getCurrentAuthKeyId", "(I)J", (void *) getCurrentAuthKeyId},
         {"native_isTestBackend", "(I)I", (void *) isTestBackend},
         {"native_getTimeDifference", "(I)I", (void *) getTimeDifference},

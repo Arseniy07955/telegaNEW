@@ -205,6 +205,8 @@ public class FileLoadOperation {
     private WebFile webFile;
     private volatile int state = stateIdle;
     private volatile boolean paused;
+    private volatile String lastDiagnosticError = "none";
+    private volatile long lastDiagnosticErrorTime;
     private long downloadedBytes;
     public long totalBytesCount;
     private long bytesCountPadding;
@@ -771,6 +773,111 @@ public class FileLoadOperation {
 
     public String getFileName() {
         return fileName;
+    }
+
+    public int getDiagnosticDatacenterId() {
+        return isCdn ? cdnDatacenterId : datacenterId;
+    }
+
+    public String getDiagnosticSnapshot(String event) {
+        StringBuilder result = new StringBuilder(768);
+        appendDiagnostic(result, "event", event);
+        appendDiagnostic(result, "file_key", fileName);
+        appendDiagnostic(result, "state", diagnosticStateName(state));
+        appendDiagnostic(result, "started", started);
+        appendDiagnostic(result, "paused", paused);
+        appendDiagnostic(result, "priority", priority);
+        appendDiagnostic(result, "queue_position", getPositionInQueue());
+        appendDiagnostic(result, "initial_dc", initialDatacenterId);
+        appendDiagnostic(result, "current_dc", isCdn ? cdnDatacenterId : datacenterId);
+        appendDiagnostic(result, "source_dc", datacenterId);
+        appendDiagnostic(result, "cdn", isCdn);
+        appendDiagnostic(result, "cdn_dc", cdnDatacenterId);
+        appendDiagnostic(result, "stream", isStream || stream != null);
+        appendDiagnostic(result, "stream_offset", streamOffset);
+        appendDiagnostic(result, "stream_priority", streamPriority);
+        appendDiagnostic(result, "preload", isPreloadVideoOperation);
+        appendDiagnostic(result, "total_bytes", totalBytesCount);
+        appendDiagnostic(result, "downloaded_bytes", downloadedBytes);
+        appendDiagnostic(result, "requested_bytes", requestedBytesCount);
+        appendDiagnostic(result, "chunk_bytes", currentDownloadChunkSize);
+        appendDiagnostic(result, "request_count", requestsCount);
+        appendDiagnostic(result, "requesting_reference", requestingReference);
+        appendDiagnostic(result, "last_error", lastDiagnosticError);
+        appendDiagnostic(result, "last_error_time_ms", lastDiagnosticErrorTime);
+        if (location != null) {
+            appendDiagnostic(result, "location_type", location.getClass().getSimpleName());
+            appendDiagnostic(result, "location_id", location.id);
+            appendDiagnostic(result, "location_access_hash", location.access_hash);
+            appendDiagnostic(result, "location_volume_id", location.volume_id);
+            appendDiagnostic(result, "location_local_id", location.local_id);
+            appendDiagnostic(result, "location_reference", diagnosticFileReference(location.file_reference));
+        }
+
+        ArrayList<RequestInfo> active = null;
+        try {
+            if (requestInfos != null) {
+                active = new ArrayList<>(requestInfos);
+            }
+        } catch (Throwable ignore) {
+        }
+        appendDiagnostic(result, "active_requests", active != null ? active.size() : 0);
+        if (active != null) {
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < active.size(); i++) {
+                RequestInfo request = active.get(i);
+                if (request == null) {
+                    continue;
+                }
+                appendDiagnostic(result, "request[" + i + "]",
+                        "token=" + request.requestToken
+                                + " offset=" + request.offset
+                                + " limit=" + request.chunkSize
+                                + " connection_type=" + diagnosticConnectionType(request.connectionType)
+                                + " age_ms=" + (request.requestStartTime > 0 ? Math.max(0, now - request.requestStartTime) : 0)
+                                + " cancelling=" + request.cancelling
+                                + " cancelled=" + request.cancelled);
+            }
+        }
+        return result.toString();
+    }
+
+    private static void appendDiagnostic(StringBuilder result, String key, Object value) {
+        if (result.length() > 0) {
+            result.append('\n');
+        }
+        result.append(key).append(": ").append(value != null ? value : "null");
+    }
+
+    private static String diagnosticStateName(int value) {
+        switch (value) {
+            case stateIdle: return "idle";
+            case stateDownloading: return "downloading";
+            case stateFailed: return "failed";
+            case stateFinished: return "finished";
+            case stateCanceled: return "canceled";
+            case stateCancelling: return "cancelling";
+            default: return "unknown(" + value + ")";
+        }
+    }
+
+    private static String diagnosticConnectionType(int value) {
+        int lane = value & 0x0000ffff;
+        String name;
+        if (lane == ConnectionsManager.ConnectionTypeDownload) {
+            name = "download";
+        } else if (lane == ConnectionsManager.ConnectionTypeUpload) {
+            name = "upload";
+        } else if (lane == ConnectionsManager.ConnectionTypeGeneric) {
+            name = "generic";
+        } else {
+            name = "type_" + lane;
+        }
+        return name + "(" + value + ")";
+    }
+
+    private static String diagnosticFileReference(byte[] reference) {
+        return reference == null ? "none" : "bytes=" + reference.length + ",sha256=" + Utilities.bytesToHex(Utilities.computeSHA256(reference));
     }
 
     public long getDocumentId() {
@@ -2145,6 +2252,10 @@ public class FileLoadOperation {
     }
 
     protected void onFail(boolean thread, final int reason) {
+        if ("none".equals(lastDiagnosticError)) {
+            lastDiagnosticError = "loader_reason:" + reason;
+            lastDiagnosticErrorTime = System.currentTimeMillis();
+        }
         cleanup();
         state = reason == 1 ? stateCanceled : stateFailed;
         if (delegate != null) {
@@ -2544,6 +2655,8 @@ public class FileLoadOperation {
                     priorityRequestInfo = null;
                 }
                 if (error != null) {
+                    lastDiagnosticError = error.code + ":" + (error.text != null ? error.text : "unknown");
+                    lastDiagnosticErrorTime = System.currentTimeMillis();
                     if (requestInfo.whenCancelled != null) {
                         requestInfo.whenCancelled.run();
                     }
@@ -2619,6 +2732,8 @@ public class FileLoadOperation {
                                 }
                                 startDownloadRequest(connectionType);
                             } else if (error1 != null) {
+                                lastDiagnosticError = error1.code + ":" + (error1.text != null ? error1.text : "unknown");
+                                lastDiagnosticErrorTime = System.currentTimeMillis();
                                 if (error1.text.equals("FILE_TOKEN_INVALID") || error1.text.equals("REQUEST_TOKEN_INVALID")) {
                                     isCdn = false;
                                     clearOperation(requestInfo, false, false);

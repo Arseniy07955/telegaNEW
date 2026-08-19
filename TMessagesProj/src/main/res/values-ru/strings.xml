@@ -437,6 +437,7 @@
     <string name="MessageTechnicalDetails">Подробности</string>
     <string name="MessageTechnicalDetailsTitle">Подробности сообщения</string>
     <string name="MessageTechnicalDetailsCopy">Скопировать подробности</string>
+    <string name="MessageTechnicalDetailsRefresh">Обновить</string>
     <string name="LiteProfileAvatarBlur">Размытие под фото профиля</string>
     <string name="LiteProfileAvatarBlurInfo">Размытая подложка под фото профиля и кнопками действий. На старых устройствах лучше не включать: без неё раскрытие фото профиля работает гораздо плавнее.</string>
 </resources>

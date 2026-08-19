@@ -34356,23 +34356,44 @@ public class ChatActivity extends BaseFragment implements
         if (messageObject == null || messageObject.messageOwner == null || getParentActivity() == null) {
             return;
         }
-        String details = buildMessageTechnicalDetails(messageObject);
         TextView textView = new TextView(getParentActivity());
-        textView.setText(details);
         textView.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
         textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
         textView.setTextIsSelectable(true);
         textView.setTypeface(android.graphics.Typeface.MONOSPACE);
         textView.setPadding(dp(24), dp(8), dp(24), dp(8));
+        java.util.concurrent.atomic.AtomicInteger refreshGeneration = new java.util.concurrent.atomic.AtomicInteger();
+        Runnable refresh = () -> {
+            int generation = refreshGeneration.incrementAndGet();
+            textView.setText(LocaleController.getString(R.string.Loading));
+            Utilities.globalQueue.postRunnable(() -> {
+                String details = buildMessageTechnicalDetails(messageObject);
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (generation == refreshGeneration.get()) {
+                        textView.setText(details);
+                    }
+                });
+            });
+        };
+        refresh.run();
 
         android.widget.ScrollView scrollView = new android.widget.ScrollView(getParentActivity());
         scrollView.addView(textView, LayoutHelper.createScroll(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
         AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity(), themeDelegate);
         builder.setTitle(LocaleController.getString(R.string.MessageTechnicalDetailsTitle));
         builder.setView(scrollView);
-        builder.setPositiveButton(LocaleController.getString(R.string.MessageTechnicalDetailsCopy), (dialog, which) -> AndroidUtilities.addToClipboard(details));
+        builder.setPositiveButton(LocaleController.getString(R.string.MessageTechnicalDetailsCopy), (dialog, which) -> AndroidUtilities.addToClipboard(textView.getText().toString()));
+        builder.setNeutralButton(LocaleController.getString(R.string.MessageTechnicalDetailsRefresh), null);
         builder.setNegativeButton(LocaleController.getString(R.string.Close), null);
-        showDialog(builder.create());
+        AlertDialog dialog = builder.create();
+        showDialog(dialog);
+        View refreshButton = dialog.getButton(DialogInterface.BUTTON_NEUTRAL);
+        if (refreshButton != null) {
+            refreshButton.setOnClickListener(view -> {
+                refresh.run();
+                scrollView.scrollTo(0, 0);
+            });
+        }
     }
 
     private String buildMessageTechnicalDetails(MessageObject object) {
@@ -34381,48 +34402,128 @@ public class ChatActivity extends BaseFragment implements
         TLRPC.Photo photo = object.getPhoto();
         int dcId = document != null ? document.dc_id : photo != null ? photo.dc_id : 0;
         boolean hasMedia = document != null || photo != null;
-        StringBuilder result = new StringBuilder(768);
+        StringBuilder result = new StringBuilder(2048);
+        appendTechnicalSection(result, "snapshot");
+        appendTechnicalDetail(result, "generated_at_ms", System.currentTimeMillis());
+        appendTechnicalDetail(result, "account", currentAccount);
+        appendTechnicalDetail(result, "connection_state", technicalConnectionState(ConnectionsManager.getInstance(currentAccount).getConnectionState()));
+        appendTechnicalDetail(result, "network_type", ApplicationLoader.getCurrentNetworkType());
+        appendTechnicalDetail(result, "network_online", ApplicationLoader.isNetworkOnline());
+        appendTechnicalDetail(result, "wss_configured", SharedConfig.wssTransportEnabled);
+        boolean proxyEnabled = SharedConfig.isProxyEnabled();
+        appendTechnicalDetail(result, "proxy_enabled", proxyEnabled);
+        if (proxyEnabled && SharedConfig.currentProxy != null) {
+            SharedConfig.ProxyInfo proxy = SharedConfig.currentProxy;
+            appendTechnicalDetail(result, "proxy_server", proxy.address + ":" + proxy.port);
+            appendTechnicalDetail(result, "proxy_kind", TextUtils.isEmpty(proxy.secret) ? "socks5" : "mtproxy");
+            appendTechnicalDetail(result, "proxy_diagnostic", proxy.lastCheckDiagnostic);
+            appendTechnicalDetail(result, "proxy_ping_ms", proxy.ping);
+        }
+
+        appendTechnicalSection(result, "message");
         appendTechnicalDetail(result, "message_id", message.id);
         appendTechnicalDetail(result, "dialog_id", object.getDialogId());
         appendTechnicalDetail(result, "peer", technicalPeer(message.peer_id));
         appendTechnicalDetail(result, "from", technicalPeer(message.from_id));
+        appendTechnicalDetail(result, "topic_id", MessageObject.getTopicId(currentAccount, message, ChatObject.isForum(currentChat)));
+        if (message.reply_to != null) {
+            appendTechnicalDetail(result, "reply_to_message_id", message.reply_to.reply_to_msg_id);
+            appendTechnicalDetail(result, "reply_to_top_id", message.reply_to.reply_to_top_id);
+        }
         appendTechnicalDetail(result, "date", message.date);
+        appendTechnicalDetail(result, "edit_date", message.edit_date);
+        appendTechnicalDetail(result, "flags", message.flags);
         appendTechnicalDetail(result, "grouped_id", message.grouped_id);
         appendTechnicalDetail(result, "random_id", message.random_id);
         appendTechnicalDetail(result, "message_type", object.type);
         appendTechnicalDetail(result, "media_type", message.media != null ? message.media.getClass().getSimpleName() : "none");
+        appendTechnicalDetail(result, "outgoing", message.out);
+        appendTechnicalDetail(result, "views", message.views);
+        appendTechnicalDetail(result, "forwards", message.forwards);
 
+        String fileKey = null;
+        appendTechnicalSection(result, "media");
         if (document != null) {
+            fileKey = FileLoader.getAttachFileName(document);
             appendTechnicalDetail(result, "document_id", document.id);
-            appendTechnicalDetail(result, "document_access_hash", document.access_hash);
+            appendTechnicalDetail(result, "document_access_hash_fingerprint", technicalValueFingerprint(Long.toString(document.access_hash)));
+            appendTechnicalDetail(result, "document_dc", document.dc_id);
             appendTechnicalDetail(result, "mime_type", document.mime_type);
             appendTechnicalDetail(result, "file_name", FileLoader.getDocumentFileName(document));
+            appendTechnicalDetail(result, "file_key", fileKey);
             appendTechnicalDetail(result, "file_size", document.size);
+            appendTechnicalDetail(result, "document_attributes", technicalDocumentAttributes(document));
             appendTechnicalDetail(result, "file_reference", technicalFileReference(document.file_reference));
         }
         if (photo != null) {
+            TLRPC.PhotoSize photoSize = FileLoader.getClosestPhotoSizeWithSize(photo.sizes, AndroidUtilities.getPhotoSize(true));
+            String photoFileKey = photoSize != null ? FileLoader.getAttachFileName(photoSize) : null;
+            if (TextUtils.isEmpty(fileKey)) {
+                fileKey = photoFileKey;
+            }
             appendTechnicalDetail(result, "photo_id", photo.id);
-            appendTechnicalDetail(result, "photo_access_hash", photo.access_hash);
+            appendTechnicalDetail(result, "photo_access_hash_fingerprint", technicalValueFingerprint(Long.toString(photo.access_hash)));
+            appendTechnicalDetail(result, "photo_dc", photo.dc_id);
             appendTechnicalDetail(result, "photo_sizes", photo.sizes != null ? photo.sizes.size() : 0);
             appendTechnicalDetail(result, "video_sizes", photo.video_sizes != null ? photo.video_sizes.size() : 0);
+            appendTechnicalDetail(result, "photo_file_key", photoFileKey);
+            appendTechnicalDetail(result, "selected_photo_size", technicalPhotoSize(photoSize));
             appendTechnicalDetail(result, "file_reference", technicalFileReference(photo.file_reference));
+        }
+        if (message.media instanceof TLRPC.TL_messageMediaWebPage) {
+            TLRPC.WebPage page = message.media.webpage;
+            if (page != null) {
+                appendTechnicalDetail(result, "webpage_id", page.id);
+                appendTechnicalDetail(result, "webpage_type", page.type);
+                appendTechnicalDetail(result, "webpage_site", page.site_name);
+                appendTechnicalDetail(result, "webpage_host", technicalUrlHost(page.url));
+                appendTechnicalDetail(result, "webpage_url_fingerprint", technicalValueFingerprint(page.url));
+                appendTechnicalDetail(result, "embed_host", technicalUrlHost(page.embed_url));
+                appendTechnicalDetail(result, "embed_url_fingerprint", technicalValueFingerprint(page.embed_url));
+            }
         }
         if (hasMedia) {
             appendTechnicalDetail(result, "media_dc", dcId);
-            appendTechnicalDetail(result, "wss_enabled", SharedConfig.wssTransportEnabled);
+            appendTechnicalDetail(result, "selected_file_key", fileKey);
+            appendTechnicalDetail(result, "attach_path_present", !TextUtils.isEmpty(message.attachPath));
+            appendTechnicalDetail(result, "attach_path_fingerprint", technicalValueFingerprint(message.attachPath));
+            appendTechnicalDetail(result, "loading", !TextUtils.isEmpty(fileKey) && FileLoader.getInstance(currentAccount).isLoadingFile(fileKey));
             if (dcId >= 1 && dcId <= 5) {
-                appendTechnicalDetail(result, "wss_server", "wss://kws" + dcId + "-1.web.telegram.org/apiws");
-                appendTechnicalDetail(result, "wss_relay", technicalWssRelay(dcId) + ":443");
-                appendTechnicalDetail(result, "transport", SharedConfig.wssTransportEnabled ? "WSS media (with direct fallback)" : "direct TCP");
+                appendTechnicalDetail(result, "expected_wss_url", "wss://kws" + dcId + "-1.web.telegram.org/apiws");
             } else {
-                appendTechnicalDetail(result, "transport", "direct/non-standard media DC");
+                appendTechnicalDetail(result, "expected_wss_url", "unavailable for this DC");
             }
-            java.io.File localFile = FileLoader.getInstance(currentAccount).getPathToMessage(message);
-            appendTechnicalDetail(result, "local_path", localFile != null ? localFile.getAbsolutePath() : "none");
+            java.io.File localFile = FileLoader.getInstance(currentAccount).getPathToMessage(message, false);
+            appendTechnicalDetail(result, "local_file_name", localFile != null ? localFile.getName() : "none");
             appendTechnicalDetail(result, "local_exists", localFile != null && localFile.exists());
             appendTechnicalDetail(result, "local_bytes", localFile != null && localFile.exists() ? localFile.length() : 0);
+
+            appendTechnicalSection(result, "file_loader");
+            appendTechnicalBlock(result, FileLoader.getInstance(currentAccount).getLoadOperationDiagnostics(fileKey));
+
+            appendTechnicalSection(result, "live_connections");
+            appendTechnicalDetail(result, "source_dc", dcId);
+            appendTechnicalBlock(result, ConnectionsManager.getInstance(currentAccount).getDatacenterConnectionDiagnostics(dcId));
+            int activeDc = FileLoader.getInstance(currentAccount).getLoadOperationDatacenterId(fileKey);
+            if (activeDc != 0 && activeDc != dcId) {
+                appendTechnicalDetail(result, "effective_dc", activeDc);
+                appendTechnicalBlock(result, ConnectionsManager.getInstance(currentAccount).getDatacenterConnectionDiagnostics(activeDc));
+            }
         }
         return result.toString();
+    }
+
+    private static void appendTechnicalSection(StringBuilder builder, String title) {
+        if (builder.length() > 0) {
+            builder.append("\n\n");
+        }
+        builder.append('[').append(title).append(']');
+    }
+
+    private static void appendTechnicalBlock(StringBuilder builder, String block) {
+        if (!TextUtils.isEmpty(block)) {
+            builder.append('\n').append(block);
+        }
     }
 
     private static void appendTechnicalDetail(StringBuilder builder, String key, Object value) {
@@ -34444,11 +34545,57 @@ public class ChatActivity extends BaseFragment implements
         return reference == null ? "none" : "bytes=" + reference.length + ", sha256=" + org.telegram.messenger.Utilities.bytesToHex(org.telegram.messenger.Utilities.computeSHA256(reference));
     }
 
-    private static String technicalWssRelay(int dcId) {
-        if (dcId == 1 || dcId == 3) return "149.154.174.100";
-        if (dcId == 2 || dcId == 4) return "149.154.167.220";
-        if (dcId == 5) return "149.154.170.100";
-        return "unknown";
+    private static String technicalValueFingerprint(String value) {
+        if (TextUtils.isEmpty(value)) return "none";
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return "sha256=" + Utilities.bytesToHex(Utilities.computeSHA256(bytes));
+    }
+
+    private static String technicalPhotoSize(TLRPC.PhotoSize size) {
+        if (size == null) return "none";
+        return "type=" + size.type + ",width=" + size.w + ",height=" + size.h + ",bytes=" + size.size;
+    }
+
+    private static String technicalDocumentAttributes(TLRPC.Document document) {
+        if (document == null || document.attributes == null || document.attributes.isEmpty()) return "none";
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; i < document.attributes.size(); i++) {
+            TLRPC.DocumentAttribute attribute = document.attributes.get(i);
+            if (attribute == null) continue;
+            if (value.length() > 0) value.append(',');
+            value.append(attribute.getClass().getSimpleName());
+            if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
+                value.append("(duration=").append(attribute.duration)
+                        .append(",width=").append(attribute.w)
+                        .append(",height=").append(attribute.h)
+                        .append(",codec=").append(attribute.video_codec).append(')');
+            } else if (attribute instanceof TLRPC.TL_documentAttributeAudio) {
+                value.append("(duration=").append(attribute.duration)
+                        .append(",voice=").append(attribute.voice).append(')');
+            }
+        }
+        return value.length() > 0 ? value.toString() : "none";
+    }
+
+    private static String technicalUrlHost(String url) {
+        if (TextUtils.isEmpty(url)) return "none";
+        try {
+            String host = Uri.parse(url).getHost();
+            return !TextUtils.isEmpty(host) ? host : "none";
+        } catch (Throwable ignore) {
+            return "invalid";
+        }
+    }
+
+    private static String technicalConnectionState(int state) {
+        switch (state) {
+            case ConnectionsManager.ConnectionStateConnecting: return "connecting(" + state + ")";
+            case ConnectionsManager.ConnectionStateWaitingForNetwork: return "waiting_for_network(" + state + ")";
+            case ConnectionsManager.ConnectionStateConnected: return "connected(" + state + ")";
+            case ConnectionsManager.ConnectionStateConnectingToProxy: return "connecting_to_proxy(" + state + ")";
+            case ConnectionsManager.ConnectionStateUpdating: return "updating(" + state + ")";
+            default: return "unknown(" + state + ")";
+        }
     }
 
     private void hideAds() {

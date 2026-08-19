@@ -33,6 +33,8 @@ def main() -> int:
     media_data = read("TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java")
     messages_controller = read("TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java")
     chat_activity = read("TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java")
+    file_loader = read("TMessagesProj/src/main/java/org/telegram/messenger/FileLoader.java")
+    file_operation = read("TMessagesProj/src/main/java/org/telegram/messenger/FileLoadOperation.java")
 
     require("CONSTRAINED_HEAP_MB = 128" in policy and "isLowRamDevice()" in policy,
             "resource policy must treat both a 128 MiB heap and Android low-RAM as constrained", errors)
@@ -97,6 +99,28 @@ def main() -> int:
             and "req.top_msg_id = topicId;" in messages_controller
             and "unpinAllMessages(currentChat, currentUser, (int) getTopicId())" in chat_activity,
             "unpin-all must use Telegram's topic-scoped API so unloaded pins are removed too", errors)
+    require("getLoadOperationDiagnostics" in file_loader
+            and "recentLoadDiagnostics" in file_loader
+            and "Thread.currentThread() == Utilities.stageQueue" in file_loader
+            and "ready.await(750, TimeUnit.MILLISECONDS)" in file_loader
+            and "getDiagnosticSnapshot(String event)" in file_operation
+            and 'appendDiagnostic(result, "request[" + i + "]"' in file_operation
+            and "lastDiagnosticError" in file_operation,
+            "message diagnostics must retain active and failed media request identifiers", errors)
+    require("MessageTechnicalDetailsRefresh" in chat_activity
+            and "Utilities.globalQueue.postRunnable" in chat_activity
+            and "getDatacenterConnectionDiagnostics" in chat_activity
+            and 'appendTechnicalSection(result, "file_loader")' in chat_activity
+            and 'appendTechnicalSection(result, "live_connections")' in chat_activity,
+            "every message details dialog must refresh live loader and connection routes", errors)
+    require('"document_access_hash"' not in chat_activity
+            and '"photo_access_hash"' not in chat_activity
+            and '"webpage_url"' not in chat_activity
+            and '"embed_url"' not in chat_activity
+            and '"local_path"' not in chat_activity
+            and "getPathToMessage(message, false)" in chat_activity
+            and "getFileDatabase().getPath(documentId, dcId, type, useFileDatabaseQueue)" in file_loader,
+            "copied message diagnostics must fingerprint credentials and paths while resolving the current account without blocking", errors)
 
     flags_chat = next(
         (line for line in lite_mode.splitlines() if "int FLAGS_CHAT =" in line),
