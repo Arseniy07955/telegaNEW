@@ -165,7 +165,7 @@ public final class PluginUtils {
                         (MessageObject) replyToTopMsg,
                         null,
                         (ChatActivity.ReplyQuote) replyQuote,
-                        null, true, 0, 0, null, null, 0, 0L, false, 0L, 0L, null);
+                        null, true, 0, 0, null, null, 0L, false, 0L, 0L, null);
             } catch (Throwable t) {
                 FileLog.e(t);
             }
@@ -192,7 +192,7 @@ public final class PluginUtils {
                             AccountInstance.getInstance(account),
                             path, path, null, text == null ? "" : text, null,
                             msg.getDialogId(), null, null, null, null, msg,
-                            true, 0, null, null, 0, false);
+                            true, 0, null, null, false);
                 } else {
                     SendMessagesHelper.getInstance(account).editMessage(
                             msg, null, null, null, null, null, null,

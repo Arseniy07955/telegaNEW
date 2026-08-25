@@ -413,14 +413,6 @@
         </receiver>
 
         <receiver
-            android:name=".NotificationsDisabledReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.app.action.NOTIFICATION_CHANNEL_BLOCK_STATE_CHANGED"/>
-            </intent-filter>
-        </receiver>
-
-        <receiver
             android:name=".SmsReceiver"
             android:enabled="false"
             android:exported="true">

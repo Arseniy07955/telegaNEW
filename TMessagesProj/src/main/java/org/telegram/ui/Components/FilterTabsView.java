@@ -1778,7 +1778,9 @@ public class FilterTabsView extends FrameLayout {
             invalidated = true;
             requestLayout();
             listView.setItemAnimator(itemAnimator);
-            adapter.notifyDataSetChanged();
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
             allTabsWidth = 0;
             resetDefaultTabTitle();
             for (int b = 0, N = tabs.size(); b < N; b++) {
