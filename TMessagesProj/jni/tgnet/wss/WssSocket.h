@@ -48,6 +48,7 @@ public:
     transport::HandshakePhase handshakePhase() const override;
     const char *transportName() const override;
     void timedOut() override;
+    void noteAppDataTimeout() override;
     void close() override;
 
     const Route &route() const;

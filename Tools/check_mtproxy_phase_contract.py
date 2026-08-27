@@ -90,6 +90,7 @@ def native_diagnostics(socket: str, socket_h: str, endpoint_recorder: str, start
     phases |= set(re.findall(r'mtproxy_startup (reconnect_backoff_suppressed)', connection))
     phases |= native_constant_values(socket + "\n" + socket_h + "\n" + endpoint_recorder + "\n" + startup_timeline + "\n" + connection, native_constants)
     phases.discard("wss_tls_handshake")
+    phases.discard("wss_appdata_no_response_timeout")
     phases -= {
         "none",
         "unknown",

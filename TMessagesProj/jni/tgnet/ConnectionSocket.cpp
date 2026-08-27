@@ -152,6 +152,7 @@
 #define currentWssRoute stateMachine.wss.route
 #define currentWssTransport stateMachine.wss.transport
 #define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
+#define wssFirstFrameSentTime stateMachine.wss.firstFrameSentTime
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -185,9 +186,18 @@ static constexpr int32_t MT_PROXY_HANDSHAKE_TIMER_TCP_CONNECT_GATE = 9;
 static constexpr int32_t MT_PROXY_HANDSHAKE_TIMER_PROBE_WAIT = 10;
 static constexpr int64_t MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS = 4500;
 static constexpr int64_t MT_PROXY_SERVER_HELLO_HMAC_WAIT_MS = 900;
-static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = 5500;
-static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
+// Единый порог для транспортов с собственным рукопожатием (MTProxy, WSS):
+// сколько ждать ответа на первые байты приложения, прежде чем счесть
+// соединение чёрной дырой — рукопожатие прошло, а данные глотает миддлбокс.
+static constexpr int64_t TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
+static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
+static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
+static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
+
+static bool transportAppDataUnanswered(int64_t now, bool firstDataSent, bool noReplyYet, int64_t firstDataSentTime, int64_t timeoutMs) {
+    return firstDataSent && noReplyYet && firstDataSentTime > 0 && now - firstDataSentTime > timeoutMs;
+}
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
 // Outgoing MTProto bytes are pulled from outgoingByteStream and emitted one
 // packet per WebSocket frame. Pulling pauses while the socket already holds
@@ -3244,6 +3254,7 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
     currentWssTransport.reset();
     currentTransportWss = false;
     currentWssRoute = tgnet::wss::Route();
+    wssFirstFrameSentTime = 0;
     setWaitingForHostResolve("", "openConnection_reset_cleanup");
     setAdjustWriteOpAfterResolve(false, "openConnection_reset_cleanup");
     setAdjustWriteOpAfterPreTcpGate(false, "openConnection_reset_cleanup");
@@ -3328,6 +3339,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentMediaConnection = mediaConnection;
     currentWssTransport.reset();
     currentWssRoute = tgnet::wss::Route();
+    wssFirstFrameSentTime = 0;
     currentProxyTlsProfile = normalizeMtProxyTlsProfile(MT_PROXY_TLS_PROFILE_ANDROID_CHROME);
     currentEffectiveProxyTlsProfile = currentProxyTlsProfile;
     currentClientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
@@ -3989,6 +4001,9 @@ bool ConnectionSocket::flushWssStream(std::string *diagnostic) {
                     (int32_t) offset, currentNetworkType, instanceNum);
         }
     }
+    if (flushedBytes > 0 && wssFirstFrameSentTime == 0) {
+        wssFirstFrameSentTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    }
     if (flushedBytes == 0 && !currentWssTransport->wantsWrite()) {
         return true;
     }
@@ -4462,6 +4477,7 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     currentWssTransport.reset();
     currentWssRoute = tgnet::wss::Route();
     outgoingWssPacketSizes.clear();
+    wssFirstFrameSentTime = 0;
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -5126,13 +5142,23 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
         }
         return false;
     }
+    if (isCurrentTransportWss()
+        && currentWssTransport->isReady()
+        && transportAppDataUnanswered(now, wssFirstFrameSentTime > 0,
+                currentWssTransport->handshakePhase() != tgnet::transport::HandshakePhase::FirstDataReceived,
+                wssFirstFrameSentTime, WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_appdata_no_response_timeout elapsed=%lld", this, (long long) (now - wssFirstFrameSentTime));
+        currentWssTransport->noteAppDataTimeout();
+        proxyCheckDiagnostic = "wss_appdata_no_response_timeout";
+        closeSocket(2, 0);
+        return true;
+    }
     if (isCurrentMtProxyConnection()
         && currentSecretIsFakeTls
-        && mtproxyFirstTlsFrameSentLogged
-        && !mtproxyFirstTlsDataReceivedLogged
-        && mtproxyFirstTlsFrameSentTime > 0
         && proxyCheckDiagnostic == MtProxyPhase::PostHandshakeNoAppdata
-        && now - mtproxyFirstTlsFrameSentTime > MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS) {
+        && transportAppDataUnanswered(now, mtproxyFirstTlsFrameSentLogged,
+                !mtproxyFirstTlsDataReceivedLogged,
+                mtproxyFirstTlsFrameSentTime, MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup mtproxy_tls_appdata_no_response_timeout elapsed=%lld", this, (long long) (now - mtproxyFirstTlsFrameSentTime));
         MtProxySocketObservation observation;
         observation.phase = MtProxyPhase::PostHandshakeNoAppdata;
@@ -5143,11 +5169,10 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (isCurrentMtProxyConnection()
         && !currentSecretIsFakeTls
-        && mtproxyFirstPlainDataSentLogged
-        && !mtproxyFirstPlainDataReceivedLogged
-        && mtproxyFirstPlainDataSentTime > 0
         && proxyCheckDiagnostic == "mtproxy_packet_sent_no_response"
-        && now - mtproxyFirstPlainDataSentTime > MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS) {
+        && transportAppDataUnanswered(now, mtproxyFirstPlainDataSentLogged,
+                !mtproxyFirstPlainDataReceivedLogged,
+                mtproxyFirstPlainDataSentTime, MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup mtproxy_packet_no_response_timeout elapsed=%lld", this, (long long) (now - mtproxyFirstPlainDataSentTime));
         publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
         closeSocket(2, 0);

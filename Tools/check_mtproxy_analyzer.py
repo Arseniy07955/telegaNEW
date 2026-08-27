@@ -30,7 +30,7 @@ def check_phase_contract():
     diagnostic_values = set(re.findall(r'public static final String [A-Z0-9_]+ = "([a-z0-9_]+)";', diagnostics))
     native_published = set(re.findall(r'publishProxyConnectionStage\("([a-z0-9_]+)"\)', socket))
     native_terminal = set(re.findall(r'proxyCheckDiagnostic = "([a-z0-9_]+)";', socket))
-    mtproxy_terminal = native_terminal - {"wss_tls_handshake"}
+    mtproxy_terminal = native_terminal - {"wss_tls_handshake", "wss_appdata_no_response_timeout"}
 
     require(
         not (native_published - diagnostic_values),
