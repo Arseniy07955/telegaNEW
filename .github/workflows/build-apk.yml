@@ -265,8 +265,34 @@ jobs:
           path: dist-release
           merge-multiple: true
 
-      - name: Stage update.json
-        run: cp update.json dist-release/update.json
+      - name: Stage update.json (версия проставляется от этой сборки)
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+
+          props = dict(
+              line.split('=', 1)
+              for line in open('gradle.properties', encoding='utf-8').read().splitlines()
+              if '=' in line and not line.startswith('#')
+          )
+          app_code = int(props['APP_VERSION_CODE'])
+          app_name = props['APP_VERSION_NAME']
+          run_number = int(os.environ['RUN_NUMBER'])
+
+          data = json.load(open('update.json', encoding='utf-8'))
+          # Та же формула, что и у APK в TMessagesProj_AppStandalone/build.gradle
+          # (versionCode * 100000 + номер сборки * 10), только без цифры ABI:
+          # клиент отбрасывает её с обеих сторон при сравнении.
+          data['version_code'] = app_code * 100000 + run_number * 10
+          data['version_name'] = f"{app_name} (#{run_number})"
+
+          with open('dist-release/update.json', 'w', encoding='utf-8') as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print('update.json:', data['version_code'], data['version_name'])
+          PY
 
       - name: Create per-run prerelease
         env:

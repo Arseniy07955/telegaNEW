@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 
 import androidx.core.content.FileProvider;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.messenger.web.R;
 import org.telegram.tgnet.ConnectionsManager;
@@ -29,10 +30,195 @@ import org.telegram.ui.IUpdateLayout;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.SMSStatsActivity;
 import org.telegram.ui.SMSSubscribeSheet;
+import org.telegram.ui.web.HttpGetFileTask;
+import org.telegram.ui.web.HttpGetTask;
 
 import java.io.File;
 
 public class ApplicationLoaderImpl extends ApplicationLoader {
+
+    // Обновления telegaNEW берутся из своего update.json на S3: там же лежит
+    // список прокси, который приложение подхватывает при каждой проверке.
+    private static final String UPDATE_JSON_URL = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json";
+    private static final String APK_URL_PREFIX = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-";
+
+    private BetaUpdate pendingUpdate;
+
+    // В этом модуле buildConfig = false, поэтому версия берётся у системы.
+    private static int installedVersionCode() {
+        try {
+            return ApplicationLoader.applicationContext.getPackageManager()
+                    .getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0).versionCode;
+        } catch (Exception e) {
+            FileLog.e(e);
+            return 0;
+        }
+    }
+
+    private static String installedVersionName() {
+        try {
+            return ApplicationLoader.applicationContext.getPackageManager()
+                    .getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            FileLog.e(e);
+            return "";
+        }
+    }
+
+    // Последняя цифра versionCode — номер ABI сборки, а не более новая версия,
+    // поэтому в сравнении она отбрасывается с обеих сторон.
+    private static int comparableVersionCode(int versionCode) {
+        return versionCode > 100000 ? versionCode / 10 : versionCode;
+    }
+
+    @Override
+    public boolean isCustomUpdate() {
+        return true;
+    }
+
+    @Override
+    public void checkUpdate(boolean force, Runnable whenDone) {
+        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates and proxies at " + UPDATE_JSON_URL);
+        new HttpGetTask(result -> {
+            if (result != null) {
+                try {
+                    JSONObject json = new JSONObject(result);
+
+                    int latest = comparableVersionCode(json.getInt("version_code"));
+                    int current = comparableVersionCode(installedVersionCode());
+                    if (latest > current) {
+                        pendingUpdate = new BetaUpdate(json.getString("version_name"), latest, json.optString("changelog", ""));
+                    } else {
+                        pendingUpdate = null;
+                    }
+                    if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check latest=" + latest + " current=" + current);
+
+                    if (json.has("proxies")) {
+                        applyProxies(json.getJSONArray("proxies"));
+                    }
+                } catch (Exception e) {
+                    FileLog.e("telegaNEW: failed to parse update.json", e);
+                }
+            }
+            if (whenDone != null) {
+                whenDone.run();
+            }
+        }).setHeader("User-Agent", "telegaNEW/" + installedVersionName()).execute(UPDATE_JSON_URL);
+    }
+
+    private void applyProxies(JSONArray proxies) throws Exception {
+        boolean listChanged = false;
+        SharedConfig.ProxyInfo activeToSet = null;
+
+        for (int i = 0; i < proxies.length(); i++) {
+            JSONObject p = proxies.getJSONObject(i);
+            String server = p.getString("server");
+            int port = p.getInt("port");
+            String secret = p.getString("secret");
+            boolean isActive = p.optBoolean("active", false);
+            boolean isDelete = p.optBoolean("delete", false);
+
+            SharedConfig.ProxyInfo existing = null;
+            for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+                if (server.equalsIgnoreCase(info.address) && port == info.port) {
+                    existing = info;
+                    break;
+                }
+            }
+
+            if (isDelete) {
+                if (existing != null) {
+                    SharedConfig.deleteProxy(existing);
+                    listChanged = true;
+                }
+                continue;
+            }
+
+            if (existing != null) {
+                if (!secret.equals(existing.secret)) {
+                    existing.secret = secret;
+                    listChanged = true;
+                }
+                if (isActive) activeToSet = existing;
+            } else {
+                SharedConfig.ProxyInfo newProxy = new SharedConfig.ProxyInfo(server, port, "", "", secret);
+                SharedConfig.proxyList.add(0, newProxy);
+                if (isActive) activeToSet = newProxy;
+                listChanged = true;
+            }
+        }
+
+        if (listChanged) {
+            SharedConfig.saveProxyList();
+        }
+        if (activeToSet != null) {
+            SharedConfig.currentProxy = activeToSet;
+            ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, "", "", activeToSet.secret);
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
+        }
+    }
+
+    @Override
+    public BetaUpdate getUpdate() {
+        return pendingUpdate;
+    }
+
+    @Override
+    public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
+        String abi = Build.SUPPORTED_ABIS[0];
+        String downloadUrl = APK_URL_PREFIX + abi + ".apk";
+
+        new AlertDialog.Builder(context)
+                .setTitle(LocaleController.getString(R.string.AppUpdate))
+                .setMessage(update.changelog != null && !update.changelog.isEmpty() ? update.changelog : LocaleController.formatString("AppUpdateVersionAndSize", R.string.AppUpdateVersionAndSize, update.version, ""))
+                .setPositiveButton(LocaleController.getString(R.string.AppUpdateDownloadNow), (dialog, which) -> showDownloadProgressDialog(context, downloadUrl))
+                .setNegativeButton(LocaleController.getString(R.string.AppUpdateRemindMeLater), null)
+                .show();
+        return true;
+    }
+
+    private void showDownloadProgressDialog(Context context, String url) {
+        AlertDialog progressDialog = new AlertDialog(context, AlertDialog.ALERT_TYPE_LOADING);
+        progressDialog.setMessage(LocaleController.getString(R.string.Loading));
+        progressDialog.setCanceledOnTouchOutside(false);
+        progressDialog.show();
+
+        new HttpGetFileTask(file -> {
+            progressDialog.dismiss();
+            if (file != null) {
+                openApkInstall((Activity) context, file);
+            } else {
+                BulletinFactory.global().createErrorBulletin("Download failed").show();
+            }
+        }, progress -> progressDialog.setProgress((int) (progress * 100)))
+                .setOverrideExtension("apk")
+                .execute(url);
+    }
+
+    public boolean openApkInstall(Activity activity, File f) {
+        boolean exists = false;
+        try {
+            if (exists = f.exists()) {
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                if (Build.VERSION.SDK_INT >= 24) {
+                    intent.setDataAndType(FileProvider.getUriForFile(activity, ApplicationLoader.getApplicationId() + ".provider", f), "application/vnd.android.package-archive");
+                } else {
+                    intent.setDataAndType(Uri.fromFile(f), "application/vnd.android.package-archive");
+                }
+                try {
+                    activity.startActivityForResult(intent, 500);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return exists;
+    }
+
     @Override
     protected String onGetApplicationId() {
         return getPackageName();

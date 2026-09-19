@@ -1,13 +1,34 @@
 {
-  "version_code": 699200,
-  "version_name": "12.9.2 (v3.2)",
+  "version_code": 0,
+  "version_name": "dev",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
   "changelog": "• Обновление",
   "proxies": [
     {
+      "server": "redflag.yazaebalsyadelatproxy.cc",
+      "port": 443,
+      "secret": "ee69e899d89ec68e220ca177557322b27f726564666c61672e79617a616562616c73796164656c617470726f78792e6363"
+    },
+    {
+      "server": "pokemon.catpaws.ru",
+      "port": 9443,
+      "secret": "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275"
+    },
+    {
       "server": "nsk.cdn.catpaws.ru",
       "port": 443,
       "secret": "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275"
+    },
+    {
+      "server": "proxy.vmelectronics.ru",
+      "port": 443,
+      "secret": "ee6164732e78352e72759c6509729477",
+      "active": true
+    },
+    {
+      "server": "data.n3o.lol",
+      "port": 5432,
+      "secret": "04040404000044440000444404040000"
     },
     {
       "server": "37.139.34.199",
@@ -38,17 +59,6 @@
       "port": 443,
       "secret": "ee6a0333c1db3f8eaba5c76731a44203b6617669746f2e7275",
       "delete": true
-    },
-    {
-      "server": "proxy.vmelectronics.ru",
-      "port": 443,
-      "secret": "ee6164732e78352e72759c6509729477",
-      "active": true
-    },
-    {
-      "server": "data.n3o.lol",
-      "port": 5432,
-      "secret": "04040404000044440000444404040000",
     }
   ]
 }
