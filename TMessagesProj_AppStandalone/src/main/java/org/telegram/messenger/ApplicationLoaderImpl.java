@@ -109,6 +109,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     private void applyProxies(JSONArray proxies) throws Exception {
         boolean listChanged = false;
         SharedConfig.ProxyInfo activeToSet = null;
+        java.util.HashSet<String> priorityKeys = new java.util.HashSet<>();
 
         for (int i = 0; i < proxies.length(); i++) {
             JSONObject p = proxies.getJSONObject(i);
@@ -117,6 +118,9 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             String secret = p.getString("secret");
             boolean isActive = p.optBoolean("active", false);
             boolean isDelete = p.optBoolean("delete", false);
+            if (!isDelete && p.optBoolean("priority", false)) {
+                priorityKeys.add(SharedConfig.proxyPriorityKey(server, port));
+            }
 
             SharedConfig.ProxyInfo existing = null;
             for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
@@ -148,11 +152,27 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             }
         }
 
+        SharedConfig.setProxyPriorityKeys(priorityKeys);
         if (listChanged) {
             SharedConfig.saveProxyList();
         }
-        if (activeToSet != null) {
+        // Точка с active включается, только когда прокси выключен или выбранная
+        // точка исчезла из списка. Иначе проверка обновлений выдёргивала бы
+        // пользователя с работающего прокси при каждом запуске, а перебор
+        // мёртвых точек и так начинается с приоритетных.
+        if (activeToSet != null
+                && (!SharedConfig.isProxyEnabled() || !SharedConfig.proxyList.contains(SharedConfig.currentProxy))) {
             SharedConfig.currentProxy = activeToSet;
+            // Выбор надо записать в настройки, иначе после перезапуска клиент
+            // поднимется со старым прокси из prefs.
+            MessagesController.getGlobalMainSettings().edit()
+                    .putString("proxy_ip", activeToSet.address)
+                    .putString("proxy_user", "")
+                    .putString("proxy_pass", "")
+                    .putString("proxy_secret", activeToSet.secret)
+                    .putInt("proxy_port", activeToSet.port)
+                    .putBoolean("proxy_enabled", true)
+                    .apply();
             ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, "", "", activeToSet.secret);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         }

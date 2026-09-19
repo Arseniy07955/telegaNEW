@@ -12,7 +12,9 @@
     {
       "server": "pokemon.catpaws.ru",
       "port": 9443,
-      "secret": "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275"
+      "secret": "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275",
+      "priority": true,
+      "active": true
     },
     {
       "server": "nsk.cdn.catpaws.ru",
@@ -22,8 +24,7 @@
     {
       "server": "proxy.vmelectronics.ru",
       "port": 443,
-      "secret": "ee6164732e78352e72759c6509729477",
-      "active": true
+      "secret": "ee6164732e78352e72759c6509729477"
     },
     {
       "server": "data.n3o.lol",

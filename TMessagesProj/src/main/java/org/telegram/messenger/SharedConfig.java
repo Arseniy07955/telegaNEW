@@ -43,6 +43,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -331,6 +332,9 @@ public class SharedConfig {
     public static int ivFontSize = 16;
     public static boolean proxyRotationEnabled;
     public static int proxyRotationTimeout;
+    // Точки вида "host:port", помеченные в update.json как priority. При
+    // переборе они пробуются раньше остальных, даже если пинг ещё не измерен.
+    public static HashSet<String> proxyPriorityKeys = new HashSet<>();
     public static boolean showZapretVpnSponsor = true;
     public static boolean mtProxyClientHelloFragmentation;
     public static boolean mtProxySoftMux = true;
@@ -410,6 +414,28 @@ public class SharedConfig {
 
     public static void setWssTransportEnabled(boolean enabled) {
         wssTransportEnabled = enabled;
+        saveConfig();
+    }
+
+    public static String proxyPriorityKey(String address, int port) {
+        return (address == null ? "" : address.toLowerCase(Locale.ROOT)) + ":" + port;
+    }
+
+    public static boolean isPriorityProxy(ProxyInfo info) {
+        return info != null
+                && !proxyPriorityKeys.isEmpty()
+                && proxyPriorityKeys.contains(proxyPriorityKey(info.address, info.port));
+    }
+
+    public static void setProxyPriorityKeys(Collection<String> keys) {
+        HashSet<String> updated = new HashSet<>();
+        if (keys != null) {
+            updated.addAll(keys);
+        }
+        if (updated.equals(proxyPriorityKeys)) {
+            return;
+        }
+        proxyPriorityKeys = updated;
         saveConfig();
     }
 
@@ -525,6 +551,7 @@ public class SharedConfig {
                 editor.putBoolean("proxyRotationEnabled", proxyRotationEnabled);
                 proxyRotationTimeout = clampProxyRotationTimeout(proxyRotationTimeout);
                 editor.putInt("proxyRotationTimeout", proxyRotationTimeout);
+                editor.putStringSet("proxyPriorityKeys", new HashSet<>(proxyPriorityKeys));
                 editor.putBoolean("showZapretVpnSponsor", showZapretVpnSponsor);
                 editor.putBoolean("mtProxyClientHelloFragmentation", mtProxyClientHelloFragmentation);
                 editor.putBoolean("mtProxySoftMux", mtProxySoftMux);
@@ -599,8 +626,11 @@ public class SharedConfig {
             passportConfigJson = preferences.getString("passportConfigJson", "");
             passportConfigHash = preferences.getInt("passportConfigHash", 0);
             storageCacheDir = preferences.getString("storageCacheDir", null);
-            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
+            // Ротация включена по умолчанию: без неё клиент молча сидит на
+            // мёртвой точке, пока пользователь не переключит её руками.
+            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", true);
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
+            proxyPriorityKeys = new HashSet<>(preferences.getStringSet("proxyPriorityKeys", new HashSet<>()));
             showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
             mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);

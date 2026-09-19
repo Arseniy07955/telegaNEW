@@ -143,7 +143,12 @@ final class ProxyRotationEngine {
 
     private SharedConfig.ProxyInfo selectFreshAvailableCandidate() {
         List<SharedConfig.ProxyInfo> sortedList = new ArrayList<>(SharedConfig.proxyList);
-        Collections.sort(sortedList, (o1, o2) -> Long.compare(o1.ping, o2.ping));
+        // Приоритетные точки (priority в update.json) идут первыми, внутри
+        // каждой группы — по пингу.
+        Collections.sort(sortedList, (o1, o2) -> {
+            int byPriority = Boolean.compare(SharedConfig.isPriorityProxy(o2), SharedConfig.isPriorityProxy(o1));
+            return byPriority != 0 ? byPriority : Long.compare(o1.ping, o2.ping);
+        });
         for (SharedConfig.ProxyInfo info : sortedList) {
             if (!isCandidateAllowed(info) || !info.available || !ProxyRuntimeStateStore.isFresh(info)) {
                 continue;
@@ -154,6 +159,13 @@ final class ProxyRotationEngine {
     }
 
     private SharedConfig.ProxyInfo selectFallbackCandidate(SharedConfig.ProxyInfo currentProxy) {
+        // Приоритетная точка берётся раньше обхода по списку: пинга у неё может
+        // ещё не быть, и без этого прохода она бы ждала своей очереди.
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            if (SharedConfig.isPriorityProxy(info) && isCandidateAllowed(info)) {
+                return info;
+            }
+        }
         int count = SharedConfig.proxyList.size();
         int currentIndex = currentProxy != null ? SharedConfig.proxyList.indexOf(currentProxy) : -1;
         for (int offset = 1; offset <= count; offset++) {
