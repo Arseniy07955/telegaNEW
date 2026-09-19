@@ -378,9 +378,33 @@ public class ApplicationLoader extends Application {
 
         LauncherIconController.tryFixLauncherIconIfNeeded();
         ProxyRotationController.init();
+        ProxyAutoSelector.init();
+    }
+
+    /**
+     * У форка нет рабочего пути для пушей Telegram: токен FCM выписан в чужом
+     * проекте, поэтому в фоне уведомления держатся только своим соединением.
+     * Поэтому keep-alive и фоновая сеть включаются на первом запуске. Делается
+     * это ровно один раз: дальше значение принадлежит пользователю.
+     */
+    private static void applyBackgroundNotificationDefaults() {
+        SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
+        if (preferences.getBoolean("zasto_background_defaults_applied", false)) {
+            return;
+        }
+        SharedPreferences.Editor editor = preferences.edit();
+        editor.putBoolean("zasto_background_defaults_applied", true);
+        if (!preferences.contains("pushService")) {
+            editor.putBoolean("pushService", true);
+        }
+        if (!preferences.contains(ConnectionsManager.BACKGROUND_NETWORK_ALWAYS_ON)) {
+            editor.putBoolean(ConnectionsManager.BACKGROUND_NETWORK_ALWAYS_ON, true);
+        }
+        editor.commit();
     }
 
     public static void startPushService() {
+        applyBackgroundNotificationDefaults();
         SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
         boolean enabled;
         if (preferences.contains("pushService")) {

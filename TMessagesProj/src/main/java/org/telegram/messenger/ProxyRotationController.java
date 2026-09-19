@@ -23,6 +23,16 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
         INSTANCE.initInternal();
     }
 
+    // Переключение снаружи (ProxyAutoSelector), чтобы запись настроек,
+    // уведомления и разметка состояния точки были ровно те же, что у ротации.
+    static void applyProxy(SharedConfig.ProxyInfo info, String reason) {
+        if (info == null) {
+            return;
+        }
+        INSTANCE.cancelScheduledSwitch(reason);
+        INSTANCE.switchToProxy(info, reason);
+    }
+
     private void switchToProxy(SharedConfig.ProxyInfo info, String reason) {
         engine.recordSwitch(info);
         SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
