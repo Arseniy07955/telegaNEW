@@ -10,9 +10,17 @@ import traceback
 
 _INSTANCES = {}   # plugin_id -> BasePlugin instance
 _SETTINGS = {}    # plugin_id -> list of ui.settings items (last rendered)
+_SETTINGS_SCREENS = {}  # screen token -> (plugin_id, list of nested settings items)
 _MODULES = {}     # plugin_id -> module globals dict (keeps the module alive)
+_SETTINGS_SCREEN_COUNTER = 0
 
 CANCEL_SENTINEL = "__zasto_cancel__"
+
+
+def configure(requirements_dir):
+    """Configure the writable cache used by plugin ``__requirements__``."""
+    from _plugin_requirements import configure as configure_requirements
+    configure_requirements(requirements_dir)
 
 
 def _read_source(path):
@@ -24,6 +32,11 @@ def _read_source(path):
 def instantiate(path, plugin_id, context):
     """Exec the plugin file, instantiate its BasePlugin subclass and run on_plugin_load()."""
     from base_plugin import BasePlugin
+    from _plugin_requirements import ensure_requirements
+
+    # Resolve metadata before executing imports from the plugin source. Both the
+    # official list form and the legacy single-string form are supported.
+    ensure_requirements(path)
 
     src = _read_source(path)
     g = {
@@ -67,6 +80,9 @@ def instantiate(path, plugin_id, context):
 def unload(plugin_id):
     inst = _INSTANCES.pop(plugin_id, None)
     _SETTINGS.pop(plugin_id, None)
+    for token, (owner, _items) in list(_SETTINGS_SCREENS.items()):
+        if owner == plugin_id:
+            _SETTINGS_SCREENS.pop(token, None)
     _MODULES.pop(plugin_id, None)
     if inst is not None:
         try:
@@ -81,21 +97,10 @@ def is_loaded(plugin_id):
 
 # ------------------------------------------------------------------ settings bridge
 
-def get_settings_model(plugin_id):
-    """Return a java.util.List<HashMap<String,Object>> describing the settings rows."""
+def _settings_model(inst, items):
     from java.util import ArrayList, HashMap
 
     out = ArrayList()
-    inst = _INSTANCES.get(plugin_id)
-    if inst is None:
-        return out
-    try:
-        items = list(inst.create_settings() or [])  # materialize once (create_settings may be a generator)
-    except Exception:
-        traceback.print_exc()
-        return out
-
-    _SETTINGS[plugin_id] = items
     for idx, item in enumerate(items):
         try:
             model = item.to_model(inst, idx)
@@ -111,7 +116,73 @@ def get_settings_model(plugin_id):
     return out
 
 
-def on_setting_change(plugin_id, key, value):
+def get_settings_model(plugin_id):
+    """Return a java.util.List<HashMap<String,Object>> describing the root settings rows."""
+    from java.util import ArrayList
+
+    inst = _INSTANCES.get(plugin_id)
+    if inst is None:
+        return ArrayList()
+    try:
+        items = list(inst.create_settings() or [])
+    except Exception:
+        traceback.print_exc()
+        return ArrayList()
+    _SETTINGS[plugin_id] = items
+    return _settings_model(inst, items)
+
+
+def get_settings_model_for_screen(plugin_id, screen_token):
+    from java.util import ArrayList
+
+    inst = _INSTANCES.get(plugin_id)
+    screen = _SETTINGS_SCREENS.get(str(screen_token))
+    if inst is None or screen is None or screen[0] != plugin_id:
+        return ArrayList()
+    return _settings_model(inst, screen[1])
+
+
+def create_sub_settings(plugin_id, screen_token, index):
+    """Materialize a Text.create_sub_fragment factory and return its screen identity."""
+    global _SETTINGS_SCREEN_COUNTER
+    from java.util import HashMap
+
+    result = HashMap()
+    inst = _INSTANCES.get(plugin_id)
+    if inst is None:
+        return result
+    if screen_token:
+        screen = _SETTINGS_SCREENS.get(str(screen_token))
+        items = screen[1] if screen is not None and screen[0] == plugin_id else []
+    else:
+        items = _SETTINGS.get(plugin_id, [])
+    if not (0 <= index < len(items)):
+        return result
+    item = items[index]
+    factory = getattr(item, "create_sub_fragment", None)
+    if factory is None:
+        return result
+    try:
+        nested_items = list(factory() or [])
+    except Exception:
+        traceback.print_exc()
+        return result
+    _SETTINGS_SCREEN_COUNTER += 1
+    token = f"{plugin_id}:{_SETTINGS_SCREEN_COUNTER}"
+    _SETTINGS_SCREENS[token] = (plugin_id, nested_items)
+    result.put("token", token)
+    result.put("title", str(getattr(item, "text", "")))
+    return result
+
+
+def _items_for_screen(plugin_id, screen_token):
+    if screen_token:
+        screen = _SETTINGS_SCREENS.get(str(screen_token))
+        return screen[1] if screen is not None and screen[0] == plugin_id else []
+    return _SETTINGS.get(plugin_id, [])
+
+
+def on_setting_change(plugin_id, key, value, screen_token=None):
     inst = _INSTANCES.get(plugin_id)
     if inst is None:
         return
@@ -119,7 +190,7 @@ def on_setting_change(plugin_id, key, value):
         inst.set_setting(key, value)
     except Exception:
         traceback.print_exc()
-    for item in _SETTINGS.get(plugin_id, []):
+    for item in _items_for_screen(plugin_id, screen_token):
         if getattr(item, "key", None) == key:
             callback = getattr(item, "on_change", None)
             if callback is not None:
@@ -130,8 +201,8 @@ def on_setting_change(plugin_id, key, value):
             break
 
 
-def on_setting_click(plugin_id, index, view=None):
-    items = _SETTINGS.get(plugin_id, [])
+def on_setting_click(plugin_id, index, view=None, screen_token=None):
+    items = _items_for_screen(plugin_id, screen_token)
     if 0 <= index < len(items):
         callback = getattr(items[index], "on_click", None)
         if callback is not None:

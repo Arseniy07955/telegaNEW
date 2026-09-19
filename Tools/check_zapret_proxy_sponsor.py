@@ -111,9 +111,17 @@ def main() -> int:
     require(
         "cell.setZastogramPromo(true)" in dialogs_adapter
         and "cell.setDialog(promoDialog, dialogsType, folderId)" in dialogs_adapter
-        and "cell.setDialog(zastogramPromoDialogId, null, 0, false, false)" in dialogs_adapter
+        and "cell.setDialog(zastogramPromoDialogId, zastogramPromoPost" in dialogs_adapter
         and "timeString = getString(R.string.AppName)" in dialog_cell,
         "ZaStoGram row must bind the real peer and render the app-name promo badge",
+    )
+    require(
+        "TLRPC.TL_messages_getHistory" in dialogs_adapter
+        and "request.limit = 1" in dialogs_adapter
+        and "zastogramPromoPost = new MessageObject" in dialogs_adapter
+        and "zastogramPromoPostLastRequestTime != 0" in dialogs_adapter
+        and "requestZastogramPromoPost(messagesController)" in dialogs_adapter,
+        "ZaStoGram row must load and render one latest public post for non-subscribers without delaying the first request",
     )
     require(
         "isZastogramPromoDialog(position)" in dialogs_activity

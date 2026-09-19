@@ -81,8 +81,9 @@ public class FilterTabsView extends FrameLayout {
         return positionToStableId.get(currentPosition, -1);
     }
 
-    public int getStableId(int selectedType) {
-        return positionToStableId.get(selectedType, -1);
+    public int getStableIdForTabId(int tabId) {
+        int position = idToPosition.get(tabId, -1);
+        return position >= 0 ? positionToStableId.get(position, -1) : -1;
     }
 
     public boolean selectTabWithStableId(int stableId) {
@@ -1234,14 +1235,38 @@ public class FilterTabsView extends FrameLayout {
         return positionToId.get(currentPosition + (forward ? 1 : -1), -1);
     }
 
+    public boolean scrollToTabWithId(int id) {
+        int position = idToPosition.get(id, -1);
+        Tab tab = getTab(position);
+        if (tab == null) {
+            return false;
+        }
+        if (selectedTabId != id) {
+            scrollToTab(tab, position);
+        }
+        return true;
+    }
+
     public void removeTabs() {
+        AndroidUtilities.cancelRunOnUIThread(animationRunnable);
+        animatingIndicator = false;
+        setEnabled(true);
         tabs.clear();
         positionToId.clear();
+        positionToStableId.clear();
         idToPosition.clear();
         positionToWidth.clear();
         positionToCount.clear();
         positionToX.clear();
         allTabsWidth = 0;
+        additionalTabWidth = 0;
+        invalidated = true;
+        currentPosition = 0;
+        selectedTabId = -1;
+        previousPosition = 0;
+        previousId = -1;
+        manualScrollingToPosition = -1;
+        manualScrollingToId = -1;
     }
 
     public boolean hasTab(int id) {
@@ -1544,25 +1569,26 @@ public class FilterTabsView extends FrameLayout {
         if (!tabs.isEmpty()) {
             final int width = MeasureSpec.getSize(widthMeasureSpec) - listViewPaddingH * 2;
             Tab firstTab = findDefaultTab();
+            int trueTabsWidth = allTabsWidth;
             if (firstTab != null) {
                 firstTab.setTitle(LocaleController.getString(R.string.FilterAllChats), null, false);
                 int tabWidth = firstTab.getWidth(false);
                 firstTab.setTitle(allTabsWidth > width ? LocaleController.getString(R.string.FilterAllChatsShort) : LocaleController.getString(R.string.FilterAllChats), null, false);
-                int trueTabsWidth = allTabsWidth - tabWidth;
+                trueTabsWidth -= tabWidth;
                 trueTabsWidth += firstTab.getWidth(false);
-                int prevWidth = additionalTabWidth;
-                additionalTabWidth = trueTabsWidth < width ? (width - trueTabsWidth) / tabs.size() : 0;
-                if (prevWidth != additionalTabWidth) {
-                    ignoreLayout = true;
-                    RecyclerView.ItemAnimator animator = listView.getItemAnimator();
-                    listView.setItemAnimator(null);
-                    adapter.notifyDataSetChanged();
-                    listView.setItemAnimator(animator);
-                    ignoreLayout = false;
-                }
-                updateTabsWidths();
-                invalidated = false;
             }
+            int prevWidth = additionalTabWidth;
+            additionalTabWidth = trueTabsWidth < width ? (width - trueTabsWidth) / tabs.size() : 0;
+            if (prevWidth != additionalTabWidth) {
+                ignoreLayout = true;
+                RecyclerView.ItemAnimator animator = listView.getItemAnimator();
+                listView.setItemAnimator(null);
+                adapter.notifyDataSetChanged();
+                listView.setItemAnimator(animator);
+                ignoreLayout = false;
+            }
+            updateTabsWidths();
+            invalidated = false;
         }
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
@@ -1752,7 +1778,9 @@ public class FilterTabsView extends FrameLayout {
             invalidated = true;
             requestLayout();
             listView.setItemAnimator(itemAnimator);
-            adapter.notifyDataSetChanged();
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
             allTabsWidth = 0;
             resetDefaultTabTitle();
             for (int b = 0, N = tabs.size(); b < N; b++) {
@@ -1806,23 +1834,26 @@ public class FilterTabsView extends FrameLayout {
         }
 
         public void swapElements(int fromIndex, int toIndex) {
-            int idx1 = fromIndex;
-            int idx2 = toIndex;
             int count = tabs.size();
-            if (idx1 < 0 || idx2 < 0 || idx1 >= count || idx2 >= count) {
+            if (fromIndex < 0 || toIndex < 0 || fromIndex >= count || toIndex >= count) {
                 return;
             }
+            Tab tab1 = tabs.get(fromIndex);
+            Tab tab2 = tabs.get(toIndex);
             ArrayList<MessagesController.DialogFilter> filters = MessagesController.getInstance(UserConfig.selectedAccount).getDialogFilters();
-            MessagesController.DialogFilter filter1 = filters.get(idx1);
-            MessagesController.DialogFilter filter2 = filters.get(idx2);
+            int filterIndex1 = tab1.id;
+            int filterIndex2 = tab2.id;
+            if (filterIndex1 < 0 || filterIndex2 < 0 || filterIndex1 >= filters.size() || filterIndex2 >= filters.size()) {
+                return;
+            }
+            MessagesController.DialogFilter filter1 = filters.get(filterIndex1);
+            MessagesController.DialogFilter filter2 = filters.get(filterIndex2);
             int temp = filter1.order;
             filter1.order = filter2.order;
             filter2.order = temp;
-            filters.set(idx1, filter2);
-            filters.set(idx2, filter1);
+            filters.set(filterIndex1, filter2);
+            filters.set(filterIndex2, filter1);
 
-            Tab tab1 = tabs.get(fromIndex);
-            Tab tab2 = tabs.get(toIndex);
             temp = tab1.id;
             tab1.id = tab2.id;
             tab2.id = temp;

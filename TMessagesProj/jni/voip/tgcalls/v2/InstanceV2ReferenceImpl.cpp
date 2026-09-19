@@ -365,6 +365,7 @@ public:
     _rtcServers(descriptor.rtcServers),
     _proxy(std::move(descriptor.proxy)),
     _enableP2P(descriptor.config.enableP2P),
+    _relayTcpTls(descriptor.config.relayTcpTls),
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
@@ -655,7 +656,9 @@ public:
         peerConnectionConfiguration.prioritize_most_likely_ice_candidate_pairs = true;
 
         for (auto &server : _rtcServers) {
-            if (server.isTcp) {
+            // Резервные маршруты по TCP и TLS имеют смысл только для релеев и
+            // только когда их разрешили: без этого берутся одни UDP-адреса.
+            if (server.isTcp && !(_relayTcpTls && server.isTurn)) {
                 continue;
             }
 
@@ -668,10 +671,20 @@ public:
             if (server.isTurn) {
                 webrtc::PeerConnectionInterface::IceServer mappedServer;
 
-                mappedServer.urls.push_back(
-                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port));
+                const std::string scheme = server.isTls ? "turns:" : "turn:";
+                const std::string transport = server.isTcp ? "?transport=tcp" : "";
+                const std::string url =
+                    scheme + address.HostAsURIString() + ":" + std::to_string(server.port) + transport;
+                RTC_LOG(LS_INFO) << "Adding ICE server: " << url;
+                mappedServer.urls.push_back(url);
                 mappedServer.username = server.login;
                 mappedServer.password = server.password;
+                if (server.isTls) {
+                    // Релей адресуется по IP, поэтому цепочку сертификата проверять
+                    // не по чему. TLS здесь не защищает медиа — оно зашифровано выше
+                    // по стеку — а только придаёт трафику вид HTTPS.
+                    mappedServer.tls_cert_policy = webrtc::PeerConnectionInterface::TlsCertPolicy::kTlsCertPolicyInsecureNoCheck;
+                }
 
                 peerConnectionConfiguration.servers.push_back(mappedServer);
             } else {
@@ -1575,6 +1588,7 @@ private:
     std::vector<RtcServer> _rtcServers;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
+    bool _relayTcpTls = false;
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;

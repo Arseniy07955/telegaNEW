@@ -20,6 +20,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.res.Configuration;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
@@ -60,6 +61,8 @@ public class ApplicationLoader extends Application {
     private static ConnectivityManager connectivityManager;
     private static volatile boolean applicationInited = false;
     private static volatile  ConnectivityManager.NetworkCallback networkCallback;
+    private static NetworkSnapshot lastPublishedNetworkSnapshot;
+    private static final long NETWORK_SNAPSHOT_DEBOUNCE_MS = 250;
     private static long lastNetworkCheckTypeTime;
     private static int lastKnownNetworkType = -1;
 
@@ -205,21 +208,17 @@ public class ApplicationLoader extends Application {
             BroadcastReceiver networkStateReceiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context context, Intent intent) {
-                    try {
-                        currentNetworkInfo = connectivityManager.getActiveNetworkInfo();
-                    } catch (Throwable ignore) {
-
-                    }
-
-                    boolean isSlow = isConnectionSlow();
-                    for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-                        ConnectionsManager.getInstance(a).checkConnection();
-                        FileLoader.getInstance(a).onNetworkChanged(isSlow);
-                    }
+                    scheduleNetworkSnapshot();
                 }
             };
             IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
-            ApplicationLoader.applicationContext.registerReceiver(networkStateReceiver, filter);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ApplicationLoader.applicationContext.registerReceiver(networkStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                ApplicationLoader.applicationContext.registerReceiver(networkStateReceiver, filter);
+            }
+            registerDefaultNetworkCallback();
+            scheduleNetworkSnapshot();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -297,6 +296,9 @@ public class ApplicationLoader extends Application {
 
         super.onCreate();
 
+        // AndroidUtilities must be initialized before FileLog.
+        final String helloWorld = AndroidUtilities.getHelloWorld();
+
         ZaStoPrivacy.load();
 
         // ZaStoGram plugin engine: discover metadata now; CPython starts after app initialization
@@ -309,6 +311,7 @@ public class ApplicationLoader extends Application {
 
         if (BuildVars.LOGS_ENABLED) {
             FileLog.cleanupLogs();
+            FileLog.d(helloWorld);
             FileLog.d("app start time = " + (startTime = SystemClock.elapsedRealtime()));
             try {
                 final PackageInfo info = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
@@ -361,6 +364,10 @@ public class ApplicationLoader extends Application {
                 }
             }
         };
+        if (BuildConfig.DEBUG_VERSION) {
+            new ANRDetector(FileLog::dumpANR);
+        }
+
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("load libs time = " + (SystemClock.elapsedRealtime() - startTime));
         }
@@ -379,13 +386,26 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            SharedPreferences legacyPreferences = MessagesController.getNotificationsSettings(UserConfig.selectedAccount);
+            if (legacyPreferences.contains("pushService")) {
+                enabled = legacyPreferences.getBoolean("pushService", false);
+                // Migrate the explicit per-account value written by older UI.
+                // There is only one process service, so its policy is global.
+                preferences.edit().putBoolean("pushService", enabled).commit();
+            } else {
+                enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            }
         }
         if (enabled) {
             try {
-                applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
-            } catch (Throwable ignore) {
-
+                Intent serviceIntent = new Intent(applicationContext, NotificationsService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    applicationContext.startForegroundService(serviceIntent);
+                } else {
+                    applicationContext.startService(serviceIntent);
+                }
+            } catch (Throwable error) {
+                FileLog.e(error);
             }
         } else {
             applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
@@ -442,6 +462,105 @@ public class ApplicationLoader extends Application {
     }
 
     private static long lastNetworkCheck = -1;
+
+    private static final class NetworkSnapshot {
+        private final long networkHandle;
+        private final boolean online;
+        private final boolean vpnActive;
+        private final int networkType;
+        private final boolean slow;
+
+        private NetworkSnapshot(long networkHandle, boolean online, boolean vpnActive, int networkType, boolean slow) {
+            this.networkHandle = networkHandle;
+            this.online = online;
+            this.vpnActive = vpnActive;
+            this.networkType = networkType;
+            this.slow = slow;
+        }
+
+        private boolean sameAs(NetworkSnapshot other) {
+            return other != null
+                    && networkHandle == other.networkHandle
+                    && online == other.online
+                    && vpnActive == other.vpnActive
+                    && networkType == other.networkType
+                    && slow == other.slow;
+        }
+    }
+
+    private static final Runnable publishNetworkSnapshotRunnable = () -> {
+        try {
+            if (connectivityManager == null && applicationContext != null) {
+                connectivityManager = (ConnectivityManager) applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            }
+            currentNetworkInfo = connectivityManager != null ? connectivityManager.getActiveNetworkInfo() : null;
+        } catch (Throwable ignore) {
+            currentNetworkInfo = null;
+        }
+        Network activeNetwork = null;
+        try {
+            activeNetwork = connectivityManager != null ? connectivityManager.getActiveNetwork() : null;
+        } catch (Throwable ignore) {
+        }
+        NetworkSnapshot snapshot = new NetworkSnapshot(
+                activeNetwork != null ? activeNetwork.getNetworkHandle() : 0,
+                isNetworkOnline(),
+                isVpnActive(),
+                getCurrentNetworkType(),
+                isConnectionSlow());
+        if (snapshot.sameAs(lastPublishedNetworkSnapshot)) {
+            return;
+        }
+        lastPublishedNetworkSnapshot = snapshot;
+        lastKnownNetworkType = -1;
+        for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+            ConnectionsManager.getInstance(a).checkConnection();
+            FileLoader.getInstance(a).onNetworkChanged(snapshot.slow);
+        }
+    };
+
+    private static void scheduleNetworkSnapshot() {
+        Handler handler = applicationHandler;
+        if (handler == null && applicationContext != null) {
+            handler = new Handler(applicationContext.getMainLooper());
+            applicationHandler = handler;
+        }
+        if (handler == null) {
+            return;
+        }
+        handler.removeCallbacks(publishNetworkSnapshotRunnable);
+        handler.postDelayed(publishNetworkSnapshotRunnable, NETWORK_SNAPSHOT_DEBOUNCE_MS);
+    }
+
+    private static void registerDefaultNetworkCallback() {
+        if (networkCallback != null || connectivityManager == null) {
+            return;
+        }
+        ConnectivityManager.NetworkCallback callback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(@NonNull Network network) {
+                scheduleNetworkSnapshot();
+            }
+
+            @Override
+            public void onCapabilitiesChanged(@NonNull Network network, @NonNull NetworkCapabilities networkCapabilities) {
+                scheduleNetworkSnapshot();
+            }
+
+            @Override
+            public void onLinkPropertiesChanged(@NonNull Network network, @NonNull LinkProperties linkProperties) {
+                scheduleNetworkSnapshot();
+            }
+
+            @Override
+            public void onLost(@NonNull Network network) {
+                scheduleNetworkSnapshot();
+            }
+        };
+        connectivityManager.registerDefaultNetworkCallback(callback);
+        networkCallback = callback;
+    }
+
     private static void ensureCurrentNetworkGet() {
         final long now = System.currentTimeMillis();
         ensureCurrentNetworkGet(now - lastNetworkCheck > 5000);
@@ -455,22 +574,6 @@ public class ApplicationLoader extends Application {
                     connectivityManager = (ConnectivityManager) ApplicationLoader.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE);
                 }
                 currentNetworkInfo = connectivityManager.getActiveNetworkInfo();
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    if (networkCallback == null) {
-                        networkCallback = new ConnectivityManager.NetworkCallback() {
-                            @Override
-                            public void onAvailable(@NonNull Network network) {
-                                lastKnownNetworkType = -1;
-                            }
-
-                            @Override
-                            public void onCapabilitiesChanged(@NonNull Network network, @NonNull NetworkCapabilities networkCapabilities) {
-                                lastKnownNetworkType = -1;
-                            }
-                        };
-                        connectivityManager.registerDefaultNetworkCallback(networkCallback);
-                    }
-                }
             } catch (Throwable ignore) {
 
             }
@@ -485,6 +588,28 @@ public class ApplicationLoader extends Application {
             FileLog.e(e);
         }
         return false;
+    }
+
+    public static boolean isVpnActive() {
+        try {
+            if (connectivityManager == null && applicationContext != null) {
+                connectivityManager = (ConnectivityManager) applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE);
+            }
+            if (connectivityManager != null) {
+                Network activeNetwork = connectivityManager.getActiveNetwork();
+                NetworkCapabilities capabilities = activeNetwork != null
+                        ? connectivityManager.getNetworkCapabilities(activeNetwork)
+                        : null;
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    return true;
+                }
+            }
+            ensureCurrentNetworkGet(false);
+            return currentNetworkInfo != null && currentNetworkInfo.getType() == ConnectivityManager.TYPE_VPN;
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return false;
+        }
     }
 
     public static boolean isConnectedOrConnectingToWiFi() {

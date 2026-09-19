@@ -46,6 +46,8 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
     private static final int VIEW_TYPE_SHADOW = 4;
 
     private final String pluginId;
+    private final String screenTitle;
+    private final String screenToken;
 
     private RecyclerListView listView;
     private ListAdapter adapter;
@@ -60,7 +62,13 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
     private int rowCount;
 
     public PluginSettingsActivity(String pluginId) {
+        this(pluginId, null, null);
+    }
+
+    public PluginSettingsActivity(String pluginId, String screenTitle, String screenToken) {
         this.pluginId = pluginId;
+        this.screenTitle = screenTitle;
+        this.screenToken = screenToken;
     }
 
     @Override
@@ -84,8 +92,15 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
     private void updateRows() {
         PluginInfo info = info();
         boolean enabled = info != null && info.enabled;
-        settingsModel = enabled ? PluginsController.getInstance().getSettingsModel(pluginId) : new ArrayList<>();
+        settingsModel = enabled ? PluginsController.getInstance().getSettingsModel(pluginId, screenToken) : new ArrayList<>();
         rowCount = 0;
+        if (screenToken != null) {
+            enabledRow = metaRow = deleteRow = deleteInfoRow = -1;
+            settingsStartRow = 0;
+            rowCount = settingsModel.size();
+            settingsEndRow = rowCount;
+            return;
+        }
         enabledRow = rowCount++;
         metaRow = rowCount++;
         if (!settingsModel.isEmpty()) {
@@ -104,7 +119,7 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         actionBar.setAllowOverlayTitle(true);
         PluginInfo info = info();
-        actionBar.setTitle(info != null ? info.displayName() : "Плагин");
+        actionBar.setTitle(screenTitle != null ? screenTitle : (info != null ? info.displayName() : "Плагин"));
         actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
             @Override
             public void onItemClick(int id) {
@@ -162,7 +177,7 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
                 if (view instanceof TextCheckCell) {
                     ((TextCheckCell) view).setChecked(newValue);
                 }
-                PluginsController.getInstance().onSettingChange(pluginId, key, newValue);
+                PluginsController.getInstance().onSettingChange(pluginId, key, newValue, screenToken);
                 break;
             }
             case "input":
@@ -173,7 +188,16 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
                 break;
             case "text":
                 int index = asInt(m.get("index"), 0);
-                PluginsController.getInstance().onSettingClick(pluginId, index, view);
+                if (asBool(m.get("has_sub_fragment"))) {
+                    Map<String, Object> sub = PluginsController.getInstance()
+                            .createSubSettings(pluginId, screenToken, index);
+                    if (sub != null && sub.get("token") != null) {
+                        presentFragment(new PluginSettingsActivity(
+                                pluginId, asStr(sub.get("title")), asStr(sub.get("token"))));
+                    }
+                } else {
+                    PluginsController.getInstance().onSettingClick(pluginId, index, view, screenToken);
+                }
                 break;
             default:
                 break;
@@ -210,7 +234,7 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
         builder.setPositiveButton("OK", (dialog, which) -> {
             String value = edit.getText() != null ? edit.getText().toString() : "";
             m.put("value", value);
-            PluginsController.getInstance().onSettingChange(pluginId, key, value);
+            PluginsController.getInstance().onSettingChange(pluginId, key, value, screenToken);
             if (adapter != null) {
                 adapter.notifyDataSetChanged();
             }
@@ -237,7 +261,7 @@ public class PluginSettingsActivity extends BaseFragment implements Notification
         builder.setTitle(String.valueOf(m.get("text")));
         builder.setItems(arr, (DialogInterface.OnClickListener) (dialog, which) -> {
             m.put("value", which);
-            PluginsController.getInstance().onSettingChange(pluginId, key, which);
+            PluginsController.getInstance().onSettingChange(pluginId, key, which, screenToken);
             if (adapter != null) {
                 adapter.notifyDataSetChanged();
             }

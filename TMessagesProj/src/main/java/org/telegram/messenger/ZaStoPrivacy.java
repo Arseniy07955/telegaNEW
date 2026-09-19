@@ -48,6 +48,10 @@ public final class ZaStoPrivacy {
     /** Hide the built-in "All Chats" tab when at least one custom chat folder exists. */
     public static boolean HIDE_ALL_CHATS = false;
 
+    public static boolean shouldHideAllChatsTab(int filterCount) {
+        return HIDE_ALL_CHATS && filterCount > 1;
+    }
+
     private static SharedPreferences prefs() {
         return ApplicationLoader.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }

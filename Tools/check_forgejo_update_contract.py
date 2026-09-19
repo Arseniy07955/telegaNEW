@@ -213,6 +213,11 @@ def main() -> int:
 
     if "ZASTO_UPDATE_CHANNEL" in lib_gradle:
         failures.append("Update-channel identity belongs to standalone application resources, not the shared library")
+    for literal in (
+        'def zastoStandaloneDebugVersion = rootProject.ext.zastoReleaseIdentity.updateChannel == "dev"',
+        'buildConfigField "boolean", "DEBUG_VERSION", zastoStandaloneDebugVersion.toString()',
+    ):
+        require(lib_gradle, literal, "Standalone dev diagnostic identity", failures)
     require(standalone_manifest, 'android:label="@string/ZastoApplicationName"', "Channel-specific Android app label", failures)
     require(google_services, '"package_name": "org.zastogram.messenger.dev"', "Dev Google services package mapping", failures)
 

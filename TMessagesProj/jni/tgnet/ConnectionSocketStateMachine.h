@@ -154,6 +154,9 @@ public:
         // frames complete the handshake, the same pair coalesced into one frame
         // gets no answer at all.
         std::deque<uint32_t> outgoingPacketSizes;
+        // Сторож «данные отправлены — ответа нет»: время первой порции
+        // MTProto-байт, реально выпущенной в транспорт на этом соединении.
+        int64_t firstFrameSentTime = 0;
     };
 
     struct AdmissionSubstate {

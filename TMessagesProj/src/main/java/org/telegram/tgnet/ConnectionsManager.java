@@ -17,7 +17,6 @@ import android.util.Base64;
 import androidx.annotation.Keep;
 
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
-import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -444,7 +443,25 @@ public class ConnectionsManager extends BaseController {
         if (preferences.contains("pushConnection")) {
             return preferences.getBoolean("pushConnection", true);
         } else {
+            SharedPreferences legacyPreferences = MessagesController.getNotificationsSettings(UserConfig.selectedAccount);
+            if (legacyPreferences.contains("pushConnection")) {
+                boolean enabled = legacyPreferences.getBoolean("pushConnection", false);
+                // Older builds displayed this as an account setting even though
+                // native startup consumed it globally. Preserve that explicit
+                // choice once, then use one source of truth for every account.
+                preferences.edit().putBoolean("pushConnection", enabled).commit();
+                return enabled;
+            }
             return MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("backgroundConnection", false);
+        }
+    }
+
+    public static void applyPushConnectionPolicyForAllAccounts() {
+        for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+            if (UserConfig.getInstance(a).isClientActivated()) {
+                ConnectionsManager manager = getInstance(a);
+                manager.setPushConnectionEnabled(manager.isPushConnectionEnabled());
+            }
         }
     }
 
@@ -463,6 +480,14 @@ public class ConnectionsManager extends BaseController {
 
     public int getCurrentDatacenterId() {
         return native_getCurrentDatacenterId(currentAccount);
+    }
+
+    public String getDatacenterConnectionDiagnostics(int datacenterId) {
+        if (datacenterId == 0) {
+            return "none";
+        }
+        String result = native_getDatacenterConnectionDiagnostics(currentAccount, datacenterId);
+        return TextUtils.isEmpty(result) ? "none" : result;
     }
 
     public long getCurrentAuthKeyId() {
@@ -864,6 +889,7 @@ public class ConnectionsManager extends BaseController {
             FileLog.d("selected ip strategy " + selectedStrategy);
         }
         native_setIpStrategy(currentAccount, selectedStrategy);
+        native_setWssTransportEnabled(currentAccount, isWssTransportActive());
         native_setNetworkAvailable(currentAccount, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), ApplicationLoader.isConnectionSlow());
     }
 
@@ -923,6 +949,14 @@ public class ConnectionsManager extends BaseController {
         }
 
         native_init(currentAccount, version, layer, apiId, deviceModel, systemVersion, appVersion, langCode, systemLangCode, configPath, logPath, regId, cFingerprint, installer, packageId, timezoneOffset, userId, userPremium, enablePushConnection, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), SharedConfig.measureDevicePerformanceClass());
+        // native_init stores the flag but does not create the dedicated type-8
+        // push connection. Apply it explicitly so service-only cold starts can
+        // receive updates without waiting for an Activity or settings change.
+        setPushConnectionEnabled(enablePushConnection);
+        // Native initialization deliberately starts paused. Re-apply the persisted
+        // policy here as every account is created, including cold starts which do
+        // not have an Activity.onResume() callback to cancel the sleep timer.
+        applyBackgroundNetworkPolicy();
         checkConnection();
     }
 
@@ -1334,21 +1368,13 @@ public class ConnectionsManager extends BaseController {
                     task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
                     FileLog.d("9. currentTask = cloudflare");
                     currentTask = task;
-                } else if (second == 1) {
+                } else {
                     if (BuildVars.LOGS_ENABLED) {
                         FileLog.d("start google txt task");
                     }
                     GoogleDnsLoadTask task = new GoogleDnsLoadTask(currentAccount);
                     task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
                     FileLog.d("11. currentTask = dnstxt");
-                    currentTask = task;
-                } else {
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("start firebase task");
-                    }
-                    FirebaseTask task = new FirebaseTask(currentAccount);
-                    task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
-                    FileLog.d("12. currentTask = firebase");
                     currentTask = task;
                 }
             });
@@ -1536,16 +1562,23 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setWssTransportEnabled() {
+        boolean enabled = isWssTransportActive();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
-            native_setWssTransportEnabled(a, SharedConfig.wssTransportEnabled);
+            native_setWssTransportEnabled(a, enabled);
         }
+    }
+
+    public static boolean isWssTransportActive() {
+        return SharedConfig.wssTransportEnabled
+                && !SharedConfig.isProxyEnabled()
+                && !ApplicationLoader.isVpnActive();
     }
 
     public static boolean supportsCdnFileRedirects() {
         // Public Telegram WebSocket relays address the five regular DCs, not
         // the separate CDN DC ids. With WSS selected, ask the source DC to
         // serve the file through its media relay instead of redirecting it.
-        return !SharedConfig.wssTransportEnabled;
+        return !isWssTransportActive();
     }
 
     static int resolveMtProxyClientHelloFragmentationMode() {
@@ -1641,6 +1674,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getCurrentTime(int currentAccount);
     public static native int native_getCurrentPingTime(int currentAccount);
     public static native int native_getCurrentDatacenterId(int currentAccount);
+    public static native String native_getDatacenterConnectionDiagnostics(int currentAccount, int datacenterId);
     public static native long native_getCurrentAuthKeyId(int currentAccount);
     public static native int native_getTimeDifference(int currentAccount);
     public static native void native_sendRequest(int currentAccount, long object, int flags, int datacenterId, int connectionType, boolean immediate, int requestToken);
@@ -2639,90 +2673,6 @@ public class ConnectionsManager extends BaseController {
                     }
                 }
             });
-        }
-    }
-
-    private static class FirebaseTask extends AsyncTask<Void, Void, NativeByteBuffer> {
-
-        private int currentAccount;
-        private FirebaseRemoteConfig firebaseRemoteConfig;
-
-        public FirebaseTask(int instance) {
-            super();
-            currentAccount = instance;
-        }
-
-        protected NativeByteBuffer doInBackground(Void... voids) {
-            try {
-                if (native_isTestBackend(currentAccount) != 0) {
-                    throw new Exception("test backend");
-                }
-                firebaseRemoteConfig = FirebaseRemoteConfig.getInstance();
-                String currentValue = firebaseRemoteConfig.getString("ipconfigv3");
-                if (BuildVars.LOGS_ENABLED) {
-                    FileLog.d("current firebase value = " + currentValue);
-                }
-
-                firebaseRemoteConfig.fetch(0).addOnCompleteListener(finishedTask -> {
-                    final boolean success = finishedTask.isSuccessful();
-                    Utilities.stageQueue.postRunnable(() -> {
-                        if (success) {
-                            firebaseRemoteConfig.activate().addOnCompleteListener(finishedTask2 -> {
-                                FileLog.d("6. currentTask = null");
-                                currentTask = null;
-                                String config = firebaseRemoteConfig.getString("ipconfigv3");
-                                if (!TextUtils.isEmpty(config)) {
-                                    byte[] bytes = Base64.decode(config, Base64.DEFAULT);
-                                    try {
-                                        NativeByteBuffer buffer = new NativeByteBuffer(bytes.length);
-                                        buffer.writeBytes(bytes);
-                                        int date = (int) (firebaseRemoteConfig.getInfo().getFetchTimeMillis() / 1000);
-                                        native_applyDnsConfig(currentAccount, buffer.address, AccountInstance.getInstance(currentAccount).getUserConfig().getClientPhone(), date);
-                                    } catch (Exception e) {
-                                        FileLog.e(e);
-                                    }
-                                } else {
-                                    if (BuildVars.LOGS_ENABLED) {
-                                        FileLog.d("failed to get firebase result");
-                                        FileLog.d("start dns txt task");
-                                    }
-                                    GoogleDnsLoadTask task = new GoogleDnsLoadTask(currentAccount);
-                                    task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
-                                    FileLog.d("7. currentTask = GoogleDnsLoadTask");
-                                    currentTask = task;
-                                }
-                            });
-                        } else {
-                            if (BuildVars.LOGS_ENABLED) {
-                                FileLog.d("failed to get firebase result 2");
-                                FileLog.d("start dns txt task");
-                            }
-                            GoogleDnsLoadTask task = new GoogleDnsLoadTask(currentAccount);
-                            task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
-                            FileLog.d("7. currentTask = GoogleDnsLoadTask");
-                            currentTask = task;
-                        }
-                    });
-                });
-            } catch (Throwable e) {
-                Utilities.stageQueue.postRunnable(() -> {
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("failed to get firebase result");
-                        FileLog.d("start dns txt task");
-                    }
-                    GoogleDnsLoadTask task = new GoogleDnsLoadTask(currentAccount);
-                    task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, null, null, null);
-                    FileLog.d("8. currentTask = GoogleDnsLoadTask");
-                    currentTask = task;
-                });
-                FileLog.e(e, false);
-            }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(NativeByteBuffer result) {
-
         }
     }
 

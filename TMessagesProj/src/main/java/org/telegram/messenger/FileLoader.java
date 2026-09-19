@@ -24,9 +24,11 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -217,6 +219,12 @@ public class FileLoader extends BaseController {
 
     private final ConcurrentHashMap<String, FileLoadOperation> loadOperationPaths = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LoadOperationUIObject> loadOperationPathsUI = new ConcurrentHashMap<>(10, 1, 2);
+    private final LinkedHashMap<String, String> recentLoadDiagnostics = new LinkedHashMap<String, String>(128, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, String> eldest) {
+            return size() > 128;
+        }
+    };
     private final HashMap<String, Long> uploadSizes = new HashMap<>();
 
     private final HashMap<String, Boolean> loadingVideos = new HashMap<>();
@@ -798,6 +806,95 @@ public class FileLoader extends BaseController {
         return fileName != null && loadOperationPathsUI.containsKey(fileName);
     }
 
+    public String getLoadOperationDiagnostics(final String fileName) {
+        if (TextUtils.isEmpty(fileName)) {
+            return "none (file key unavailable)";
+        }
+        if (Thread.currentThread() == Utilities.stageQueue) {
+            return getLoadOperationDiagnosticsOnStage(fileName);
+        }
+        String[] result = new String[1];
+        CountDownLatch ready = new CountDownLatch(1);
+        Utilities.stageQueue.postRunnable(() -> {
+            try {
+                result[0] = getLoadOperationDiagnosticsOnStage(fileName);
+            } finally {
+                ready.countDown();
+            }
+        });
+        try {
+            if (ready.await(750, TimeUnit.MILLISECONDS)) {
+                return result[0];
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return "snapshot_timeout";
+    }
+
+    private String getLoadOperationDiagnosticsOnStage(String fileName) {
+        FileLoadOperation operation = loadOperationPaths.get(fileName);
+        if (operation != null) {
+            try {
+                return operation.getDiagnosticSnapshot("active");
+            } catch (Throwable e) {
+                FileLog.e(e);
+            }
+        }
+        synchronized (recentLoadDiagnostics) {
+            String snapshot = recentLoadDiagnostics.get(fileName);
+            return snapshot != null ? snapshot : "none (no active or recent operation)";
+        }
+    }
+
+    public int getLoadOperationDatacenterId(final String fileName) {
+        if (TextUtils.isEmpty(fileName)) {
+            return 0;
+        }
+        if (Thread.currentThread() == Utilities.stageQueue) {
+            FileLoadOperation operation = loadOperationPaths.get(fileName);
+            return operation != null ? operation.getDiagnosticDatacenterId() : 0;
+        }
+        int[] result = new int[1];
+        CountDownLatch ready = new CountDownLatch(1);
+        Utilities.stageQueue.postRunnable(() -> {
+            try {
+                FileLoadOperation operation = loadOperationPaths.get(fileName);
+                result[0] = operation != null ? operation.getDiagnosticDatacenterId() : 0;
+            } finally {
+                ready.countDown();
+            }
+        });
+        try {
+            ready.await(750, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return result[0];
+    }
+
+    private void rememberLoadDiagnostic(String fileName, FileLoadOperation operation, String event) {
+        if (TextUtils.isEmpty(fileName) || operation == null) {
+            return;
+        }
+        try {
+            synchronized (recentLoadDiagnostics) {
+                recentLoadDiagnostics.put(fileName, operation.getDiagnosticSnapshot(event));
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
+    private void rememberLoadDiagnostic(String fileName, String snapshot) {
+        if (TextUtils.isEmpty(fileName) || TextUtils.isEmpty(snapshot)) {
+            return;
+        }
+        synchronized (recentLoadDiagnostics) {
+            recentLoadDiagnostics.put(fileName, snapshot);
+        }
+    }
+
     public float getBufferedProgressFromPosition(final float position, final String fileName) {
         if (TextUtils.isEmpty(fileName)) {
             return 0;
@@ -895,6 +992,7 @@ public class FileLoader extends BaseController {
                     + " location=" + safeLocationInfo(secureDocument, webDocument, location, imageLocation)
                     + " requestClass=" + classifyProxyWarmupRequest(document, webDocument, imageLocation, parentObject, priority, cacheType));
         }
+        rememberLoadDiagnostic(safeFileName, "event: invalid_location\nfile_key: " + safeFileName + "\nlast_error: invalid media location");
         if (delegate != null) {
             delegate.fileDidFailedLoad(safeFileName, ERROR_INVALID_LOCATION);
         }
@@ -1115,6 +1213,7 @@ public class FileLoader extends BaseController {
 
             @Override
             public void didFinishLoadingFile(FileLoadOperation operation, File finalFile) {
+                rememberLoadDiagnostic(fileName, operation, "finished");
                 if (!operation.isPreloadVideoOperation() && operation.isPreloadFinished()) {
                     checkDownloadQueue(operation, operation.getQueue(), 0);
                     return;
@@ -1142,6 +1241,7 @@ public class FileLoader extends BaseController {
 
             @Override
             public void didFailedLoadingFile(FileLoadOperation operation, int reason) {
+                rememberLoadDiagnostic(fileName, operation, "failed(reason=" + reason + ")");
                 loadOperationPathsUI.remove(fileName);
                 checkDownloadQueue(operation, operation.getQueue());
                 if (delegate != null) {
@@ -1180,6 +1280,7 @@ public class FileLoader extends BaseController {
         operation.setDelegate(fileLoadOperationDelegate);
 
         loadOperationPaths.put(finalFileName, operation);
+        rememberLoadDiagnostic(finalFileName, operation, "created");
         operation.setPriority(priority);
         if (stream == null) {
             stream = FileStreamLoadOperation.allStreams.get(documentId);
@@ -1587,7 +1688,7 @@ public class FileLoader extends BaseController {
             return new File("");
         }
         if (documentId != 0) {
-            String path = getInstance(UserConfig.selectedAccount).getFileDatabase().getPath(documentId, dcId, type, useFileDatabaseQueue);
+            String path = getFileDatabase().getPath(documentId, dcId, type, useFileDatabaseQueue);
             if (path != null) {
                 return new File(path);
             }

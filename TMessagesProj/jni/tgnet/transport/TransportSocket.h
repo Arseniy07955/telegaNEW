@@ -36,10 +36,15 @@ public:
     virtual size_t queuedOutputBytes() const = 0;
     virtual bool isReady() const = 0;
     virtual bool wantsWrite() const = 0;
+    virtual bool canWriteApplicationData() const = 0;
     virtual bool isClosed() const = 0;
     virtual HandshakePhase handshakePhase() const = 0;
     virtual const char *transportName() const = 0;
     virtual void timedOut() = 0;
+    // The handshake completed, application data was sent, and no reply came
+    // back within the shared watchdog timeout. Transports use this to penalize
+    // routes that look healthy but silently swallow traffic.
+    virtual void noteAppDataTimeout() {}
     virtual void close() = 0;
 };
 

@@ -160,7 +160,8 @@ class Text(_Item):
     def to_model(self, plugin, index):
         return {"type": "text", "index": index, "text": str(self.text),
                 "subtext": str(self.subtext or ""), "icon": self.icon,
-                "accent": bool(self.accent), "red": bool(self.red)}
+                "accent": bool(self.accent), "red": bool(self.red),
+                "has_sub_fragment": self.create_sub_fragment is not None}
 
 
 class Custom(_Item):

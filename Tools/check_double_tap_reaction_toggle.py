@@ -43,7 +43,7 @@ def main() -> int:
     ):
         require(media_data, literal, "per-account enabled preference", failures)
 
-    require(chat, "chatMode == MODE_QUICK_REPLIES || !getMediaDataController().isDoubleTapReactionEnabled()", "double-tap eligibility guard", failures)
+    require(chat, "isQuickRepliesOrWelcomeMessagesMode() || !getMediaDataController().isDoubleTapReactionEnabled()", "double-tap eligibility guard", failures)
     require(chat, "if (!getMediaDataController().isDoubleTapReactionEnabled() || getParentActivity() == null", "double-tap execution guard", failures)
     require(preview, "!mediaDataController.isDoubleTapReactionEnabled()", "preview double-tap guard", failures)
 

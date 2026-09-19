@@ -67,11 +67,13 @@ import androidx.core.graphics.drawable.IconCompat;
 import com.google.common.collect.Lists;
 
 import org.telegram.messenger.support.LongSparseIntArray;
+import org.telegram.messenger.utils.tlutils.TLKeyboardHelper;
 import org.telegram.messenger.utils.tlutils.TlUtils;
 import org.telegram.messenger.voip.VoIPGroupNotification;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.tgnet.tl.TL_account;
+import org.telegram.tgnet.tl.TL_keyboard;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.BubbleActivity;
 import org.telegram.ui.Components.AvatarDrawable;
@@ -3413,6 +3415,30 @@ public class NotificationsController extends BaseController implements Notificat
         deleteNotificationChannel(dialogId, topicId, -1);
     }
 
+    private void deleteStoredNotificationChannels(SharedPreferences preferences, SharedPreferences.Editor editor, String baseKey, String excludedPrefix) {
+        Map<String, ?> values = preferences.getAll();
+        for (Map.Entry<String, ?> entry : values.entrySet()) {
+            String key = entry.getKey();
+            boolean matchesBase = key.equals(baseKey) || key.startsWith(baseKey + "_");
+            boolean excluded = excludedPrefix != null && key.startsWith(excludedPrefix);
+            if (key.endsWith("_s") || !matchesBase || excluded) {
+                continue;
+            }
+            editor.remove(key).remove(key + "_s");
+            Object value = entry.getValue();
+            if (value instanceof String) {
+                try {
+                    systemNotificationManager.deleteNotificationChannel((String) value);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("delete stored notification channel " + value + " for " + key);
+                }
+            }
+        }
+    }
+
     private void deleteNotificationChannelInternal(long dialogId, long topicId, int what) {
         if (Build.VERSION.SDK_INT < 26) {
             return;
@@ -3421,36 +3447,18 @@ public class NotificationsController extends BaseController implements Notificat
             SharedPreferences preferences = getAccountInstance().getNotificationsSettings();
             SharedPreferences.Editor editor = preferences.edit();
             if (what == 0 || what == -1) {
-                String key = "org.telegram.key" + dialogId;
+                deleteStoredNotificationChannels(preferences, editor, "org.telegram.key" + dialogId + "_" + topicId, null);
+                String legacyKey = "org.telegram.key" + dialogId;
                 if (topicId != 0) {
-                    key += ".topic" + topicId;
+                    legacyKey += ".topic" + topicId;
                 }
-                String channelId = preferences.getString(key, null);
-                if (channelId != null) {
-                    editor.remove(key).remove(key + "_s");
-                    try {
-                        systemNotificationManager.deleteNotificationChannel(channelId);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("delete channel internal " + channelId);
-                    }
-                }
+                deleteStoredNotificationChannels(preferences, editor, legacyKey, legacyKey + "_");
             }
             if (what == 1 || what == -1) {
-                String key = "org.telegram.keyia" + dialogId;
-                String channelId = preferences.getString(key, null);
-                if (channelId != null) {
-                    editor.remove(key).remove(key + "_s");
-                    try {
-                        systemNotificationManager.deleteNotificationChannel(channelId);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("delete channel internal " + channelId);
-                    }
+                deleteStoredNotificationChannels(preferences, editor, "org.telegram.keyia" + dialogId + "_" + topicId, null);
+                if (topicId == 0) {
+                    String legacyKey = "org.telegram.keyia" + dialogId;
+                    deleteStoredNotificationChannels(preferences, editor, legacyKey, legacyKey + "_");
                 }
             }
             editor.commit();
@@ -3478,57 +3486,35 @@ public class NotificationsController extends BaseController implements Notificat
             SharedPreferences preferences = getAccountInstance().getNotificationsSettings();
             SharedPreferences.Editor editor = preferences.edit();
             if (what == 0 || what == -1) {
-                String key;
+                String baseKey;
                 if (type == TYPE_CHANNEL) {
-                    key = "channels";
+                    baseKey = "channels";
                 } else if (type == TYPE_GROUP) {
-                    key = "groups";
+                    baseKey = "groups";
                 } else if (type == TYPE_STORIES) {
-                    key = "stories";
+                    baseKey = "stories";
                 } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
-                    key = "reactions";
+                    baseKey = "reactions";
                 } else {
-                    key = "private";
+                    baseKey = "private";
                 }
-                String channelId = preferences.getString(key, null);
-                if (channelId != null) {
-                    editor.remove(key).remove(key + "_s");
-                    try {
-                        systemNotificationManager.deleteNotificationChannel(channelId);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("delete channel global internal " + channelId);
-                    }
-                }
+                deleteStoredNotificationChannels(preferences, editor, baseKey, baseKey + "_ia");
             }
 
             if (what == 1 || what == -1) {
-                String key;
+                String baseKey;
                 if (type == TYPE_CHANNEL) {
-                    key = "channels_ia";
+                    baseKey = "channels_ia";
                 } else if (type == TYPE_GROUP) {
-                    key = "groups_ia";
+                    baseKey = "groups_ia";
                 } else if (type == TYPE_STORIES) {
-                    key = "stories_ia";
+                    baseKey = "stories_ia";
                 } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
-                    key = "reactions_ia";
+                    baseKey = "reactions_ia";
                 } else {
-                    key = "private_ia";
+                    baseKey = "private_ia";
                 }
-                String channelId = preferences.getString(key, null);
-                if (channelId != null) {
-                    editor.remove(key).remove(key + "_s");
-                    try {
-                        systemNotificationManager.deleteNotificationChannel(channelId);
-                    } catch (Exception e) {
-                        FileLog.e(e);
-                    }
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.d("delete channel global internal " + channelId);
-                    }
-                }
+                deleteStoredNotificationChannels(preferences, editor, baseKey, null);
             }
             String overwriteKey;
             if (type == TYPE_CHANNEL) {
@@ -3565,6 +3551,9 @@ public class NotificationsController extends BaseController implements Notificat
                 SharedPreferences preferences = getAccountInstance().getNotificationsSettings();
                 Map<String, ?> values = preferences.getAll();
                 SharedPreferences.Editor editor = preferences.edit();
+                for (String baseKey : new String[]{"channels", "groups", "private", "stories", "reactions"}) {
+                    deleteStoredNotificationChannels(preferences, editor, baseKey, null);
+                }
                 for (Map.Entry<String, ?> entry : values.entrySet()) {
                     String key = entry.getKey();
                     if (key.startsWith("org.telegram.key")) {
@@ -3895,124 +3884,100 @@ public class NotificationsController extends BaseController implements Notificat
                     } else if (!newSettingsHash.equals(settings)) {
                         SharedPreferences.Editor editor = null;
                         if (channelImportance == NotificationManager.IMPORTANCE_NONE) {
-                            editor = preferences.edit();
-                            if (isDefault) {
-                                if (!isInApp) {
-                                    if (type == TYPE_STORIES) {
-                                        editor.putBoolean("EnableAllStories", false);
-                                    } else if (type == TYPE_REACTIONS_MESSAGES) {
-                                        editor.putBoolean("EnableReactionsMessages", true);
-                                        editor.putBoolean("EnableReactionsStories", true);
-                                    } else {
-                                        editor.putInt(getGlobalNotificationsKey(type), Integer.MAX_VALUE);
-                                    }
-                                    updateServerNotificationsSettings(type);
-                                }
+                            // Android channels only control local delivery. Their state must never
+                            // become Telegram account policy while an incoming notification is
+                            // rendered: doing so used to turn a blocked/stale OS channel into a
+                            // permanent server-side mute for every chat in the category.
+                            if (shouldRecreateBlockedChannel(existingChannel, importance)) {
+                                shouldOverwrite = true;
                             } else {
-                                if (type == TYPE_STORIES) {
-                                    editor.putBoolean("stories_" + NotificationsController.getSharedPrefKey(dialogId, 0), false);
-                                } else {
-                                    editor.putInt("notify2_" + NotificationsController.getSharedPrefKey(dialogId, 0), 2);
-                                }
-                                updateServerNotificationsSettings(dialogId, 0, true);
+                                edited = true;
                             }
-                            edited = true;
-                        } else if (channelImportance != importance) {
-                            if (!isInApp) {
-                                editor = preferences.edit();
-                                int priority;
-                                if (channelImportance == NotificationManager.IMPORTANCE_HIGH || channelImportance == NotificationManager.IMPORTANCE_MAX) {
-                                    priority = 1;
-                                } else if (channelImportance == NotificationManager.IMPORTANCE_MIN) {
-                                    priority = 4;
-                                } else if (channelImportance == NotificationManager.IMPORTANCE_LOW) {
-                                    priority = 5;
-                                } else {
-                                    priority = 0;
-                                }
-                                if (isDefault) {
-                                    if (type == TYPE_STORIES) {
-                                        editor.putBoolean("EnableAllStories", true);
-                                    } else if (type == TYPE_REACTIONS_MESSAGES) {
-                                        editor.putBoolean("EnableReactionsMessages", true);
-                                        editor.putBoolean("EnableReactionsStories", true);
+                        }
+                        if (!shouldOverwrite) {
+                            if (channelImportance != NotificationManager.IMPORTANCE_NONE && channelImportance != importance) {
+                                if (!isInApp) {
+                                    editor = preferences.edit();
+                                    int priority;
+                                    if (channelImportance == NotificationManager.IMPORTANCE_HIGH || channelImportance == NotificationManager.IMPORTANCE_MAX) {
+                                        priority = 1;
+                                    } else if (channelImportance == NotificationManager.IMPORTANCE_MIN) {
+                                        priority = 4;
+                                    } else if (channelImportance == NotificationManager.IMPORTANCE_LOW) {
+                                        priority = 5;
                                     } else {
-                                        editor.putInt(getGlobalNotificationsKey(type), 0);
+                                        priority = 0;
                                     }
-                                    if (type == TYPE_CHANNEL) {
-                                        editor.putInt("priority_channel", priority);
-                                    } else if (type == TYPE_GROUP) {
-                                        editor.putInt("priority_group", priority);
-                                    } else if (type == TYPE_STORIES) {
-                                        editor.putInt("priority_stories", priority);
-                                    } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
-                                        editor.putInt("priority_react", priority);
-                                    } else {
-                                        editor.putInt("priority_messages", priority);
-                                    }
-                                } else {
-                                    if (type == TYPE_STORIES) {
-                                        editor.putBoolean("stories_" + dialogId, true);
-                                    } else {
-                                        editor.putInt("notify2_" + dialogId, 0);
-                                        editor.remove("notifyuntil_" + dialogId);
+                                    if (isDefault) {
+                                        if (type == TYPE_CHANNEL) {
+                                            editor.putInt("priority_channel", priority);
+                                        } else if (type == TYPE_GROUP) {
+                                            editor.putInt("priority_group", priority);
+                                        } else if (type == TYPE_STORIES) {
+                                            editor.putInt("priority_stories", priority);
+                                        } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
+                                            editor.putInt("priority_react", priority);
+                                        } else {
+                                            editor.putInt("priority_messages", priority);
+                                        }
+                                    } else if (type != TYPE_STORIES) {
                                         editor.putInt("priority_" + dialogId, priority);
                                     }
                                 }
+                                edited = true;
                             }
-                            edited = true;
-                        }
-                        boolean hasVibration = !isEmptyVibration(vibrationPattern);
-                        if (hasVibration != vibrate) {
-                            if (!isInApp) {
-                                if (editor == null) {
-                                    editor = preferences.edit();
-                                }
-                                if (isDefault) {
-                                    if (type == TYPE_CHANNEL) {
-                                        editor.putInt("vibrate_channel", vibrate ? 0 : 2);
-                                    } else if (type == TYPE_GROUP) {
-                                        editor.putInt("vibrate_group", vibrate ? 0 : 2);
-                                    } else if (type == TYPE_STORIES) {
-                                        editor.putInt("vibrate_stories", vibrate ? 0 : 2);
-                                    } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
-                                        editor.putInt("vibrate_react", vibrate ? 0 : 2);
-                                    } else {
-                                        editor.putInt("vibrate_messages", vibrate ? 0 : 2);
+                            boolean hasVibration = !isEmptyVibration(vibrationPattern);
+                            if (hasVibration != vibrate) {
+                                if (!isInApp) {
+                                    if (editor == null) {
+                                        editor = preferences.edit();
                                     }
-                                } else {
-                                    editor.putInt("vibrate_" + dialogId, vibrate ? 0 : 2);
-                                }
-                            }
-                            vibrationPattern = channelVibrationPattern;
-                            edited = true;
-                        }
-                        if (channelLedColor != ledColor) {
-                            if (!isInApp) {
-                                if (editor == null) {
-                                    editor = preferences.edit();
-                                }
-                                if (isDefault) {
-                                    if (type == TYPE_CHANNEL) {
-                                        editor.putInt("ChannelLed", channelLedColor);
-                                    } else if (type == TYPE_GROUP) {
-                                        editor.putInt("GroupLed", channelLedColor);
-                                    } else if (type == TYPE_STORIES) {
-                                        editor.putInt("StoriesLed", channelLedColor);
-                                    } else if (type == TYPE_REACTIONS_STORIES || type == TYPE_REACTIONS_MESSAGES) {
-                                        editor.putInt("ReactionsLed", channelLedColor);
+                                    if (isDefault) {
+                                        if (type == TYPE_CHANNEL) {
+                                            editor.putInt("vibrate_channel", vibrate ? 0 : 2);
+                                        } else if (type == TYPE_GROUP) {
+                                            editor.putInt("vibrate_group", vibrate ? 0 : 2);
+                                        } else if (type == TYPE_STORIES) {
+                                            editor.putInt("vibrate_stories", vibrate ? 0 : 2);
+                                        } else if (type == TYPE_REACTIONS_MESSAGES || type == TYPE_REACTIONS_STORIES) {
+                                            editor.putInt("vibrate_react", vibrate ? 0 : 2);
+                                        } else {
+                                            editor.putInt("vibrate_messages", vibrate ? 0 : 2);
+                                        }
                                     } else {
-                                        editor.putInt("MessagesLed", channelLedColor);
+                                        editor.putInt("vibrate_" + dialogId, vibrate ? 0 : 2);
                                     }
-                                } else {
-                                    editor.putInt("color_" + dialogId, channelLedColor);
                                 }
+                                vibrationPattern = channelVibrationPattern;
+                                edited = true;
                             }
-                            ledColor = channelLedColor;
-                            edited = true;
-                        }
-                        if (editor != null) {
-                            editor.commit();
+                            if (channelLedColor != ledColor) {
+                                if (!isInApp) {
+                                    if (editor == null) {
+                                        editor = preferences.edit();
+                                    }
+                                    if (isDefault) {
+                                        if (type == TYPE_CHANNEL) {
+                                            editor.putInt("ChannelLed", channelLedColor);
+                                        } else if (type == TYPE_GROUP) {
+                                            editor.putInt("GroupLed", channelLedColor);
+                                        } else if (type == TYPE_STORIES) {
+                                            editor.putInt("StoriesLed", channelLedColor);
+                                        } else if (type == TYPE_REACTIONS_STORIES || type == TYPE_REACTIONS_MESSAGES) {
+                                            editor.putInt("ReactionsLed", channelLedColor);
+                                        } else {
+                                            editor.putInt("MessagesLed", channelLedColor);
+                                        }
+                                    } else {
+                                        editor.putInt("color_" + dialogId, channelLedColor);
+                                    }
+                                }
+                                ledColor = channelLedColor;
+                                edited = true;
+                            }
+                            if (editor != null) {
+                                editor.commit();
+                            }
                         }
                     }
                 }
@@ -4092,6 +4057,17 @@ public class NotificationsController extends BaseController implements Notificat
             preferences.edit().putString(key, channelId).putString(key + "_s", newSettingsHash).commit();
         }
         return channelId;
+    }
+
+    @TargetApi(26)
+    private boolean shouldRecreateBlockedChannel(NotificationChannel channel, int requestedImportance) {
+        if (requestedImportance == NotificationManager.IMPORTANCE_NONE) {
+            return false;
+        }
+        // Android 10+ tells us whether the user explicitly chose the channel
+        // importance. Recreate only app-blocked/stale channels; an explicit OS
+        // choice stays local and is never bypassed or synchronized to Telegram.
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !channel.hasUserSetImportance();
     }
 
     private void showOrUpdateNotification(boolean notifyAboutLast) {
@@ -4720,18 +4696,20 @@ public class NotificationsController extends BaseController implements Notificat
 
             boolean hasCallback = false;
             if (!AndroidUtilities.needShowPasscode() && !SharedConfig.isWaitingForPasscodeEnter && lastMessageObject.getDialogId() == 777000) {
-                if (lastMessageObject.messageOwner.reply_markup != null) {
-                    ArrayList<TLRPC.TL_keyboardButtonRow> rows = lastMessageObject.messageOwner.reply_markup.rows;
+                if (lastMessageObject.messageOwner.reply_markup instanceof TLRPC.TL_replyInlineMarkup) {
+                    final TLRPC.TL_replyInlineMarkup replyInlineMarkup = (TLRPC.TL_replyInlineMarkup) lastMessageObject.messageOwner.reply_markup;
+                    ArrayList<TL_keyboard.KeyboardInlineButtonRow> rows = replyInlineMarkup.rows;
                     for (int a = 0, size = rows.size(); a < size; a++) {
-                        TLRPC.TL_keyboardButtonRow row = rows.get(a);
+                        TL_keyboard.KeyboardInlineButtonRow row = rows.get(a);
                         for (int b = 0, size2 = row.buttons.size(); b < size2; b++) {
-                            TLRPC.KeyboardButton button = row.buttons.get(b);
-                            if (button instanceof TLRPC.TL_keyboardButtonCallback) {
+                            TL_keyboard.KeyboardInlineButton button = row.buttons.get(b);
+                            final TL_keyboard.TL_inlineButtonTypeCallback buttonTypeCallback = TLKeyboardHelper.getType(button, TL_keyboard.TL_inlineButtonTypeCallback.class);
+                            if (buttonTypeCallback != null) {
                                 Intent callbackIntent = new Intent(ApplicationLoader.applicationContext, NotificationCallbackReceiver.class);
                                 callbackIntent.putExtra("currentAccount", currentAccount);
                                 callbackIntent.putExtra("did", dialog_id);
-                                if (button.data != null) {
-                                    callbackIntent.putExtra("data", button.data);
+                                if (buttonTypeCallback.data != null) {
+                                    callbackIntent.putExtra("data", buttonTypeCallback.data);
                                 }
                                 callbackIntent.putExtra("mid", lastMessageObject.getId());
                                 mBuilder.addAction(0, button.text, PendingIntent.getBroadcast(ApplicationLoader.applicationContext, lastButtonId++, callbackIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
@@ -5217,7 +5195,7 @@ public class NotificationsController extends BaseController implements Notificat
             StringBuilder text = new StringBuilder();
             String[] senderName = new String[1];
             boolean[] preview = new boolean[1];
-            ArrayList<TLRPC.TL_keyboardButtonRow> rows = null;
+            ArrayList<TL_keyboard.KeyboardInlineButtonRow> rows = null;
             int rowsMid = 0;
             if (dialogKey.story) {
                 ArrayList<String> names = new ArrayList<>();
@@ -5488,8 +5466,8 @@ public class NotificationsController extends BaseController implements Notificat
                         messagingStyle.addMessage(message, ((long) messageObject.messageOwner.date) * 1000, person);
                     }
 
-                    if (dialogId == 777000 && messageObject.messageOwner.reply_markup != null) {
-                        rows = messageObject.messageOwner.reply_markup.rows;
+                    if (dialogId == 777000 && messageObject.messageOwner.reply_markup instanceof TLRPC.TL_replyInlineMarkup) {
+                        rows = ((TLRPC.TL_replyInlineMarkup) messageObject.messageOwner.reply_markup).rows;
                         rowsMid = messageObject.getId();
                     }
                 }
@@ -5614,13 +5592,16 @@ public class NotificationsController extends BaseController implements Notificat
                 builder.setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY);
             }
 
-            TLRPC.TL_keyboardButtonCopy copybutton = null;
-            if (lastMessageObject != null && lastMessageObject.messageOwner != null && lastMessageObject.messageOwner.reply_markup != null) {
-                TLRPC.ReplyMarkup reply_markup = lastMessageObject.messageOwner.reply_markup;
+            TL_keyboard.KeyboardInlineButton copybutton = null;
+            TL_keyboard.TL_inlineButtonTypeCopy copyButtonType = null;
+            if (lastMessageObject != null && lastMessageObject.messageOwner != null && lastMessageObject.messageOwner.reply_markup instanceof TLRPC.TL_replyInlineMarkup) {
+                TLRPC.TL_replyInlineMarkup reply_markup = (TLRPC.TL_replyInlineMarkup) lastMessageObject.messageOwner.reply_markup;
                 for (int i = 0; i < reply_markup.rows.size(); ++i) {
                     for (int j = 0; j < reply_markup.rows.get(i).buttons.size(); ++j) {
-                        if (reply_markup.rows.get(i).buttons.get(j) instanceof TLRPC.TL_keyboardButtonCopy) {
-                            copybutton = (TLRPC.TL_keyboardButtonCopy) reply_markup.rows.get(i).buttons.get(j);
+                        final TL_keyboard.KeyboardInlineButton keyboardButton = reply_markup.rows.get(i).buttons.get(j);
+                        copyButtonType = TLKeyboardHelper.getType(keyboardButton, TL_keyboard.TL_inlineButtonTypeCopy.class);
+                        if (copyButtonType != null) {
+                            copybutton = keyboardButton;
                             break;
                         }
                     }
@@ -5631,7 +5612,7 @@ public class NotificationsController extends BaseController implements Notificat
                 Intent copyIntent = new Intent(ApplicationLoader.applicationContext, CopyCodeReceiver.class);
                 copyIntent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
                 copyIntent.setAction("org.telegram.messenger.ACTION_COPY_CODE");
-                copyIntent.putExtra("text", copybutton.copy_text);
+                copyIntent.putExtra("text", copyButtonType.copy_text);
                 PendingIntent copyPendingIntent = PendingIntent.getBroadcast(ApplicationLoader.applicationContext, internalId, copyIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
                 NotificationCompat.Action copyAction = new NotificationCompat.Action.Builder(R.drawable.msg_copy, copybutton.text, copyPendingIntent)
                         .setShowsUserInterface(false)
@@ -5659,15 +5640,16 @@ public class NotificationsController extends BaseController implements Notificat
             if (!AndroidUtilities.needShowPasscode(false) && !SharedConfig.isWaitingForPasscodeEnter) {
                 if (rows != null) {
                     for (int r = 0, rc = rows.size(); r < rc; r++) {
-                        TLRPC.TL_keyboardButtonRow row = rows.get(r);
+                        TL_keyboard.KeyboardInlineButtonRow row = rows.get(r);
                         for (int c = 0, cc = row.buttons.size(); c < cc; c++) {
-                            TLRPC.KeyboardButton button = row.buttons.get(c);
-                            if (button instanceof TLRPC.TL_keyboardButtonCallback) {
+                            TL_keyboard.KeyboardInlineButton button = row.buttons.get(c);
+                            final TL_keyboard.TL_inlineButtonTypeCallback buttonTypeCallback = TLKeyboardHelper.getType(button, TL_keyboard.TL_inlineButtonTypeCallback.class);
+                            if (buttonTypeCallback != null) {
                                 Intent callbackIntent = new Intent(ApplicationLoader.applicationContext, NotificationCallbackReceiver.class);
                                 callbackIntent.putExtra("currentAccount", currentAccount);
                                 callbackIntent.putExtra("did", dialogId);
-                                if (button.data != null) {
-                                    callbackIntent.putExtra("data", button.data);
+                                if (buttonTypeCallback.data != null) {
+                                    callbackIntent.putExtra("data", buttonTypeCallback.data);
                                 }
                                 callbackIntent.putExtra("mid", rowsMid);
                                 builder.addAction(0, button.text, PendingIntent.getBroadcast(ApplicationLoader.applicationContext, lastButtonId++, callbackIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));

@@ -219,6 +219,7 @@ def check_workflow(workflow_text: str) -> list[str]:
         "python3 Tools/check_plugin_exteragram_ui_bridge.py",
         "python3 Tools/check_plugin_java_package_shims.py",
         "python3 Tools/check_plugin_python_deps.py",
+        "python3 Tools/check_plugin_runtime_requirements.py",
         "python3 Tools/check_plugin_utils_javadoc.py",
         "python3 Tools/check_android_string_format_contract.py",
         "python3 Tools/check_telegram_api_identity.py",

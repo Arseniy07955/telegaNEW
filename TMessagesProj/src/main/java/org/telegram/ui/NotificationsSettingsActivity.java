@@ -728,16 +728,12 @@ public class NotificationsSettingsActivity extends BaseFragment implements Notif
                 editor.commit();
                 getNotificationsController().updateBadge();
             } else if (position == notificationsServiceConnectionRow) {
-                SharedPreferences preferences = MessagesController.getNotificationsSettings(currentAccount);
-                enabled = preferences.getBoolean("pushConnection", getMessagesController().backgroundConnection);
+                SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
+                enabled = ConnectionsManager.getInstance(currentAccount).isPushConnectionEnabled();
                 SharedPreferences.Editor editor = preferences.edit();
                 editor.putBoolean("pushConnection", !enabled);
                 editor.commit();
-                if (!enabled) {
-                    ConnectionsManager.getInstance(currentAccount).setPushConnectionEnabled(true);
-                } else {
-                    ConnectionsManager.getInstance(currentAccount).setPushConnectionEnabled(false);
-                }
+                ConnectionsManager.applyPushConnectionPolicyForAllAccounts();
             } else if (position == backgroundNetworkAlwaysOnRow) {
                 SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
                 enabled = preferences.getBoolean(ConnectionsManager.BACKGROUND_NETWORK_ALWAYS_ON, false);
@@ -764,8 +760,10 @@ public class NotificationsSettingsActivity extends BaseFragment implements Notif
                     }
                 }
             } else if (position == notificationsServiceRow) {
-                SharedPreferences preferences = MessagesController.getNotificationsSettings(currentAccount);
-                enabled = preferences.getBoolean("pushService", getMessagesController().keepAliveService);
+                SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
+                enabled = preferences.contains("pushService")
+                        ? preferences.getBoolean("pushService", true)
+                        : MessagesController.getNotificationsSettings(currentAccount).getBoolean("pushService", getMessagesController().keepAliveService);
                 SharedPreferences.Editor editor = preferences.edit();
                 editor.putBoolean("pushService", !enabled);
                 editor.commit();
@@ -1027,9 +1025,13 @@ public class NotificationsSettingsActivity extends BaseFragment implements Notif
                     } else if (position == androidAutoAlertRow) {
                         checkCell.setTextAndCheck("Android Auto", preferences.getBoolean("EnableAutoNotifications", false), true);
                     } else if (position == notificationsServiceRow) {
-                        checkCell.setTextAndValueAndCheck(getString("NotificationsService", R.string.NotificationsService), getString("NotificationsServiceInfo", R.string.NotificationsServiceInfo), preferences.getBoolean("pushService", getMessagesController().keepAliveService), true, true);
+                        SharedPreferences globalPreferences = MessagesController.getGlobalNotificationsSettings();
+                        boolean enabled = globalPreferences.contains("pushService")
+                                ? globalPreferences.getBoolean("pushService", true)
+                                : preferences.getBoolean("pushService", getMessagesController().keepAliveService);
+                        checkCell.setTextAndValueAndCheck(getString("NotificationsService", R.string.NotificationsService), getString("NotificationsServiceInfo", R.string.NotificationsServiceInfo), enabled, true, true);
                     } else if (position == notificationsServiceConnectionRow) {
-                        checkCell.setTextAndValueAndCheck(getString("NotificationsServiceConnection", R.string.NotificationsServiceConnection), getString("NotificationsServiceConnectionInfo", R.string.NotificationsServiceConnectionInfo), preferences.getBoolean("pushConnection", getMessagesController().backgroundConnection), true, true);
+                        checkCell.setTextAndValueAndCheck(getString("NotificationsServiceConnection", R.string.NotificationsServiceConnection), getString("NotificationsServiceConnectionInfo", R.string.NotificationsServiceConnectionInfo), ConnectionsManager.getInstance(currentAccount).isPushConnectionEnabled(), true, true);
                     } else if (position == backgroundNetworkAlwaysOnRow) {
                         checkCell.setTextAndValueAndCheck(getString("NotificationsBackgroundNetworkAlwaysOn", R.string.NotificationsBackgroundNetworkAlwaysOn), getString("NotificationsBackgroundNetworkAlwaysOnInfo", R.string.NotificationsBackgroundNetworkAlwaysOnInfo), MessagesController.getGlobalNotificationsSettings().getBoolean(ConnectionsManager.BACKGROUND_NETWORK_ALWAYS_ON, false), true, true);
                     } else if (position == badgeNumberShowRow) {

@@ -8,6 +8,7 @@
 
 package org.telegram.ui.Adapters;
 
+import static org.telegram.messenger.LocaleController.formatPluralString;
 import static org.telegram.messenger.LocaleController.getString;
 
 import android.content.Context;
@@ -19,6 +20,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.SystemClock;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -26,6 +28,7 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import androidx.collection.LongSparseArray;
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager.widget.ViewPager;
@@ -37,6 +40,7 @@ import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
@@ -77,9 +81,11 @@ import org.telegram.ui.DialogsActivity;
 import org.telegram.ui.Stories.DialogStoriesCell;
 import org.telegram.ui.Stories.StoriesController;
 import org.telegram.ui.Stories.StoriesListPlaceProvider;
+import org.telegram.ui.community.CommunityUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Objects;
 
@@ -106,10 +112,13 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             VIEW_TYPE_ARCHIVE_FULLSCREEN = 19,
             VIEW_TYPE_GRAY_SECTION = 20,
             VIEW_TYPE_FORWARD_TO_STORIES_CELL = 21,
-            VIEW_TYPE_ZAPRET_VPN_SPONSOR = 22;
+            VIEW_TYPE_ZASTOGRAM_PROMO = 22,
+            VIEW_TYPE_HEADER_3 = 23,
+            VIEW_TYPE_DIALOG_COMMUNITY = 24;
 
     public static final String ZAPRET_VPN_SPONSOR_USERNAME = "SenkapopkaVpnBot";
     public static final String ZASTOGRAM_PROMO_USERNAME = ZAPRET_VPN_SPONSOR_USERNAME;
+    private static final long ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL = 60_000L;
 
     private Context mContext;
     private ArchiveHintCell archiveHintCell;
@@ -145,12 +154,24 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
     private DialogsActivity parentFragment;
     private boolean isTransitionSupport;
-    private boolean zapretVpnSponsorResolveRequested;
-    private long zapretVpnSponsorDialogId;
-    private int zapretVpnSponsorItemPosition = -1;
+    private boolean zastogramPromoResolveRequested;
+    private long zastogramPromoDialogId;
+    private int zastogramPromoItemPosition = -1;
+    private boolean zastogramPromoPostRequestInFlight;
+    private boolean zastogramPromoPostRefreshScheduled;
+    private long zastogramPromoPostLastRequestTime;
+    private MessageObject zastogramPromoPost;
+    private final Runnable zastogramPromoPostRefreshRunnable = () -> {
+        zastogramPromoPostRefreshScheduled = false;
+        if (parentFragment != null && parentFragment.isPaused()) {
+            return;
+        }
+        requestZastogramPromoPost(MessagesController.getInstance(currentAccount));
+    };
 
     private TLRPC.RequestPeerType requestPeerType;
     public boolean isEmpty;
+    public final long communityId;
 
     public DialogsAdapter(DialogsActivity fragment, Context context, int type, int folder, boolean onlySelect, ArrayList<Long> selected, int account, TLRPC.RequestPeerType requestPeerType) {
         mContext = context;
@@ -161,6 +182,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         hasHints = folder == 0 && type == 0 && !onlySelect;
         selectedDialogs = selected;
         currentAccount = account;
+        communityId = fragment != null ? fragment.getCommunityId() : 0;
+
         //  setHasStableIds(true);
         if (folder == 0) {
             this.preloader = new DialogsPreloader();
@@ -190,7 +213,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         if (allowForwardAsStories && dialogsType == DialogsActivity.DIALOGS_TYPE_FORWARD) {
             position -= 1;
         }
-        if (zapretVpnSponsorItemPosition >= 0 && position > zapretVpnSponsorItemPosition) {
+        if (zastogramPromoItemPosition >= 0 && position > zastogramPromoItemPosition) {
             position--;
         }
         if (dialogsType == DialogsActivity.DIALOGS_TYPE_IMPORT_HISTORY_GROUPS || dialogsType == DialogsActivity.DIALOGS_TYPE_IMPORT_HISTORY) {
@@ -222,7 +245,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         return dialogsType;
     }
 
-    private boolean shouldShowZapretVpnSponsor() {
+    private boolean shouldShowZastogramPromo() {
         if (ZaStoPrivacy.DISABLE_ADS) {
             return false;
         }
@@ -234,11 +257,11 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 !parentFragment.isArchive();
     }
 
-    public boolean isZapretVpnSponsorDialog(int position) {
-        if (!shouldShowZapretVpnSponsor() || position < 0 || position >= itemInternals.size() || zapretVpnSponsorDialogId == 0) {
+    public boolean isZastogramPromoDialog(int position) {
+        if (!shouldShowZastogramPromo() || position < 0 || position >= itemInternals.size() || zastogramPromoDialogId == 0) {
             return false;
         }
-        return itemInternals.get(position).viewType == VIEW_TYPE_ZAPRET_VPN_SPONSOR;
+        return itemInternals.get(position).viewType == VIEW_TYPE_ZASTOGRAM_PROMO;
     }
 
     private ArrayList<TLRPC.Dialog> filterLegacyProxySponsorDialogs(ArrayList<TLRPC.Dialog> dialogs, MessagesController messagesController) {
@@ -264,16 +287,16 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         return dialog instanceof TLRPC.TL_dialogFolder || dialog != null && DialogObject.isFolderDialogId(dialog.id);
     }
 
-    private ArrayList<TLRPC.Dialog> removeZapretVpnSponsorDialogFromArray(ArrayList<TLRPC.Dialog> dialogs, MessagesController messagesController) {
-        if (!shouldShowZapretVpnSponsor()) {
+    private ArrayList<TLRPC.Dialog> removeZastogramPromoDialogFromArray(ArrayList<TLRPC.Dialog> dialogs, MessagesController messagesController) {
+        if (!shouldShowZastogramPromo()) {
             return dialogs;
         }
-        long dialogId = getZapretVpnSponsorDialogId(messagesController);
+        long dialogId = getZastogramPromoDialogId(messagesController);
         ArrayList<TLRPC.Dialog> result = null;
         for (int i = 0; i < dialogs.size(); i++) {
             TLRPC.Dialog dialog = dialogs.get(i);
-            if (dialog != null && (dialog.id == dialogId || isZapretVpnSponsorPeer(dialog.id, messagesController))) {
-                zapretVpnSponsorDialogId = dialog.id;
+            if (dialog != null && (dialog.id == dialogId || isZastogramPromoPeer(dialog.id, messagesController))) {
+                zastogramPromoDialogId = dialog.id;
                 if (result == null) {
                     result = new ArrayList<>(dialogs.subList(0, i));
                 }
@@ -286,84 +309,144 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         return result != null ? result : dialogs;
     }
 
-    private void insertZapretVpnSponsorItem(MessagesController messagesController) {
-        if (!shouldShowZapretVpnSponsor() || getZapretVpnSponsorDialogId(messagesController) == 0) {
+    private void insertZastogramPromoItem(MessagesController messagesController) {
+        if (!shouldShowZastogramPromo() || getZastogramPromoDialogId(messagesController) == 0) {
             return;
         }
         int insertIndex = 0;
         for (int i = 0; i < itemInternals.size(); i++) {
             ItemInternal item = itemInternals.get(i);
             if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null) {
-                insertIndex = i;
-                if (isArchiveDialog(item.dialog)) {
-                    insertIndex = i + 1;
-                }
+                insertIndex = isArchiveDialog(item.dialog) ? i + 1 : i;
                 break;
             }
         }
-        itemInternals.add(insertIndex, new ItemInternal(VIEW_TYPE_ZAPRET_VPN_SPONSOR));
-        zapretVpnSponsorItemPosition = insertIndex;
+        itemInternals.add(insertIndex, new ItemInternal(VIEW_TYPE_ZASTOGRAM_PROMO));
+        zastogramPromoItemPosition = insertIndex;
     }
 
-    private long getZapretVpnSponsorDialogId(MessagesController messagesController) {
-        TLObject object = messagesController.getUserOrChat(ZAPRET_VPN_SPONSOR_USERNAME);
+    private long getZastogramPromoDialogId(MessagesController messagesController) {
+        TLObject object = messagesController.getUserOrChat(ZASTOGRAM_PROMO_USERNAME);
         if (object instanceof TLRPC.User) {
-            zapretVpnSponsorDialogId = ((TLRPC.User) object).id;
+            zastogramPromoDialogId = ((TLRPC.User) object).id;
         } else if (object instanceof TLRPC.Chat) {
-            zapretVpnSponsorDialogId = -((TLRPC.Chat) object).id;
+            zastogramPromoDialogId = -((TLRPC.Chat) object).id;
         }
-        if (zapretVpnSponsorDialogId == 0) {
-            requestZapretVpnSponsorResolve(messagesController);
+        if (zastogramPromoDialogId == 0) {
+            requestZastogramPromoResolve(messagesController);
         }
-        return zapretVpnSponsorDialogId;
+        return zastogramPromoDialogId;
     }
 
-    private boolean isZapretVpnSponsorPeer(long dialogId, MessagesController messagesController) {
+    private boolean isZastogramPromoPeer(long dialogId, MessagesController messagesController) {
         TLObject object = dialogId > 0 ? messagesController.getUser(dialogId) : messagesController.getChat(-dialogId);
-        return isZapretVpnSponsorObject(object);
+        return isZastogramPromoObject(object);
     }
 
-    private boolean isZapretVpnSponsorObject(TLObject object) {
+    private boolean isZastogramPromoObject(TLObject object) {
         if (object instanceof TLRPC.User) {
             TLRPC.User user = (TLRPC.User) object;
-            return isZapretVpnSponsorUsername(user.username) || hasZapretVpnSponsorUsername(user.usernames);
+            return isZastogramPromoUsername(user.username) || hasZastogramPromoUsername(user.usernames);
         } else if (object instanceof TLRPC.Chat) {
             TLRPC.Chat chat = (TLRPC.Chat) object;
-            return isZapretVpnSponsorUsername(chat.username) || hasZapretVpnSponsorUsername(chat.usernames);
+            return isZastogramPromoUsername(chat.username) || hasZastogramPromoUsername(chat.usernames);
         }
         return false;
     }
 
-    private boolean hasZapretVpnSponsorUsername(ArrayList<TLRPC.TL_username> usernames) {
+    private boolean hasZastogramPromoUsername(ArrayList<TLRPC.TL_username> usernames) {
         if (usernames == null) {
             return false;
         }
         for (int i = 0; i < usernames.size(); i++) {
             TLRPC.TL_username username = usernames.get(i);
-            if (username != null && username.active && isZapretVpnSponsorUsername(username.username)) {
+            if (username != null && username.active && isZastogramPromoUsername(username.username)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean isZapretVpnSponsorUsername(String username) {
-        return username != null && ZAPRET_VPN_SPONSOR_USERNAME.equalsIgnoreCase(username);
+    private boolean isZastogramPromoUsername(String username) {
+        return username != null && ZASTOGRAM_PROMO_USERNAME.equalsIgnoreCase(username);
     }
 
-    private void requestZapretVpnSponsorResolve(MessagesController messagesController) {
-        if (zapretVpnSponsorResolveRequested) {
+    private void requestZastogramPromoResolve(MessagesController messagesController) {
+        if (zastogramPromoResolveRequested) {
             return;
         }
-        zapretVpnSponsorResolveRequested = true;
-        messagesController.getUserNameResolver().resolve(ZAPRET_VPN_SPONSOR_USERNAME, peerId -> {
-            zapretVpnSponsorResolveRequested = false;
+        zastogramPromoResolveRequested = true;
+        messagesController.getUserNameResolver().resolve(ZASTOGRAM_PROMO_USERNAME, peerId -> {
+            zastogramPromoResolveRequested = false;
             if (peerId == null || peerId == Long.MAX_VALUE) {
                 return;
             }
-            zapretVpnSponsorDialogId = peerId;
+            zastogramPromoDialogId = peerId;
             notifyDataSetChanged();
         });
+    }
+
+    private void scheduleZastogramPromoPostRefresh(long delay) {
+        if (zastogramPromoPostRefreshScheduled || !shouldShowZastogramPromo()) {
+            return;
+        }
+        zastogramPromoPostRefreshScheduled = true;
+        AndroidUtilities.runOnUIThread(zastogramPromoPostRefreshRunnable, Math.max(0, delay));
+    }
+
+    private void requestZastogramPromoPost(MessagesController messagesController) {
+        if (zastogramPromoDialogId == 0 || zastogramPromoPostRequestInFlight) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (zastogramPromoPostLastRequestTime != 0) {
+            long elapsed = now - zastogramPromoPostLastRequestTime;
+            if (elapsed < ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL) {
+                scheduleZastogramPromoPostRefresh(ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL - elapsed);
+                return;
+            }
+        }
+        TLRPC.InputPeer inputPeer = messagesController.getInputPeer(zastogramPromoDialogId);
+        if (inputPeer == null) {
+            return;
+        }
+        zastogramPromoPostRequestInFlight = true;
+        zastogramPromoPostLastRequestTime = now;
+
+        TLRPC.TL_messages_getHistory request = new TLRPC.TL_messages_getHistory();
+        request.peer = inputPeer;
+        request.limit = 1;
+        ConnectionsManager.getInstance(currentAccount).sendRequest(request, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+            zastogramPromoPostRequestInFlight = false;
+            scheduleZastogramPromoPostRefresh(ZASTOGRAM_PROMO_POST_REFRESH_INTERVAL);
+            if (!(response instanceof TLRPC.messages_Messages)) {
+                return;
+            }
+            TLRPC.messages_Messages messages = (TLRPC.messages_Messages) response;
+            messagesController.putUsers(messages.users, false);
+            messagesController.putChats(messages.chats, false);
+            if (messages.messages.isEmpty()) {
+                return;
+            }
+            LongSparseArray<TLRPC.User> users = new LongSparseArray<>();
+            LongSparseArray<TLRPC.Chat> chats = new LongSparseArray<>();
+            for (int i = 0; i < messages.users.size(); i++) {
+                TLRPC.User user = messages.users.get(i);
+                users.put(user.id, user);
+            }
+            for (int i = 0; i < messages.chats.size(); i++) {
+                TLRPC.Chat chat = messages.chats.get(i);
+                chats.put(chat.id, chat);
+            }
+            TLRPC.Message message = messages.messages.get(0);
+            message.dialog_id = zastogramPromoDialogId;
+            int previousId = zastogramPromoPost != null ? zastogramPromoPost.getId() : 0;
+            zastogramPromoPost = new MessageObject(currentAccount, message, users, chats, false, true);
+            if (zastogramPromoPost.getId() == previousId) {
+                return;
+            }
+            notifyDataSetChanged();
+        }));
     }
 
     public int getDialogsCount() {
@@ -422,6 +505,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
     int stableIdPointer = 10;
     LongSparseIntArray dialogsStableIds = new LongSparseIntArray();
+    HashMap<String, Integer> dialogsHeaderStableIds = new HashMap<>();
 
     private class ItemInternal extends AdapterWithDiffUtils.Item {
 
@@ -441,6 +525,52 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         }
 
         private final int stableId;
+        private String title;
+        private TLRPC.Chat chat;
+        private TLRPC.User user;
+        private long dialogId;
+
+        public ItemInternal(int viewType, String string) {
+            super(viewType, false);
+
+            Integer currentId = dialogsHeaderStableIds.get(string);
+            if (currentId != null) {
+                stableId = currentId;
+            } else {
+                stableId = stableIdPointer++;
+                dialogsHeaderStableIds.put(string, stableId);
+            }
+            title = string;
+        }
+
+
+        public ItemInternal(int viewType, TLRPC.User user) {
+            super(viewType, false);
+            this.user = user;
+            this.dialogId = user.id;
+
+            int currentId = dialogsStableIds.get(user.id, -1);
+            if (currentId >= 0) {
+                stableId = currentId;
+            } else {
+                stableId = stableIdPointer++;
+                dialogsStableIds.put(user.id, stableId);
+            }
+        }
+
+        public ItemInternal(int viewType, TLRPC.Chat chat) {
+            super(viewType, false);
+            this.chat = chat;
+            this.dialogId = -chat.id;
+
+            int currentId = dialogsStableIds.get(-chat.id, -1);
+            if (currentId >= 0) {
+                stableId = currentId;
+            } else {
+                stableId = stableIdPointer++;
+                dialogsStableIds.put(-chat.id, stableId);
+            }
+        }
 
         public ItemInternal(int viewType, TLRPC.Dialog dialog) {
             super(viewType, true);
@@ -483,7 +613,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             this.emptyType = viewTypeEmpty;
             if (viewTypeEmpty == VIEW_TYPE_LAST_EMPTY) {
                 stableId = 1;
-            } else if (viewTypeEmpty == VIEW_TYPE_ZAPRET_VPN_SPONSOR) {
+            } else if (viewTypeEmpty == VIEW_TYPE_ZASTOGRAM_PROMO) {
                 stableId = 6;
             } else {
                 if (viewType == VIEW_TYPE_ARCHIVE_FULLSCREEN) {
@@ -546,20 +676,29 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
         @Override
         public int hashCode() {
-            return Objects.hash(dialog, recentMeUrl, contact);
+            return Objects.hash(dialog, chat, recentMeUrl, contact, title);
         }
     }
 
-    public TLObject getItem(int i) {
+    public Object getItem(int i) {
         if (i < 0 || i >= itemInternals.size()) {
             return null;
         }
-        if (itemInternals.get(i).dialog != null) {
-            return itemInternals.get(i).dialog;
-        } else if (itemInternals.get(i).contact != null) {
-            return MessagesController.getInstance(currentAccount).getUser(itemInternals.get(i).contact.user_id);
-        } else if (itemInternals.get(i).recentMeUrl != null) {
-            return itemInternals.get(i).recentMeUrl;
+
+        final ItemInternal item = itemInternals.get(i);
+
+        if (item.title != null) {
+            return item.title;
+        } else if (item.chat != null) {
+            return item.chat;
+        } else if (item.user != null) {
+            return item.user;
+        } else if (item.dialog != null) {
+            return item.dialog;
+        } else if (item.contact != null) {
+            return MessagesController.getInstance(currentAccount).getUser(item.contact.user_id);
+        } else if (item.recentMeUrl != null) {
+            return item.recentMeUrl;
         }
         return null;
     }
@@ -738,7 +877,15 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup viewGroup, int viewType) {
         View view;
         switch (viewType) {
-            case VIEW_TYPE_ZAPRET_VPN_SPONSOR:
+            case VIEW_TYPE_DIALOG_COMMUNITY:
+                DialogCell dialogCell2 = new DialogCell(parentFragment, mContext, true, false, currentAccount, null);
+                if (communityId != 0) {
+                    dialogCell2.insideCommunityList = true;
+                    dialogCell2.insideCommunityListNoDialog = true;
+                }
+                view = dialogCell2;
+                break;
+            case VIEW_TYPE_ZASTOGRAM_PROMO:
             case VIEW_TYPE_FORWARD_TO_STORIES_CELL:
             case VIEW_TYPE_DIALOG:
                 if (viewType == VIEW_TYPE_DIALOG && (dialogsType == DialogsActivity.DIALOGS_TYPE_ADD_USERS_TO ||
@@ -755,6 +902,9 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                     dialogCell.setIsTransitionSupport(isTransitionSupport);
                     if (viewType == VIEW_TYPE_FORWARD_TO_STORIES_CELL) {
                         dialogCell.setIsShareToStoryCell();
+                    }
+                    if (communityId != 0) {
+                        dialogCell.insideCommunityList = true;
                     }
                     view = dialogCell;
                 }
@@ -829,6 +979,9 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 break;
             case VIEW_TYPE_USER:
                 view = new UserCell(mContext, 8, 0, false);
+                break;
+            case VIEW_TYPE_HEADER_3:
+                view = new HeaderCell(mContext);
                 break;
             case VIEW_TYPE_HEADER:
                 view = new HeaderCell(mContext);
@@ -972,20 +1125,22 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     @Override
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int i) {
         switch (holder.getItemViewType()) {
-            case VIEW_TYPE_ZAPRET_VPN_SPONSOR: {
+            case VIEW_TYPE_ZASTOGRAM_PROMO: {
                 DialogCell cell = (DialogCell) holder.itemView;
                 MessagesController messagesController = MessagesController.getInstance(currentAccount);
-                long dialogId = getZapretVpnSponsorDialogId(messagesController);
-                TLRPC.Dialog sponsorDialog = dialogId != 0 ? messagesController.dialogs_dict.get(dialogId) : null;
+                long dialogId = getZastogramPromoDialogId(messagesController);
+                TLRPC.Dialog promoDialog = dialogId != 0 ? messagesController.dialogs_dict.get(dialogId) : null;
 
                 cell.useSeparator = false;
                 cell.fullSeparator = false;
                 cell.setChecked(false, false);
                 cell.setCustomMessage(null);
-                if (sponsorDialog != null) {
-                    cell.setDialog(sponsorDialog, dialogsType, folderId);
+                cell.setZastogramPromo(true);
+                if (promoDialog != null) {
+                    cell.setDialog(promoDialog, dialogsType, folderId);
                 } else if (dialogId != 0) {
-                    cell.setDialog(zapretVpnSponsorDialogId, null, 0, false, false);
+                    requestZastogramPromoPost(messagesController);
+                    cell.setDialog(zastogramPromoDialogId, zastogramPromoPost, zastogramPromoPost != null ? zastogramPromoPost.messageOwner.date : 0, false, false);
                 }
                 cell.checkHeight();
                 break;
@@ -1005,9 +1160,26 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 cell.checkHeight();
                 break;
             }
+            case VIEW_TYPE_DIALOG_COMMUNITY: {
+                Object item = getItem(i);
+                DialogCell cell = (DialogCell) holder.itemView;
+                if (item instanceof TLRPC.Chat) {
+                    TLRPC.Chat chat = (TLRPC.Chat) item;
+                    cell.isHiddenInCommunity = ChatObject.isHiddenInCommunity(currentAccount, chat);
+                    cell.setCustomMessageWithoutRebuild(formatPluralString("Members", chat.participants_count));
+                    cell.setDialog(-chat.id, null, 0, false, false);
+                } else {
+                    TLRPC.User user = (TLRPC.User) item;
+                    cell.isHiddenInCommunity = ChatObject.isHiddenInCommunity(currentAccount, user);
+                    cell.setCustomMessageWithoutRebuild(getString(R.string.Bot));
+                    cell.setDialog(user.id, null, 0, false, false);
+                }
+                break;
+            }
             case VIEW_TYPE_DIALOG: {
                 TLRPC.Dialog dialog = (TLRPC.Dialog) getItem(i);
-                TLRPC.Dialog nextDialog = (TLRPC.Dialog) getItem(i + 1);
+                Object nextObject = getItem(i + 1);
+                TLRPC.Dialog nextDialog = (nextObject instanceof TLRPC.Dialog) ? (TLRPC.Dialog) nextObject : null;
                 if (dialogsType == DialogsActivity.DIALOGS_TYPE_ADD_USERS_TO || dialogsType == DialogsActivity.DIALOGS_TYPE_BOT_REQUEST_PEER) {
                     ProfileSearchCell cell = (ProfileSearchCell) holder.itemView;
                     long oldDialogId = cell.getDialogId();
@@ -1074,6 +1246,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                     cell.setChecked(selectedDialogs.contains(cell.getDialogId()), oldDialogId == cell.getDialogId());
                 } else {
                     DialogCell cell = (DialogCell) holder.itemView;
+                    cell.isHiddenInCommunity = communityId != 0 && ChatObject.isHiddenInCommunity(currentAccount, dialog.id);
                     cell.useSeparator = false; // nextDialog != null;
                     cell.fullSeparator = false; // dialog.pinned && nextDialog != null && !nextDialog.pinned;
                     if (dialogsType == DialogsActivity.DIALOGS_TYPE_DEFAULT) {
@@ -1149,6 +1322,11 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 UserCell cell = (UserCell) holder.itemView;
                 TLRPC.User user = (TLRPC.User) getItem(i);
                 cell.setData(user, null, null, 0);
+                break;
+            }
+            case VIEW_TYPE_HEADER_3: {
+                HeaderCell cell = (HeaderCell) holder.itemView;
+                cell.setText((String) getItem(i));
                 break;
             }
             case VIEW_TYPE_HEADER: {
@@ -1575,7 +1753,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 int cellHeight = AndroidUtilities.dp(SharedConfig.useThreeLinesLayout ? 76 : 70);
                 int dialogsHeight = 0;
                 for (int i = 0; i < size; i++) {
-                    if (itemInternals.get(i).viewType == VIEW_TYPE_DIALOG || itemInternals.get(i).viewType == VIEW_TYPE_ZAPRET_VPN_SPONSOR) {
+                    if (itemInternals.get(i).viewType == VIEW_TYPE_DIALOG || itemInternals.get(i).viewType == VIEW_TYPE_ZASTOGRAM_PROMO) {
                         if (itemInternals.get(i).isForumCell && !collapsedView) {
                             dialogsHeight += AndroidUtilities.dp(SharedConfig.useThreeLinesLayout ? 86 : 91);
                         } else {
@@ -1633,18 +1811,76 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     }
 
 
-    private void updateItemList() {
+    private void updateItemListForCommunity() {
         itemInternals.clear();
-        zapretVpnSponsorItemPosition = -1;
+        zastogramPromoItemPosition = -1;
         updateHasHints();
 
         MessagesController messagesController = MessagesController.getInstance(currentAccount);
-        ArrayList<TLRPC.Dialog> array = parentFragment.getDialogsArray(currentAccount, dialogsType, folderId, dialogsListFrozen);
-        if (array == null) {
-            array = new ArrayList<>();
+        MessagesController.CommunityPeersDialog communityPeersDialog = messagesController.buildCommunityPeers(communityId);
+
+        dialogsCount = communityPeersDialog.getDialogsCount();
+        isEmpty = false;
+
+
+        final int N = dialogsType == DialogsActivity.DIALOGS_TYPE_FORWARD ? 2 : 4;
+        for (int b = 0; b < N; b++) {
+            final String name;
+            final ArrayList<MessagesController.CommunityPeerDialog> array;
+            if (b == 0) {
+                array = communityPeersDialog.chatsYouAreIn;
+                name = getString(R.string.CommunitySectionChatsYouAreIn);
+            } else if (b == 1) {
+                array = communityPeersDialog.chatsYouCanView;
+                name = getString(R.string.CommunitySectionChatsYouCanView);
+            } else if (b == 2) {
+                array = communityPeersDialog.chatsYouCanJoin;
+                name = getString(R.string.CommunitySectionChatsYouCanRequestToJoin);
+            } else {
+                array = communityPeersDialog.chatsOther;
+                name = getString(R.string.CommunitySectionHiddenChats);
+            }
+
+            if (!array.isEmpty()) {
+                itemInternals.add(new ItemInternal(VIEW_TYPE_HEADER_3, name));
+                for (int k = 0; k < array.size(); k++) {
+                    MessagesController.CommunityPeerDialog peer = array.get(k);
+                    if (peer.dialog != null) {
+                        itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG, peer.dialog));
+                    } else if (peer.chat != null) {
+                        itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG_COMMUNITY, peer.chat));
+                    } else if (peer.user != null) {
+                        itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG_COMMUNITY, peer.user));
+                    }
+                    }
+                }
+            }
+    }
+
+    private void updateItemList() {
+        if (communityId != 0) {
+            updateItemListForCommunity();
+            return;
         }
+
+        itemInternals.clear();
+        zastogramPromoItemPosition = -1;
+        updateHasHints();
+
+        MessagesController messagesController = MessagesController.getInstance(currentAccount);
+
+        ArrayList<TLRPC.Dialog> array;
+        if (communityId != 0) {
+            array = messagesController.getDialogsByCommunity(communityId);
+        } else {
+            array = parentFragment.getDialogsArray(currentAccount, dialogsType, folderId, dialogsListFrozen);
+            if (array == null) {
+                array = new ArrayList<>();
+            }
+        }
+
         array = filterLegacyProxySponsorDialogs(array, messagesController);
-        array = removeZapretVpnSponsorDialogFromArray(array, messagesController);
+        array = removeZastogramPromoDialogFromArray(array, messagesController);
         dialogsCount = array.size();
         isEmpty = false;
         if (dialogsCount == 0 && parentFragment.isArchive()) {
@@ -1731,7 +1967,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                     itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG, array.get(k)));
                 }
             }
-            insertZapretVpnSponsorItem(messagesController);
+            insertZastogramPromoItem(messagesController);
             itemInternals.add(new ItemInternal(VIEW_TYPE_LAST_EMPTY));
             return;
         }
@@ -1800,7 +2036,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 }
             }
 
-            if (!forceShowEmptyCell && dialogsType != 7 && dialogsType != 8 && !MessagesController.getInstance(currentAccount).isDialogsEndReached(folderId)) {
+            if (communityId == 0 && !forceShowEmptyCell && dialogsType != 7 && dialogsType != 8 && !MessagesController.getInstance(currentAccount).isDialogsEndReached(folderId)) {
                 if (dialogsCount != 0) {
                     itemInternals.add(new ItemInternal(VIEW_TYPE_FLICKER));
                 }
@@ -1820,7 +2056,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             }
         }
 
-        insertZapretVpnSponsorItem(messagesController);
+        insertZastogramPromoItem(messagesController);
 
         if (!messagesController.hiddenUndoChats.isEmpty()) {
             for (int i = 0; i < itemInternals.size(); ++i) {
@@ -1834,7 +2070,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     }
 
     public int getItemHeight(int position) {
-        if (itemInternals.get(position).viewType == VIEW_TYPE_DIALOG || itemInternals.get(position).viewType == VIEW_TYPE_ZAPRET_VPN_SPONSOR) {
+        if (itemInternals.get(position).viewType == VIEW_TYPE_DIALOG || itemInternals.get(position).viewType == VIEW_TYPE_ZASTOGRAM_PROMO) {
             if (itemInternals.get(position).isForumCell && !collapsedView) {
                 return AndroidUtilities.dp(SharedConfig.useThreeLinesLayout ? 86 : 91) + 1;
             } else {

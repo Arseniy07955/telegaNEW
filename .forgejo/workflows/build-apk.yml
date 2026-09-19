@@ -81,6 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 Tools/check_mtproxy_all.py
+          python3 Tools/check_transport_throughput_contract.py
           python3 Tools/check_plugin_client_utils_contract.py
           python3 Tools/check_plugin_android_utils_contract.py
           python3 Tools/check_plugin_text_formatting_contract.py
@@ -88,9 +89,11 @@ jobs:
           python3 Tools/check_plugin_exteragram_ui_bridge.py
           python3 Tools/check_plugin_java_package_shims.py
           python3 Tools/check_plugin_python_deps.py
+          python3 Tools/check_plugin_runtime_requirements.py
           python3 Tools/check_plugin_utils_javadoc.py
           python3 Tools/check_android_string_format_contract.py
           python3 Tools/check_login_firebase_independence.py
+          python3 Tools/check_notification_mute_ownership.py
           python3 Tools/check_telegram_api_identity.py
           python3 Tools/check_logs_activity_compile_contract.py
           python3 Tools/check_runtime_resilience.py

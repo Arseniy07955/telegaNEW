@@ -79,11 +79,13 @@ bool preferFallback(const Route &route) {
 }
 
 // Отдельный от выбора адреса учёт: у датацентра может не открываться ни один
-// адрес релея (у DC1 порт 443 закрыт целиком у части провайдеров). Держать
-// такой датацентр в вечных попытках бессмысленно — медиа оттуда не загрузится
-// никогда, хотя прямое соединение может работать. После нескольких подряд
-// неудач, ни одна из которых не дошла даже до TCP, маршрут WSS для этого
-// датацентра временно отключается, и клиент идёт к нему обычным путём.
+// адрес релея (у DC1 порт 443 закрыт целиком у части провайдеров), либо релей
+// пропускает TLS и WebSocket-upgrade, но молча глотает MTProto-байты (DPI).
+// Держать такой датацентр в вечных попытках бессмысленно — данные оттуда не
+// придут никогда, хотя прямое соединение может работать. После нескольких
+// подряд попыток, ни одна из которых не принесла ни байта MTProto-данных,
+// маршрут WSS для этого датацентра временно отключается, и клиент идёт к нему
+// обычным путём. Счётчик сбрасывается только реально полученными данными.
 constexpr uint32_t kRouteFailuresBeforeSuppress = 3;
 constexpr int64_t kRouteSuppressTtlMs = 10 * 60 * 1000;
 
@@ -674,6 +676,9 @@ bool Socket::parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::strin
     }
     if (!payloads.empty() && phase == transport::HandshakePhase::WebSocketReady) {
         phase = transport::HandshakePhase::FirstDataReceived;
+        // Только реальные MTProto-данные доказывают, что релей жив: успешный
+        // upgrade проходит и у релеев, которые дальше молча глотают трафик.
+        recordRouteReachable(routeConfig);
     }
     return true;
 }
@@ -769,6 +774,10 @@ bool Socket::wantsWrite() const {
             || (!pendingOutput.empty() && ioWait != IoWait::Read);
 }
 
+bool Socket::canWriteApplicationData() const {
+    return state == State::Ready && ioWait != IoWait::Read;
+}
+
 bool Socket::isClosed() const {
     return state == State::Closed;
 }
@@ -809,8 +818,23 @@ void Socket::noteAttemptFailed() {
 
 void Socket::noteUpgradeSucceeded() {
     failureRecorded = false;
+    // Upgrade подтверждает лишь достижимость хоста (выбор primary/fallback);
+    // здоровье маршрута для подавления сбрасывает только первый MTProto-ответ.
     recordUpgradeSucceeded(routeConfig);
-    recordRouteReachable(routeConfig);
+}
+
+void Socket::noteAppDataTimeout() {
+    // Рукопожатие прошло, а ответ на первые MTProto-байты так и не пришёл:
+    // релей «жив» для TLS/HTTP, но данные съедает миддлбокс. Без учёта таких
+    // исходов клиент вечно переподключается к той же чёрной дыре и никогда не
+    // уходит на прямое соединение.
+    failureRecorded = true;
+    recordAttemptFailed(routeConfig);
+    recordRouteUnreachable(routeConfig);
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_socket appdata_timeout domain=%s relay=%s fallback=%d",
+                routeConfig.domain.c_str(), routeConfig.connectHost.c_str(), routeConfig.viaFallback ? 1 : 0);
+    }
 }
 
 void Socket::setIoWait(IoWait wait, const char *operation) {

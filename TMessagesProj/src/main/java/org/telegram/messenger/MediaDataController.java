@@ -65,6 +65,7 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.tgnet.Vector;
 import org.telegram.tgnet.tl.TL_account;
 import org.telegram.tgnet.tl.TL_bots;
+import org.telegram.tgnet.tl.TL_ephemeral;
 import org.telegram.tgnet.tl.TL_iv;
 import org.telegram.tgnet.tl.TL_update;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -5968,25 +5969,69 @@ public class MediaDataController extends BaseController {
         return 0;
     };
 
-    private LongSparseArray<Boolean> loadingPinnedMessages = new LongSparseArray<>();
+    private static class PinnedMessagesRequestKey {
+        private final long dialogId;
+        private final long topicId;
+        private final int generation;
+
+        private PinnedMessagesRequestKey(long dialogId, long topicId, int generation) {
+            this.dialogId = dialogId;
+            this.topicId = topicId;
+            this.generation = generation;
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof PinnedMessagesRequestKey)) {
+                return false;
+            }
+            PinnedMessagesRequestKey key = (PinnedMessagesRequestKey) object;
+            return dialogId == key.dialogId && topicId == key.topicId && generation == key.generation;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(dialogId, topicId, generation);
+        }
+    }
+
+    private HashSet<PinnedMessagesRequestKey> loadingPinnedMessages = new HashSet<>();
 
     public void loadPinnedMessages(long dialogId, int maxId, int fallback) {
-        if (loadingPinnedMessages.indexOfKey(dialogId) >= 0) {
+        loadPinnedMessages(dialogId, 0, maxId, fallback, 0);
+    }
+
+    public void loadPinnedMessages(long dialogId, long topicId, int maxId, int fallback) {
+        loadPinnedMessages(dialogId, topicId, maxId, fallback, 0);
+    }
+
+    public void loadPinnedMessages(long dialogId, long topicId, int maxId, int fallback, int generation) {
+        PinnedMessagesRequestKey requestKey = new PinnedMessagesRequestKey(dialogId, topicId, generation);
+        if (loadingPinnedMessages.contains(requestKey)) {
             return;
         }
-        loadingPinnedMessages.put(dialogId, true);
+        loadingPinnedMessages.add(requestKey);
         TLRPC.TL_messages_search req = new TLRPC.TL_messages_search();
         req.peer = getMessagesController().getInputPeer(dialogId);
+        if (topicId != 0) {
+            req.top_msg_id = (int) topicId;
+            req.flags |= 2;
+        }
         req.limit = 40;
         req.offset_id = maxId;
         req.q = "";
         req.filter = new TLRPC.TL_inputMessagesFilterPinned();
         getConnectionsManager().sendRequest(req, (response, error) -> {
+            boolean requestSucceeded = error == null && response instanceof TLRPC.messages_Messages;
             ArrayList<Integer> ids = new ArrayList<>();
             HashMap<Integer, MessageObject> messages = new HashMap<>();
             int totalCount = 0;
+            int nextMaxId = 0;
             boolean endReached;
-            if (response instanceof TLRPC.messages_Messages) {
+            if (requestSucceeded) {
                 TLRPC.messages_Messages res = (TLRPC.messages_Messages) response;
                 LongSparseArray<TLRPC.User> usersDict = new LongSparseArray<>();
                 for (int a = 0; a < res.users.size(); a++) {
@@ -6003,6 +6048,9 @@ public class MediaDataController extends BaseController {
                 getMessagesController().putChats(res.chats, false);
                 for (int a = 0, N = res.messages.size(); a < N; a++) {
                     TLRPC.Message message = res.messages.get(a);
+                    if (message.id > 0 && (nextMaxId == 0 || message.id < nextMaxId)) {
+                        nextMaxId = message.id;
+                    }
                     if (message instanceof TLRPC.TL_messageService || message instanceof TLRPC.TL_messageEmpty) {
                         continue;
                     }
@@ -6012,17 +6060,34 @@ public class MediaDataController extends BaseController {
                 if (fallback != 0 && ids.isEmpty()) {
                     ids.add(fallback);
                 }
-                endReached = res.messages.size() < req.limit;
+                endReached = res.messages.size() < req.limit || (maxId != 0 && (nextMaxId == 0 || nextMaxId >= maxId));
                 totalCount = Math.max(res.count, res.messages.size());
             } else {
-                if (fallback != 0) {
+                if (topicId == 0 && fallback != 0) {
                     ids.add(fallback);
                     totalCount = 1;
                 }
                 endReached = false;
             }
-            getMessagesStorage().updatePinnedMessages(dialogId, ids, true, totalCount, maxId, endReached, messages);
-            AndroidUtilities.runOnUIThread(() -> loadingPinnedMessages.remove(dialogId));
+            if (topicId == 0) {
+                if (requestSucceeded) {
+                    getMessagesStorage().updatePinnedMessages(dialogId, ids, true, totalCount, maxId, endReached, messages);
+                    AndroidUtilities.runOnUIThread(() -> loadingPinnedMessages.remove(requestKey));
+                } else {
+                    AndroidUtilities.runOnUIThread(() -> {
+                        loadingPinnedMessages.remove(requestKey);
+                        getNotificationCenter().postNotificationName(NotificationCenter.didLoadPinnedMessages, dialogId, ids, true, null, messages, maxId, 0, false, 0L, 0, 0, false);
+                    });
+                }
+            } else {
+                int finalTotalCount = totalCount;
+                int finalNextMaxId = nextMaxId;
+                boolean finalEndReached = endReached;
+                AndroidUtilities.runOnUIThread(() -> {
+                    loadingPinnedMessages.remove(requestKey);
+                    getNotificationCenter().postNotificationName(NotificationCenter.didLoadPinnedMessages, dialogId, ids, true, null, messages, maxId, finalTotalCount, finalEndReached, topicId, finalNextMaxId, generation, requestSucceeded);
+                });
+            }
         });
     }
 
@@ -6588,9 +6653,9 @@ public class MediaDataController extends BaseController {
                             }
                         }
                         if (!ephemeralIds.isEmpty()) {
-                            ArrayList<TLRPC.EphemeralMessage> ephemeralMessages = getMessagesStorage().getEphemeralMessagesInternal(dialogId, ephemeralIds);
+                            ArrayList<TL_ephemeral.EphemeralMessage> ephemeralMessages = getMessagesStorage().getEphemeralMessagesInternal(dialogId, ephemeralIds);
                             if (ephemeralMessages != null) {
-                                for (TLRPC.EphemeralMessage ephemeralMessage : ephemeralMessages) {
+                                for (TL_ephemeral.EphemeralMessage ephemeralMessage : ephemeralMessages) {
                                     TLRPC.Message convetedEphemeralMessage = EphemeralMessagesHelper.convertEphemeralToFakeDefault(ephemeralMessage);
                                     MessagesStorage.addUsersAndChatsFromMessage(convetedEphemeralMessage, usersToLoad, chatsToLoad, null);
                                     result.add(convetedEphemeralMessage);

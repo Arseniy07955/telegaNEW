@@ -153,6 +153,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private int mtProxyStartupCoverInfoRow;
     private int wssTransportHeaderRow;
     private int wssTransportRow;
+    private int callRelayTcpTlsRow;
     private int wssTransportInfoRow;
     private int callsDetailRow;
     private int deleteAllRow;
@@ -616,6 +617,10 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 ConnectionsManager.setWssTransportEnabled();
                 updateRows(true);
                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
+            } else if (position == callRelayTcpTlsRow) {
+                boolean enabled = !SharedConfig.callRelayTcpTlsEnabled;
+                SharedConfig.setCallRelayTcpTlsEnabled(enabled);
+                ((TextCheckCell) view).setChecked(enabled);
             } else if (position == callsRow) {
                 useProxyForCalls = !useProxyForCalls;
                 if (useProxyForCalls && SharedConfig.wssTransportEnabled) {
@@ -981,6 +986,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
         wssTransportHeaderRow = rowCount++;
         wssTransportRow = rowCount++;
+        callRelayTcpTlsRow = rowCount++;
         wssTransportInfoRow = rowCount++;
         connectionsHeaderRow = rowCount++;
 
@@ -1416,7 +1422,9 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     } else if (position == mtProxySoftMuxRow) {
                         checkCell.setTextAndCheck(getString(R.string.MtProxySoftMux), SharedConfig.mtProxySoftMux, true);
                     } else if (position == wssTransportRow) {
-                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), SharedConfig.wssTransportEnabled, false);
+                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), SharedConfig.wssTransportEnabled, true);
+                    } else if (position == callRelayTcpTlsRow) {
+                        checkCell.setTextAndCheck(getString(R.string.CallRelayTcpTls), SharedConfig.callRelayTcpTlsEnabled, false);
                     }
                     break;
                 }
@@ -1441,7 +1449,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     } else if (position == mtProxyStartupCoverInfoRow) {
                         cell.setText(getString(R.string.MtProxyStartupCoverInfo));
                     } else if (position == wssTransportInfoRow) {
-                        cell.setText(getString(R.string.WssTransportInfo));
+                        cell.setText(getString(R.string.WssTransportInfo) + "\n\n" + getString(R.string.CallRelayTcpTlsInfo));
                     }
                     break;
                 }
@@ -1557,6 +1565,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     checkCell.setChecked(SharedConfig.proxyRotationEnabled);
                 } else if (position == wssTransportRow) {
                     checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                } else if (position == callRelayTcpTlsRow) {
+                    checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }
             } else {
                 super.onBindViewHolder(holder, position, payloads);
@@ -1581,6 +1591,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     checkCell.setChecked(SharedConfig.mtProxySoftMux);
                 } else if (position == wssTransportRow) {
                     checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                } else if (position == callRelayTcpTlsRow) {
+                    checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }
             }
         }
@@ -1588,7 +1600,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         @Override
         public boolean isEnabled(RecyclerView.ViewHolder holder) {
             int position = holder.getAdapterPosition();
-            return position == useProxyRow || position == rotationRow || position == tlsProfileRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == mtProxyConnectionPatternRow || position == mtProxyRecordSizingRow || position == mtProxyTimingRow || position == mtProxyStartupCoverRow || position == wssTransportRow || position == callsRow || position == proxyAddRow || position == deleteAllRow || position >= proxyStartRow && position < proxyEndRow;
+            return position == useProxyRow || position == rotationRow || position == tlsProfileRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == mtProxyConnectionPatternRow || position == mtProxyRecordSizingRow || position == mtProxyTimingRow || position == mtProxyStartupCoverRow || position == wssTransportRow || position == callRelayTcpTlsRow || position == callsRow || position == proxyAddRow || position == deleteAllRow || position >= proxyStartRow && position < proxyEndRow;
         }
 
         @Override
@@ -1682,6 +1694,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 return -24;
             } else if (position == wssTransportRow) {
                 return -25;
+            } else if (position == callRelayTcpTlsRow) {
+                return -31;
             } else if (position == wssTransportInfoRow) {
                 return -26;
             } else if (position >= proxyStartRow && position < proxyEndRow) {
@@ -1697,7 +1711,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 return VIEW_TYPE_SHADOW;
             } else if (position == proxyAddRow || position == deleteAllRow) {
                 return VIEW_TYPE_TEXT_SETTING;
-            } else if (position == useProxyRow || position == rotationRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == wssTransportRow || position == callsRow) {
+            } else if (position == useProxyRow || position == rotationRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == wssTransportRow || position == callRelayTcpTlsRow || position == callsRow) {
                 return VIEW_TYPE_TEXT_CHECK;
             } else if (position == connectionsHeaderRow || position == wssTransportHeaderRow) {
                 return VIEW_TYPE_HEADER;

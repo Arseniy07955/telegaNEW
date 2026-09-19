@@ -99,6 +99,7 @@ public:
     void receivedIntegrityCheckClassic(int32_t requestToken, std::string nonce, std::string token);
     void receivedCaptchaResult(int32_t requestTokensCount, int32_t* requestTokens, std::string token);
     void moveToDatacenter(uint32_t datacenterId);
+    void collectConnectionDiagnosticsAsync(uint32_t datacenterId, std::function<void(std::string)> completion);
 
 private:
     static void *ThreadProc(void *data);
@@ -139,6 +140,7 @@ private:
     bool hasPendingRequestsForConnection(Connection *connection);
     void attachConnection(ConnectionSocket *connection);
     void detachConnection(ConnectionSocket *connection);
+    std::string collectConnectionDiagnostics(uint32_t datacenterId);
     bool shouldDebounceTransportSettingsReconnect(int64_t now);
     void requestTransportSettingsReconnect(const char *reason);
     void applyTransportSettingsReconnect(const char *reason);
@@ -247,6 +249,7 @@ private:
     bool lastProtocolUsefullData = false;
     std::vector<ConnectionSocket *> activeConnections;
     std::vector<ConnectionSocket *> activeConnectionsCopy;
+    std::map<uint32_t, std::string> recentConnectionDiagnostics;
     int epolFd;
     int eventFd;
     int *pipeFd = nullptr;

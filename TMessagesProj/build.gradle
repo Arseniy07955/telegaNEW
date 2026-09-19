@@ -5,6 +5,20 @@ apply plugin: 'com.android.library'
 // can run. Chaquopy may be applied to exactly one module per app; TMessagesProj is the
 // shared library, so every app flavor (Standalone/App/Huawei/...) inherits plugin support.
 apply plugin: 'com.chaquo.python'
+apply plugin: 'org.telegram.lottie-meta'
+apply plugin: 'idea'
+
+idea {
+    module {
+        excludeDirs += [
+            file('jni/third_party'),
+            file('jni/ffmpeg'),
+            file('jni/tlottie'),
+            file('jni/boringssl'),
+            file('jni/sqlite')
+        ]
+    }
+}
 
 repositories {
     mavenCentral()
@@ -32,6 +46,7 @@ dependencies {
 
     implementation 'com.google.android.gms:play-services-cast-framework:21.4.0'
     implementation "androidx.mediarouter:mediarouter:1.7.0"
+    implementation 'com.google.zxing:core:3.5.4'
 
     implementation 'androidx.car.app:app:1.4.0'
     implementation 'androidx.car.app:app-projected:1.4.0'
@@ -40,7 +55,6 @@ dependencies {
     compileOnly 'org.checkerframework:checker-qual:2.5.2'
     compileOnly 'org.checkerframework:checker-compat-qual:2.5.0'
     implementation 'com.google.firebase:firebase-messaging:22.0.0'
-    implementation 'com.google.firebase:firebase-config:21.0.1'
     implementation 'com.google.firebase:firebase-datatransport:18.1.0'
     implementation 'com.google.firebase:firebase-appindexing:20.0.0'
     implementation 'com.google.android.gms:play-services-maps:18.1.0'
@@ -52,7 +66,7 @@ dependencies {
     implementation 'com.googlecode.mp4parser:isoparser:1.0.6'
     implementation 'com.stripe:stripe-android:2.0.2'
     implementation 'com.google.mlkit:language-id:17.0.6'
-    implementation 'com.android.billingclient:billing:7.1.1'
+    implementation 'com.android.billingclient:billing:8.0.0'
     implementation 'com.google.code.gson:gson:2.11.0'
     implementation 'com.google.guava:guava:31.1-android'
     implementation 'com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1'
@@ -66,7 +80,10 @@ dependencies {
     implementation "io.noties.markwon:ext-tables:4.6.2"
     implementation "io.noties.markwon:html:4.6.2"
     implementation "io.noties.markwon:inline-parser:4.6.2"
-    implementation "io.noties.markwon:ext-latex:4.6.2"
+    implementation("io.noties.markwon:ext-latex:4.6.2") {
+        exclude group: 'ru.noties', module: 'jlatexmath-android'
+    }
+    api project(':jlatexmath')
 
 //    implementation 'com.google.mlkit:translate:17.0.3'
 
@@ -91,6 +108,9 @@ dependencies {
 }
 
 def isWindows = String.valueOf(DefaultNativePlatform.currentOperatingSystem.toFamilyName() == OperatingSystemFamily.WINDOWS)
+// Dev and stable share this library build type, so derive the diagnostic flag
+// from the build-wide release identity instead of hard-coding standalone as stable.
+def zastoStandaloneDebugVersion = rootProject.ext.zastoReleaseIdentity.updateChannel == "dev"
 def zastoAllNativeAbis = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def zastoSingleAbiFilter = (project.findProperty("zastoAbiFilter") ?: System.getenv("ZASTO_ABI_FILTER"))?.toString()?.trim()
 def zastoDeprecatedMultiAbiFilters = (project.findProperty("zastoAbiFilters") ?: System.getenv("ZASTO_ABI_FILTERS"))?.toString()?.trim()
@@ -152,10 +172,9 @@ def zastoTelegramApiHash = zastoTelegramApiHashConfigured ?: "014b35b6184100b085
 if (zastoRequestedAbiFilter && !zastoAllNativeAbis.contains(zastoRequestedAbiFilter)) {
     throw new GradleException("Unsupported zastoAbiFilter '${zastoRequestedAbiFilter}'. Expected one of: ${zastoAllNativeAbis.join(', ')}")
 }
-
 android {
-    compileSdkVersion 35
-    buildToolsVersion '35.0.0'
+    compileSdkVersion 36
+    buildToolsVersion '36.0.0'
     ndkVersion "27.2.12479018"
 
     sourceSets.main.jniLibs.srcDirs = ['./jni/']
@@ -182,7 +201,7 @@ android {
 
     defaultConfig {
         minSdkVersion 24 // ZaStoGram: Chaquopy (plugin engine) requires minSdk >= 24
-        targetSdkVersion 35
+        targetSdkVersion 36
 
         buildConfigField "int", "TELEGRAM_API_ID", zastoTelegramApiId
         buildConfigField "String", "TELEGRAM_API_HASH", "\"${zastoTelegramApiHash.toLowerCase()}\""
@@ -201,7 +220,7 @@ android {
 
         externalNativeBuild {
             cmake {
-                version '3.10.2'
+                version '3.22.1'
                 def cmakeArgs = ['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-21'] //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
                 // Route NDK compiles through ccache when the caller has configured a persistent
                 // cache. This is used by both Forgejo Actions and local release scripts.
@@ -209,6 +228,7 @@ android {
                     cmakeArgs << '-DCMAKE_C_COMPILER_LAUNCHER=ccache' << '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'
                 }
                 arguments(*cmakeArgs)
+                targets 'tmessages.49'
             }
         }
     }
@@ -227,11 +247,11 @@ android {
             buildConfigField "boolean", "DEBUG_VERSION", "true"
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "true"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "0"
         }
 
         HA_private {
+            matchingFallbacks = ['release']
             jniDebuggable false
             minifyEnabled true
             multiDexEnabled true
@@ -243,11 +263,11 @@ android {
             buildConfigField "boolean", "DEBUG_VERSION", "true"
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "true"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "1"
         }
 
         HA_public {
+            matchingFallbacks = ['release']
             jniDebuggable false
             minifyEnabled true
             multiDexEnabled true
@@ -259,11 +279,11 @@ android {
             buildConfigField "boolean", "DEBUG_VERSION", "true"
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "false"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "4"
         }
 
         HA_hardcore {
+            matchingFallbacks = ['release']
             jniDebuggable false
             minifyEnabled true
             multiDexEnabled true
@@ -275,11 +295,11 @@ android {
             buildConfigField "boolean", "DEBUG_VERSION", "true"
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "true"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "5"
         }
 
         standalone {
+            matchingFallbacks = ['release']
             jniDebuggable false
             // The standalone app module runs final R8 with this module's proguard rules.
             // Running R8 here first only makes CI do an extra minify pass before the APK pass.
@@ -290,10 +310,9 @@ android {
             buildConfigField "String", "BUILD_VERSION_STRING", "\"" + APP_VERSION_NAME + "\""
             buildConfigField "String", "APP_CENTER_HASH", "\"\""
             buildConfigField "String", "BETA_URL", "\"\""
-            buildConfigField "boolean", "DEBUG_VERSION", "false"
+            buildConfigField "boolean", "DEBUG_VERSION", zastoStandaloneDebugVersion.toString()
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "false"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "6"
         }
 
@@ -310,7 +329,6 @@ android {
             buildConfigField "boolean", "DEBUG_VERSION", "false"
             buildConfigField "boolean", "DEBUG_PRIVATE_VERSION", "false"
             buildConfigField "boolean", "BUNDLE", "false"
-            buildConfigField "boolean", "BUILD_HOST_IS_WINDOWS", isWindows
             buildConfigField "int", "VERSION_NUM", "7"
         }
     }

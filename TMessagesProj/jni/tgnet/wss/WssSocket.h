@@ -43,10 +43,12 @@ public:
     size_t queuedOutputBytes() const override;
     bool isReady() const override;
     bool wantsWrite() const override;
+    bool canWriteApplicationData() const override;
     bool isClosed() const override;
     transport::HandshakePhase handshakePhase() const override;
     const char *transportName() const override;
     void timedOut() override;
+    void noteAppDataTimeout() override;
     void close() override;
 
     const Route &route() const;

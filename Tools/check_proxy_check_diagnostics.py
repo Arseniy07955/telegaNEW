@@ -48,6 +48,7 @@ def native_published_phases(socket):
     terminal = set(re.findall(r'proxyCheckDiagnostic\s*=\s*"([a-z0-9_]+)"', socket))
     # WSS has its own transport diagnostics and is not part of the MTProxy phase map.
     terminal.discard("wss_tls_handshake")
+    terminal.discard("wss_appdata_no_response_timeout")
     return published | terminal
 
 
