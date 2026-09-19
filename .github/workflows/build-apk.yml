@@ -78,6 +78,10 @@ jobs:
 
       - name: Set up Android cmdline-tools
         uses: android-actions/setup-android@v3
+        with:
+          # Экшен по умолчанию ставит древний пакет 'tools', которого уже нет в
+          # репозитории SDK, и падает на нём. Нужные пакеты ставим шагом ниже.
+          packages: ''
 
       - name: Install SDK / NDK / CMake (versions from the project)
         run: |
