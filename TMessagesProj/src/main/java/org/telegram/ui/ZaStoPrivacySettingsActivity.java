@@ -8,7 +8,9 @@ import android.widget.FrameLayout;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
+import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.ZaStoPrivacy;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -39,6 +41,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
     private int allowScreenshotsRow;
     private int muteScreenshotRow;
     private int disableAdsRow;
+    private int zastogramPromoRow;
     private int infoRow;
     private int rowCount;
 
@@ -54,6 +57,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         allowScreenshotsRow = rowCount++;
         muteScreenshotRow = rowCount++;
         disableAdsRow = rowCount++;
+        zastogramPromoRow = rowCount++;
         infoRow = rowCount++;
         return true;
     }
@@ -93,6 +97,13 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
             boolean newValue = !ZaStoPrivacy.get(key);
             ZaStoPrivacy.set(key, newValue);
             ((TextCheckCell) view).setChecked(newValue);
+            if (position == zastogramPromoRow) {
+                for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+                    if (UserConfig.getInstance(a).isClientActivated()) {
+                        NotificationCenter.getInstance(a).postNotificationName(NotificationCenter.dialogsNeedReload);
+                    }
+                }
+            }
         });
 
         return fragmentView;
@@ -106,6 +117,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         if (position == allowScreenshotsRow) return ZaStoPrivacy.KEY_ALLOW_SCREENSHOTS;
         if (position == muteScreenshotRow) return ZaStoPrivacy.KEY_MUTE_SCREENSHOT_PING;
         if (position == disableAdsRow) return ZaStoPrivacy.KEY_DISABLE_ADS;
+        if (position == zastogramPromoRow) return ZaStoPrivacy.KEY_SHOW_ZASTOGRAM_PROMO;
         return null;
     }
 
@@ -117,6 +129,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         if (position == allowScreenshotsRow) return "Разрешать скриншоты";
         if (position == muteScreenshotRow) return "Не сообщать о скриншоте (секретные чаты)";
         if (position == disableAdsRow) return "Отключить рекламу";
+        if (position == zastogramPromoRow) return "Закреплять канал ZaStoGram в списке чатов";
         return "";
     }
 
@@ -171,12 +184,12 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
                     ((HeaderCell) holder.itemView).setText("Функции приватности ZaSto");
                     break;
                 case VIEW_TYPE_INFO:
-                    ((TextInfoPrivacyCell) holder.itemView).setText("По умолчанию всё включено. Выключение тумблера отменяет соответствующую функцию ZaSto.");
+                    ((TextInfoPrivacyCell) holder.itemView).setText("По умолчанию всё включено. Выключение тумблера отменяет соответствующую функцию ZaSto. Без закрепления канал ZaStoGram становится обычным чатом: его можно убрать в архив.");
                     break;
                 default:
                     TextCheckCell cell = (TextCheckCell) holder.itemView;
                     String key = keyForRow(position);
-                    boolean last = position == disableAdsRow;
+                    boolean last = position == zastogramPromoRow;
                     cell.setTextAndCheck(labelForRow(position), key != null && ZaStoPrivacy.get(key), !last);
                     break;
             }

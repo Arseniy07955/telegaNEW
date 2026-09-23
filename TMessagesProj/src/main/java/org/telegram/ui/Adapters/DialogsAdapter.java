@@ -245,7 +245,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     }
 
     private boolean shouldShowZastogramPromo() {
-        return folderId == 0 &&
+        return ZaStoPrivacy.SHOW_ZASTOGRAM_PROMO &&
+                folderId == 0 &&
                 dialogsType == DialogsActivity.DIALOGS_TYPE_DEFAULT &&
                 !isOnlySelect &&
                 parentFragment != null &&
