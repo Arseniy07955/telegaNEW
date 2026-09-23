@@ -481,6 +481,14 @@ void Connection::connect() {
         }
         setMtProxyHandshakePriority(mtProxyHandshakePriority);
     }
+    // Class of this connection's stream on a WEB proxy carrier; unused on
+    // every other route (see ConnectionSocket::announceWebProxyStream).
+    const int32_t baseConnectionType = (int32_t) connectionType & 0x0000ffff;
+    setWebProxyStreamClass(baseConnectionType == ConnectionTypeDownload
+            ? WEB_PROXY_STREAM_CLASS_DOWNLOAD
+            : baseConnectionType == ConnectionTypeUpload
+            ? WEB_PROXY_STREAM_CLASS_UPLOAD
+            : WEB_PROXY_STREAM_CLASS_INTERACTIVE);
     // The WSS hostname must follow the authorization realm, not the amount or
     // direction of file traffic. Upload connections use the regular temp key
     // and therefore belong on kwsN; only connections that actually selected a

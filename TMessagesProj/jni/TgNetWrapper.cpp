@@ -56,6 +56,8 @@ jmethodID jclass_ConnectionsManager_getInitFlags;
 jmethodID jclass_ConnectionsManager_onPremiumFloodWait;
 jmethodID jclass_ConnectionsManager_onIntegrityCheckClassic;
 jmethodID jclass_ConnectionsManager_onCaptchaCheck;
+jmethodID jclass_ConnectionsManager_onWebProxyStreamOpened;
+jmethodID jclass_ConnectionsManager_webProxyReceiveWait;
 
 bool check_utf8(const char *data, size_t len);
 
@@ -573,6 +575,24 @@ class Delegate : public ConnectiosManagerDelegate {
         jniEnv[instanceNum]->DeleteLocalRef(keyIdStr);
     }
 
+    void onWebProxyStreamOpened(int32_t bridgePort, int32_t localPort, int32_t streamClass, int32_t instanceNum) {
+        JNIEnv *env = jniEnv[instanceNum];
+        env->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onWebProxyStreamOpened, bridgePort, localPort, streamClass);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+    }
+
+    int64_t webProxyReceiveWait(int32_t bridgePort, int32_t localPort, int64_t waitStartedAt, int32_t instanceNum) {
+        JNIEnv *env = jniEnv[instanceNum];
+        jlong result = env->CallStaticLongMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_webProxyReceiveWait, bridgePort, localPort, (jlong) waitStartedAt);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return 0;
+        }
+        return (int64_t) result;
+    }
+
 };
 
 void onHostNameResolved(JNIEnv *env, jclass c, jstring host, jlong address, jstring ip) {
@@ -898,6 +918,14 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     }
     jclass_ConnectionsManager_onCaptchaCheck = env->GetStaticMethodID(jclass_ConnectionsManager, "onCaptchaCheck", "(IILjava/lang/String;Ljava/lang/String;)V");
     if (jclass_ConnectionsManager_onCaptchaCheck == 0) {
+        return JNI_FALSE;
+    }
+    jclass_ConnectionsManager_onWebProxyStreamOpened = env->GetStaticMethodID(jclass_ConnectionsManager, "onWebProxyStreamOpened", "(III)V");
+    if (jclass_ConnectionsManager_onWebProxyStreamOpened == 0) {
+        return JNI_FALSE;
+    }
+    jclass_ConnectionsManager_webProxyReceiveWait = env->GetStaticMethodID(jclass_ConnectionsManager, "webProxyReceiveWait", "(IIJ)J");
+    if (jclass_ConnectionsManager_webProxyReceiveWait == 0) {
         return JNI_FALSE;
     }
 

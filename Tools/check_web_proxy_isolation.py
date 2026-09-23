@@ -13,9 +13,30 @@ connect gate, the endpoint cooldown, the handshake admission, the DNS
 coalescing and the Connection reconnect backoff for it. Those exist to spare a
 remote relay under DPI; on loopback they only slow connection setup. Real
 MTProxy connections keep every one of those gates.
+
+Every tgnet connection through a WEB proxy is one stream on a single shared
+carrier, so the data path is carrier-aware (mirroring the desktop client):
+- uplink: WebProxyTransport never lets a socket reader write frames; queued
+  bytes are cut into frames in WebProxyFlow.UplinkScheduler order
+  (interactive first, bulk round-robin, uploads capped by relay credit), and
+  tgnet announces each connection's class to the bridge;
+- downlink: download streams get a bounded share of relay credit;
+- liveness: a WEB bridge connection silent for its receive timeout asks the
+  carrier (WebProxyFlow.decideReceiveWait) instead of closing itself, the
+  5.5 s MTProxy first-reply probe does not apply to it, and a stalled carrier
+  is recovered once by the bridge's own watchdog;
+- churn: uploads use two connections instead of four through a WEB proxy, and
+  a first -404 on a WEB stream reconnects instead of dropping the temp key.
+Direct, SOCKS and real MTProxy connections never take any of these paths.
+The pure-Java flow policy is also compiled and run on the host JVM
+(Tools/web_proxy_flow_tests).
 """
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +50,11 @@ CONNECTION_SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 MT_PROXY_OPTIONS_JAVA = JAVA / "tgnet/MtProxyOptions.java"
 MT_PROXY_OPTIONS_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyOptions.h"
 TGNET_WRAPPER_CPP = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
+DEFINES_H = ROOT / "TMessagesProj/jni/tgnet/Defines.h"
+CONNECTIONS_MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
+WEB_TRANSPORT_JAVA = JAVA / "proxy/WebProxyTransport.java"
+WEB_FLOW_JAVA = JAVA / "proxy/WebProxyFlow.java"
+WEB_FLOW_TEST = ROOT / "Tools/web_proxy_flow_tests/WebProxyFlowTest.java"
 
 
 def method_body(text: str, signature: str) -> str:
@@ -114,6 +140,174 @@ def check_web_bridge_bypasses_pacing(require) -> None:
             "no reconnect backoff branch may key on the bare MTProxy route (it would include the WEB bridge)")
 
 
+def check_carrier_aware_data_path(require) -> None:
+    """Uplink priority, downlink credit, carrier liveness and churn limits."""
+    flow = WEB_FLOW_JAVA.read_text(encoding="utf-8")
+    transport = WEB_TRANSPORT_JAVA.read_text(encoding="utf-8")
+
+    require("import android." not in flow,
+            "WebProxyFlow must stay free of Android classes so it runs on the host JVM")
+
+    # Uplink: readers queue, the scheduler decides the frame order.
+    read_loop = method_body(transport, "private void readLoop(Stream stream)")
+    require("sendFrame(" not in read_loop and "stream.pending.addLast(data);" in read_loop
+            and "pumpUplinkLocked();" in read_loop and "STREAM_QUEUE_LIMIT" in read_loop,
+            "a socket reader must only queue bounded stream bytes and let the scheduler write frames")
+    pump = method_body(transport, "private void pumpUplinkLocked()")
+    require("scheduler.next()" in pump and "sendFrame(FRAME_DATA" in pump
+            and "scheduler.sent(" in pump and "addUnackedLocked(" in pump,
+            "DATA frames must be cut in UplinkScheduler order and counted as unacked")
+    require(transport.count("sendFrame(FRAME_DATA") == 1,
+            "pumpUplinkLocked must be the only writer of DATA frames")
+    window = transport[transport.find("} else if (type == FRAME_WINDOW"):]
+    window = window[:window.find("} else if (type == FRAME_CLOSE")]
+    require("creditUnackedLocked(" in window and "pumpUplinkLocked();" in window,
+            "relay credit must acknowledge unacked bytes and resume the uplink")
+
+    # Downlink credit.
+    data = transport[transport.find("if (type == FRAME_DATA) {"):]
+    data = data[:data.find("} else if (type == FRAME_WINDOW")]
+    require("releaseDownlinkCreditLocked(stream)" in data and "sendFrame(FRAME_WINDOW, stream.id, uint32(payload.length))" not in data,
+            "downlink credit must go through WebProxyFlow's download share, not a blanket per-frame refund")
+    release = method_body(transport, "private long releaseDownlinkCreditLocked(Stream stream)")
+    require("WebProxyFlow.downlinkCreditTarget(" in release and "WebProxyFlow.downlinkCreditRelease(" in release,
+            "download credit must be computed by WebProxyFlow")
+
+    # Stream classes announced by tgnet.
+    require("public static void registerLocalStream(int bridgePort, int localPort, int streamClass)" in transport
+            and "pendingClasses.remove(stream.localPort)" in transport,
+            "the bridge must classify accepted sockets by the class tgnet announced for their local port")
+
+    # Carrier watchdog: one recovery for all streams.
+    health = method_body(transport, "private void checkHealth()")
+    require("WebProxyFlow.carrierStalled(" in health and "failCarrier(failure);" in health
+            and "WebProxyFlow.WELCOME_TIMEOUT_MS" in health,
+            "a stalled carrier or a page that never welcomes must be recovered once by the bridge watchdog")
+    fail_carrier = method_body(transport, "private void failCarrier(String reason)")
+    require("if (stopped || restartScheduled) {" in fail_carrier and "resetFlowLocked();" in fail_carrier
+            and "web_proxy_carrier event=lost reason=" in fail_carrier,
+            "carrier recovery must run once, reset the flow state and log its reason")
+    send_frame = method_body(transport, "private void sendFrame(int type, int streamId, byte[] payload)")
+    require("!carrierConnected && type != FRAME_HELLO && type != FRAME_PONG" in send_frame,
+            "stream frames for a lost carrier must never reach the next bridge page")
+    for secret_word in ("bridgeUrl", "secret", "androidNonce"):
+        for line in transport.splitlines():
+            if "FileLog.d(" in line:
+                require(secret_word not in line, f"WEB carrier diagnostics must not log {secret_word}")
+
+    # JNI glue.
+    connections = CONNECTIONS.read_text(encoding="utf-8")
+    wrapper = TGNET_WRAPPER_CPP.read_text(encoding="utf-8")
+    defines = DEFINES_H.read_text(encoding="utf-8")
+    require("public static void onWebProxyStreamOpened(int bridgePort, int localPort, int streamClass)" in connections
+            and "public static long webProxyReceiveWait(int bridgePort, int localPort, long waitStartedAt)" in connections,
+            "ConnectionsManager must expose the WEB bridge JNI callbacks")
+    require('GetStaticMethodID(jclass_ConnectionsManager, "onWebProxyStreamOpened", "(III)V")' in wrapper
+            and 'GetStaticMethodID(jclass_ConnectionsManager, "webProxyReceiveWait", "(IIJ)J")' in wrapper,
+            "TgNetWrapper must resolve the WEB bridge callbacks with matching signatures")
+    require("virtual void onWebProxyStreamOpened(int32_t bridgePort, int32_t localPort, int32_t streamClass, int32_t instanceNum) = 0;" in defines
+            and "virtual int64_t webProxyReceiveWait(int32_t bridgePort, int32_t localPort, int64_t waitStartedAt, int32_t instanceNum) = 0;" in defines,
+            "the native delegate must declare the WEB bridge callbacks")
+    receive_wait_impl = method_body(wrapper, "int64_t webProxyReceiveWait(int32_t bridgePort")
+    require("ExceptionCheck()" in receive_wait_impl and "return 0;" in receive_wait_impl,
+            "a Java exception in the receive-wait callback must fail closed (plain tgnet timeout)")
+
+    # Class and reason numbers are shared across JNI.
+    for name, value in (("INTERACTIVE", 0), ("DOWNLOAD", 1), ("UPLOAD", 2)):
+        require(f"#define WEB_PROXY_STREAM_CLASS_{name} {value}" in defines
+                and f"public static final int CLASS_{name} = {value};" in flow,
+                f"stream class {name} must be {value} on both sides of JNI")
+    java_reasons = re.search(r"REASON_NAMES = \{(.*?)\};", flow, re.S)
+    socket_cpp = CONNECTION_SOCKET_CPP.read_text(encoding="utf-8")
+    native_reasons = re.search(r"kWebProxyReceiveReasonNames\[\] = \{(.*?)\};", socket_cpp, re.S)
+    java_list = re.findall(r'"([a-z_]+)"', java_reasons.group(1)) if java_reasons else []
+    native_list = re.findall(r'"([a-z_]+)"', native_reasons.group(1)) if native_reasons else []
+    require(java_list and java_list == native_list,
+            "receive-wait reason names must be identical in WebProxyFlow and ConnectionSocket.cpp")
+    for index, reason in enumerate(java_list[1:], start=1):
+        constant = "REASON_" + ("QUEUED" if reason == "request_queued" else reason.upper())
+        require(f"public static final int {constant} = {index};" in flow,
+                f"WebProxyFlow.{constant} must be {index} to match its name table")
+
+    # Native: tgnet announces classes and asks the carrier before closing.
+    connection_cpp = CONNECTION_CPP.read_text(encoding="utf-8")
+    connect = method_body(connection_cpp, "void Connection::connect()")
+    require("setWebProxyStreamClass(" in connect and "WEB_PROXY_STREAM_CLASS_DOWNLOAD" in connect
+            and "WEB_PROXY_STREAM_CLASS_UPLOAD" in connect,
+            "Connection::connect must tag its socket with the WEB stream class")
+    announce = method_body(socket_cpp, "void ConnectionSocket::announceWebProxyStream()")
+    require("!isCurrentWebProxyBridge() || hasMtProxyOverride()" in announce
+            and "getsockname(" in announce and "onWebProxyStreamOpened(" in announce,
+            "only real WEB bridge connections (not proxy checks) announce their class")
+    internal = method_body(socket_cpp, "void ConnectionSocket::openConnectionInternal(bool ipv6)")
+    require(internal.find("stateMachine.connectNativeSocket(") < internal.find("announceWebProxyStream();"),
+            "the class is announced after connect() bound the local port")
+    defer = method_body(socket_cpp, "bool ConnectionSocket::deferWebProxyReceiveTimeout(int64_t now)")
+    require("if (!isCurrentWebProxyBridge() || gate.webProxyLocalPort == 0 || !onConnectedSent) {" in defer
+            and "webProxyReceiveWait(" in defer and "WEB_PROXY_MAX_RECHECK_MS" in defer,
+            "the receive-wait question is asked only for connected WEB bridge sockets and bounded per recheck")
+    check_timeout = method_body(socket_cpp, "bool ConnectionSocket::checkTimeout(int64_t now)")
+    direct = check_timeout[:check_timeout.find("if (isCurrentTransportWss()")]
+    require("deferWebProxyReceiveTimeout" not in direct,
+            "direct connections keep the plain tgnet timeout")
+    require("&& !isCurrentWebProxyBridge()\n        && proxyCheckDiagnostic == \"mtproxy_packet_sent_no_response\"" in check_timeout,
+            "the 5.5 s MTProxy first-reply probe must not close WEB bridge streams")
+    generic = check_timeout[check_timeout.rfind("if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {"):]
+    defer_at = generic.find("if (isCurrentWebProxyBridge() && deferWebProxyReceiveTimeout(now)) {")
+    close_at = generic.find("closeSocket(2, 0);")
+    require(defer_at >= 0 and close_at >= 0 and defer_at < close_at,
+            "a WEB bridge receive timeout must consult the carrier before closing the connection")
+    require(check_timeout.count("deferWebProxyReceiveTimeout") == 1,
+            "the carrier is consulted from exactly one timeout path")
+
+    # -404 on a WEB stream: reconnect first, believe the second.
+    manager_cpp = CONNECTIONS_MANAGER_CPP.read_text(encoding="utf-8")
+    received = method_body(manager_cpp, "void ConnectionsManager::onConnectionDataReceived(Connection *connection, NativeByteBuffer *data, uint32_t length)")
+    strike = received.find("++connection->webProxyKeyNotFoundStrikes < WEB_PROXY_KEY_NOT_FOUND_STRIKES")
+    clear = received.find("datacenter->clearAuthKey(connection->isMediaConnection ? HandshakeTypeMediaTemp : HandshakeTypeTemp);")
+    require(strike >= 0 and clear >= 0 and strike < clear
+            and "&& connection->isCurrentWebProxyBridge()" in received[:strike],
+            "a first -404 on a WEB stream must reconnect before the temp key is dropped")
+    require("connection->webProxyKeyNotFoundStrikes = 0;\n        data->position(mark + 24);" in received,
+            "a decrypted reply must reset the WEB -404 strikes")
+    require("#define WEB_PROXY_KEY_NOT_FOUND_STRIKES 2" in defines,
+            "a second -404 before any decrypted reply is believed")
+
+    # Churn: fewer upload connections through a WEB proxy.
+    upload = method_body(connections, "public static int getMtProxySoftMuxUploadConnectionType(int requestIndex)")
+    require("WebProxyTransport.isActive()" in upload
+            and "requestIndex % WEB_PROXY_UPLOAD_CONNECTIONS" in upload
+            and "private static final int WEB_PROXY_UPLOAD_CONNECTIONS = 2;" in connections,
+            "uploads through a WEB proxy must use two connections")
+    download = method_body(connections, "public static int getMtProxySoftMuxDownloadConnectionType(int requestIndex)")
+    require("ConnectionTypeDownload2" in download,
+            "downloads keep at most two connections")
+
+
+def run_flow_tests(require) -> None:
+    """Compiles WebProxyFlow with its tests for Java 8 and runs them."""
+    javac = shutil.which("javac")
+    java = shutil.which("java")
+    if javac is None or java is None:
+        print("WEB proxy flow tests SKIPPED: no javac/java on PATH.")
+        return
+    with tempfile.TemporaryDirectory() as out:
+        compile_result = subprocess.run(
+            [javac, "--release", "8", "-Xlint:all", "-Werror", "-d", out, str(WEB_FLOW_JAVA), str(WEB_FLOW_TEST)],
+            capture_output=True, text=True, check=False)
+        require(compile_result.returncode == 0,
+                "WebProxyFlow and its tests must compile for Java 8 without warnings:\n" + compile_result.stdout + compile_result.stderr)
+        if compile_result.returncode != 0:
+            return
+        run_result = subprocess.run(
+            [java, "-ea", "-cp", out, "org.telegram.proxy.WebProxyFlowTest"],
+            capture_output=True, text=True, check=False)
+        require(run_result.returncode == 0,
+                "WebProxyFlow tests failed:\n" + run_result.stdout + run_result.stderr)
+        if run_result.returncode == 0:
+            print(run_result.stdout.strip())
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -173,6 +367,8 @@ def main() -> int:
     )
 
     check_web_bridge_bypasses_pacing(require)
+    check_carrier_aware_data_path(require)
+    run_flow_tests(require)
 
     if failures:
         print("WEB proxy isolation guard failed:")

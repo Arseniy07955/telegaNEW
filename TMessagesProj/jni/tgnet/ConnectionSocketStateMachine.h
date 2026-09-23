@@ -184,6 +184,16 @@ public:
         // The current proxy is the WEB proxy's loopback bridge. Such
         // connections never enter the MTProxy endpoint gates above.
         bool webProxyBridge = false;
+        // Bridge listening port and this socket's local port: together they
+        // name the socket's stream inside WebProxyTransport.
+        uint16_t webProxyBridgePort = 0;
+        uint16_t webProxyLocalPort = 0;
+        // Receive-wait state (ConnectionSocket::deferWebProxyReceiveTimeout):
+        // the silence the carrier was last asked about, when to ask again and
+        // the last reason it gave.
+        int64_t webProxyWaitAnchor = 0;
+        int64_t webProxyRecheckAt = 0;
+        int32_t webProxyWaitReason = 0;
     };
 
     struct PendingWriteSubstate {

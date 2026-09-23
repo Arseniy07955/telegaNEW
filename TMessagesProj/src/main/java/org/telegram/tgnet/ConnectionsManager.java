@@ -45,6 +45,7 @@ import org.telegram.messenger.StatsController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
 import org.telegram.proxy.WebProxyConnectionTester;
+import org.telegram.proxy.WebProxyFlow;
 import org.telegram.proxy.WebProxyTransport;
 import org.telegram.proxy.ProxySettings;
 import org.telegram.ui.Components.VideoPlayer;
@@ -1027,7 +1028,37 @@ public class ConnectionsManager extends BaseController {
         if (isMtProxySoftMuxEnabled()) {
             return ConnectionTypeUpload;
         }
+        if (WebProxyTransport.isActive()) {
+            // Through a WEB proxy every connection is a stream on one shared
+            // carrier: more upload connections only fight over it and each
+            // adds its own handshake behind the backlog. Two keep one part
+            // sending while the other waits for its acknowledgement.
+            return ConnectionTypeUpload | ((requestIndex % WEB_PROXY_UPLOAD_CONNECTIONS) << 16);
+        }
         return ConnectionTypeUpload | ((requestIndex % 4) << 16);
+    }
+
+    private static final int WEB_PROXY_UPLOAD_CONNECTIONS = 2;
+
+    // Called by tgnet on its network thread right after a connect() to the WEB
+    // proxy's loopback bridge, so the bridge can schedule the stream by class.
+    public static void onWebProxyStreamOpened(int bridgePort, int localPort, int streamClass) {
+        try {
+            WebProxyTransport.registerLocalStream(bridgePort, localPort, streamClass);
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
+    // Called by tgnet on its network thread when a WEB bridge connection saw
+    // no data for its receive timeout; see WebProxyFlow.decideReceiveWait.
+    public static long webProxyReceiveWait(int bridgePort, int localPort, long waitStartedAt) {
+        try {
+            return WebProxyTransport.receiveWait(bridgePort, localPort, waitStartedAt);
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return -WebProxyFlow.REASON_CARRIER_DOWN;
+        }
     }
 
     public static void setSystemLangCode(String langCode) {

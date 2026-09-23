@@ -111,6 +111,9 @@ private:
     uint32_t currentTimeout = 4;
     uint32_t receivedDataAmount = 0;
     uint32_t generation = 0;
+    // -404s seen on a WEB proxy stream since a reply last decrypted, see
+    // WEB_PROXY_KEY_NOT_FOUND_STRIKES.
+    uint32_t webProxyKeyNotFoundStrikes = 0;
 
     uint8_t temp[64];
 

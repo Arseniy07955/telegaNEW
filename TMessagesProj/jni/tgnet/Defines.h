@@ -28,6 +28,16 @@
 #define PROXY_CONNECTIONS_COUNT 4
 #define DOWNLOAD_CONNECTIONS_COUNT 2
 #define UPLOAD_CONNECTIONS_COUNT 4
+
+// Stream classes of the WEB proxy carrier; must match WebProxyFlow.CLASS_*.
+#define WEB_PROXY_STREAM_CLASS_INTERACTIVE 0
+#define WEB_PROXY_STREAM_CLASS_DOWNLOAD 1
+#define WEB_PROXY_STREAM_CLASS_UPLOAD 2
+// A -404 on a WEB proxy stream is as likely to come from the relay hop being
+// reset as from the server having lost our temporary key. Recreating the key
+// is expensive, so the first -404 only reconnects; a second one before any
+// reply decrypts is believed.
+#define WEB_PROXY_KEY_NOT_FOUND_STRIKES 2
 // MT_PROXY_STARTUP_* handshake fanout limits live in mtproxy/MtProxyOptions.h
 #define CONNECTION_BACKGROUND_KEEP_TIME 10000
 #define MAX_ACCOUNT_COUNT 5
@@ -161,6 +171,12 @@ typedef struct ConnectiosManagerDelegate {
     virtual void onPremiumFloodWait(int32_t instanceNum, int32_t requestToken, bool isUpload) = 0;
     virtual void onIntegrityCheckClassic(int32_t instanceNum, int32_t requestToken, std::string project, std::string nonce) = 0;
     virtual void onCaptchaCheck(int32_t instanceNum, int32_t requestToken, std::string action, std::string key_id) = 0;
+    // WEB proxy loopback bridge (org.telegram.proxy.WebProxyTransport). The
+    // stream is named by the bridge port and the socket's local port.
+    virtual void onWebProxyStreamOpened(int32_t bridgePort, int32_t localPort, int32_t streamClass, int32_t instanceNum) = 0;
+    // WebProxyFlow.Decision JNI encoding: > 0 wait ((waitMs << 4) | reason),
+    // <= 0 fail (-reason).
+    virtual int64_t webProxyReceiveWait(int32_t bridgePort, int32_t localPort, int64_t waitStartedAt, int32_t instanceNum) = 0;
 } ConnectiosManagerDelegate;
 
 typedef struct HandshakeDelegate {

@@ -195,6 +195,40 @@ static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT
 static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 
+// WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
+// cross JNI and must stay in sync with the Java constants.
+static const char *const kWebProxyReceiveReasonNames[] = {
+        "unknown",
+        "stream_closed",
+        "carrier_down",
+        "max_wait",
+        "carrier_stalled",
+        "request_queued",
+        "reply_queued",
+        "reply_pending",
+        "reply_missing",
+        "reply_timeout",
+};
+// A carrier verdict never parks a connection for longer than this before
+// asking again, whatever it suggested.
+static constexpr int64_t WEB_PROXY_MAX_RECHECK_MS = 8000;
+
+static const char *webProxyReceiveReasonName(int32_t reason) {
+    const int32_t count = (int32_t) (sizeof(kWebProxyReceiveReasonNames) / sizeof(kWebProxyReceiveReasonNames[0]));
+    return reason > 0 && reason < count ? kWebProxyReceiveReasonNames[reason] : kWebProxyReceiveReasonNames[0];
+}
+
+static const char *webProxyStreamClassName(int32_t streamClass) {
+    switch (streamClass) {
+        case WEB_PROXY_STREAM_CLASS_DOWNLOAD:
+            return "download";
+        case WEB_PROXY_STREAM_CLASS_UPLOAD:
+            return "upload";
+        default:
+            return "interactive";
+    }
+}
+
 static bool transportAppDataUnanswered(int64_t now, bool firstDataSent, bool noReplyYet, int64_t firstDataSentTime, int64_t timeoutMs) {
     return firstDataSent && noReplyYet && firstDataSentTime > 0 && now - firstDataSentTime > timeoutMs;
 }
@@ -3407,6 +3441,11 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxyOptions = ConnectionsManager::getInstance(instanceNum).proxyMtProxyOptions;
     }
     stateMachine.endpointGate.webProxyBridge = proxyOptions.webBridge && !proxyAddress->empty() && !proxySecret->empty();
+    stateMachine.endpointGate.webProxyBridgePort = stateMachine.endpointGate.webProxyBridge ? proxyPort : 0;
+    stateMachine.endpointGate.webProxyLocalPort = 0;
+    stateMachine.endpointGate.webProxyWaitAnchor = 0;
+    stateMachine.endpointGate.webProxyRecheckAt = 0;
+    stateMachine.endpointGate.webProxyWaitReason = 0;
 
     bool shouldUseWss = overrideProxyAddress.empty()
             && manager.wssEnabled
@@ -3892,6 +3931,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         } else {
             setEpollRegistered(true, "epoll_ctl_add");
             setTransportState(TransportState::EpollRegistered, "epoll_ctl_add");
+            announceWebProxyStream();
         }
     }
     if (epollRegistered && (adjustWriteOpAfterResolve || adjustWriteOpAfterPreTcpGate)) {
@@ -3937,6 +3977,93 @@ bool ConnectionSocket::isCurrentDirectConnection() const {
 
 bool ConnectionSocket::isCurrentWebProxyBridge() const {
     return stateMachine.endpointGate.webProxyBridge;
+}
+
+void ConnectionSocket::setWebProxyStreamClass(int32_t streamClass) {
+    webProxyStreamClass = streamClass;
+}
+
+// Tells the WEB bridge which class of stream this socket carries, keyed by the
+// socket's local port (the remote port of the socket the bridge accepts), so
+// its uplink scheduler can put chat requests ahead of file transfers. The
+// port is bound by connect() already, before any byte reaches the bridge.
+void ConnectionSocket::announceWebProxyStream() {
+    auto &gate = stateMachine.endpointGate;
+    gate.webProxyLocalPort = 0;
+    // Proxy checks dial the bridge with an override and keep plain tgnet
+    // timing: they measure the proxy, they do not share its load.
+    if (!isCurrentWebProxyBridge() || hasMtProxyOverride() || socketFd < 0 || gate.webProxyBridgePort == 0) {
+        return;
+    }
+    sockaddr_storage local;
+    socklen_t length = sizeof(local);
+    memset(&local, 0, sizeof(local));
+    if (getsockname(socketFd, (sockaddr *) &local, &length) != 0) {
+        if (LOGS_ENABLED) DEBUG_E("connection(%p) web_proxy_stream_open getsockname failed errno=%d", this, errno);
+        return;
+    }
+    uint16_t localPort = 0;
+    if (local.ss_family == AF_INET) {
+        localPort = ntohs(((sockaddr_in *) &local)->sin_port);
+    } else if (local.ss_family == AF_INET6) {
+        localPort = ntohs(((sockaddr_in6 *) &local)->sin6_port);
+    }
+    if (localPort == 0) {
+        return;
+    }
+    gate.webProxyLocalPort = localPort;
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    if (manager.delegate != nullptr) {
+        manager.delegate->onWebProxyStreamOpened(gate.webProxyBridgePort, localPort, webProxyStreamClass, instanceNum);
+    }
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) web_proxy_stream_open class=%s", this, webProxyStreamClassName(webProxyStreamClass));
+}
+
+// Asked when a WEB bridge connection saw no data for its receive timeout.
+// Every such connection is one stream of a single shared carrier, so silence
+// alone cannot tell a reply still queued behind a download from a dead
+// stream: the carrier can (WebProxyFlow.decideReceiveWait). Returns true to
+// keep waiting. A stalled carrier is recovered by the bridge once for all of
+// its streams instead of by N independent timeouts.
+bool ConnectionSocket::deferWebProxyReceiveTimeout(int64_t now) {
+    auto &gate = stateMachine.endpointGate;
+    if (!isCurrentWebProxyBridge() || gate.webProxyLocalPort == 0 || !onConnectedSent) {
+        return false;
+    }
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    if (manager.delegate == nullptr) {
+        return false;
+    }
+    if (gate.webProxyWaitAnchor != lastEventTime) {
+        // Data arrived (or a new request started the timer) since the
+        // carrier was last asked: this is a new silence.
+        gate.webProxyWaitAnchor = lastEventTime;
+        gate.webProxyRecheckAt = 0;
+        gate.webProxyWaitReason = 0;
+    }
+    if (gate.webProxyRecheckAt > now) {
+        return true;
+    }
+    const int64_t verdict = manager.delegate->webProxyReceiveWait(gate.webProxyBridgePort, gate.webProxyLocalPort, gate.webProxyWaitAnchor, instanceNum);
+    if (verdict > 0) {
+        int64_t waitMs = verdict >> 4;
+        const int32_t reason = (int32_t) (verdict & 0xf);
+        if (waitMs < 1) {
+            waitMs = 1;
+        } else if (waitMs > WEB_PROXY_MAX_RECHECK_MS) {
+            waitMs = WEB_PROXY_MAX_RECHECK_MS;
+        }
+        gate.webProxyRecheckAt = now + waitMs;
+        if (LOGS_ENABLED && reason != gate.webProxyWaitReason) {
+            DEBUG_D("connection(%p) web_proxy_receive_wait verdict=wait reason=%s class=%s silence_ms=%lld recheck_ms=%lld", this, webProxyReceiveReasonName(reason), webProxyStreamClassName(webProxyStreamClass), (long long) (now - gate.webProxyWaitAnchor), (long long) waitMs);
+        }
+        gate.webProxyWaitReason = reason;
+        return true;
+    }
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) web_proxy_receive_wait verdict=fail reason=%s class=%s silence_ms=%lld", this, webProxyReceiveReasonName((int32_t) -verdict), webProxyStreamClassName(webProxyStreamClass), (long long) (now - gate.webProxyWaitAnchor));
+    gate.webProxyRecheckAt = 0;
+    gate.webProxyWaitReason = 0;
+    return false;
 }
 
 bool ConnectionSocket::hasMtProxyOverride() const {
@@ -5185,8 +5312,12 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
         closeSocket(2, 0);
         return true;
     }
+    // The WEB bridge is loopback into a shared carrier: a first reply queued
+    // behind other streams is not a DPI blackhole, so it is judged by the
+    // carrier in the receive timeout below instead of this 5.5 s probe.
     if (isCurrentMtProxyConnection()
         && !currentSecretIsFakeTls
+        && !isCurrentWebProxyBridge()
         && proxyCheckDiagnostic == "mtproxy_packet_sent_no_response"
         && transportAppDataUnanswered(now, mtproxyFirstPlainDataSentLogged,
                 !mtproxyFirstPlainDataReceivedLogged,
@@ -5221,6 +5352,9 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
         if (!onConnectedSent || hasPendingRequests()) {
+            if (isCurrentWebProxyBridge() && deferWebProxyReceiveTimeout(now)) {
+                return false;
+            }
             if (isCurrentTransportWss() && currentWssTransport != nullptr) {
                 currentWssTransport->timedOut();
             }
