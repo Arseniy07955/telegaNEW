@@ -2,6 +2,7 @@ package org.telegram.proxy;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 /**
@@ -23,10 +24,14 @@ import java.util.Map;
  * <ul>
  * <li>uplink: interactive frames go first, bulk streams share what is left
  * round-robin in frame-sized chunks, and upload bytes that the relay has not
- * yet written to its backend are capped;</li>
+ * yet written to its backend are capped by a window;</li>
  * <li>downlink: the relay may only read a backend while it holds our credit,
- * so download streams get a small credit instead of the full protocol
- * window;</li>
+ * so download streams share a credit budget instead of the full protocol
+ * window each;</li>
+ * <li>both the upload window and the download budget adapt
+ * ({@link AdaptiveWindow}): they follow the bandwidth-delay product the
+ * carrier actually delivers plus a small queue allowance, and shrink when
+ * chat replies start to wait in line behind bulk data;</li>
  * <li>liveness: a stream is declared dead by what the carrier knows about it,
  * not by a per-connection timer that cannot tell "queued" from "lost".</li>
  * </ul>
@@ -41,8 +46,12 @@ public final class WebProxyFlow {
     public static final int UPLINK_FRAME_SIZE = 64 * 1024;
     // Upload bytes handed to the carrier and not yet credited back by the
     // relay: what can sit in front of an interactive frame in the shared
-    // uplink FIFO.
-    public static final long UPLINK_UPLOAD_IN_FLIGHT = 1024 * 1024;
+    // uplink FIFO. The starting value (desktop: 1 MiB; 2 MiB matched the
+    // upstream transport's throughput on the bench from the first second);
+    // the carrier moves it with an AdaptiveWindow (UPLINK_WINDOW_*).
+    public static final long UPLINK_UPLOAD_IN_FLIGHT = 2L * 1024 * 1024;
+    public static final long UPLINK_WINDOW_MIN = 256 * 1024;
+    public static final long UPLINK_WINDOW_MAX = 8L * 1024 * 1024;
     // A steady stream of interactive/download frames must not stop uploads
     // forever: after this many of them in a row while an upload was
     // eligible, one upload frame goes out.
@@ -52,9 +61,13 @@ public final class WebProxyFlow {
     public static final long DOWNLINK_STREAM_WINDOW = 4L * 1024 * 1024;
     // Credit shared by all download streams: the most media that can be
     // queued in the relay's downlink FIFO in front of an interactive reply.
+    // The starting value; the carrier moves it with an AdaptiveWindow.
     public static final long DOWNLINK_DOWNLOAD_BUDGET = 2L * 1024 * 1024;
-    public static final long DOWNLINK_DOWNLOAD_MIN = 256 * 1024;
-    public static final long DOWNLINK_DOWNLOAD_MAX = 1024 * 1024;
+    public static final long DOWNLINK_BUDGET_MIN = 256 * 1024;
+    public static final long DOWNLINK_BUDGET_MAX = 8L * 1024 * 1024;
+    // Bounds of one download stream's share (desktop: downloadMin/Max).
+    public static final long DOWNLINK_DOWNLOAD_MIN = 128 * 1024;
+    public static final long DOWNLINK_DOWNLOAD_MAX = 4L * 1024 * 1024;
 
     // Liveness.
     // Outstanding uplink bytes and not a single frame from the relay for this
@@ -140,7 +153,7 @@ public final class WebProxyFlow {
         }
 
         private final int frameSize;
-        private final long uploadLimit;
+        private long uploadLimit;
         private final int priorityBurst;
         private final Map<Integer, Entry> streams = new HashMap<>();
         @SuppressWarnings({"unchecked", "rawtypes"})
@@ -295,6 +308,11 @@ public final class WebProxyFlow {
             return uploadInFlight;
         }
 
+        /** Moves the upload cap; never below one frame, so uploads progress. */
+        public void setUploadLimit(long bytes) {
+            uploadLimit = Math.max(bytes, frameSize);
+        }
+
         public long uploadLimit() {
             return uploadLimit;
         }
@@ -326,10 +344,15 @@ public final class WebProxyFlow {
 
     /** How much credit the relay should hold for a stream of this class. */
     public static long downlinkCreditTarget(int streamClass, int downloadStreams) {
+        return downlinkCreditTarget(streamClass, downloadStreams, DOWNLINK_DOWNLOAD_BUDGET);
+    }
+
+    /** The same with the download budget the carrier currently allows. */
+    public static long downlinkCreditTarget(int streamClass, int downloadStreams, long budget) {
         if (streamClass != CLASS_DOWNLOAD) {
             return DOWNLINK_STREAM_WINDOW;
         }
-        long share = DOWNLINK_DOWNLOAD_BUDGET / Math.max(downloadStreams, 1);
+        long share = budget / Math.max(downloadStreams, 1);
         share = Math.max(DOWNLINK_DOWNLOAD_MIN, Math.min(DOWNLINK_DOWNLOAD_MAX, share));
         return Math.min(share, DOWNLINK_STREAM_WINDOW);
     }
@@ -344,6 +367,327 @@ public final class WebProxyFlow {
             return 0;
         }
         return Math.min(release, Math.max(withheld, 0));
+    }
+
+    /**
+     * A window that follows the bandwidth-delay product of the carrier; a
+     * port of the desktop client's AdaptiveWindow (web_proxy_flow.cpp) with
+     * the same bounds and filters and the measured differences listed
+     * below.
+     *
+     * <p>It is fed once per interval with what the carrier delivered in it:
+     * bytes credited back by the relay (uplink) or received from it
+     * (downlink), the fastest round trip of a frame in the interval, the
+     * fastest interactive reply, and whether demand was held back by the
+     * window. It keeps
+     * <pre>    window = rate * (baseRtt + queueBudget)</pre>
+     * where rate is the best recent delivery rate and baseRtt the lowest
+     * recent round trip: one bandwidth-delay product keeps the pipe full and
+     * the queue budget is what may wait in the shared FIFOs in front of a
+     * chat request. It differs from the desktop policy where the Android
+     * bench (emulator, real WebView, real relay, netem; upstream DrKLO
+     * transport as the throughput floor) showed a cost:
+     * <ul>
+     * <li>the budget is one round trip but at least 200 ms (desktop:
+     * 50..250 ms): with less, the upload fell 3% behind the upstream
+     * transport at 50 ms, whose queue is seconds long;</li>
+     * <li>growth does not wait for the rate estimate: while the window holds
+     * the transfer back and the round trip shows no queue (within half a
+     * budget), it doubles per interval like a slow start, so a burst reaches
+     * the link rate as fast as without any window; with a small queue it
+     * still grows up to the target;</li>
+     * <li>between one and one and a half budgets the window holds
+     * (round-trip jitter of the browser and the radio); only a queue beyond
+     * that for two intervals in a row brings it back to the target, at most
+     * halving it, and not while the delivered rate still climbs (the queue
+     * of a slow start sits in the browser's own socket).
+     * A window merely in use is never drained: while the browser's TCP ramps
+     * up the delivered rate, and the target with it, is below the path
+     * rate;</li>
+     * <li>a slow chat reply cuts the window multiplicatively (at most once per
+     * round trip), unless the credit round trip of the same interval shows
+     * the queue already drained;</li>
+     * <li>neither a drain nor a cut goes below min(2 MiB, 0.8 s of the
+     * measured rate): with less the upstream transport kept the link busier
+     * (see FLOOR_BYTES).</li>
+     * </ul>
+     *
+     * <p>Times are in milliseconds, -1 means "no sample". Not thread-safe.
+     */
+    public static final class AdaptiveWindow {
+        // Queue allowance: one base round trip, but never less than 200 ms
+        // (desktop: 50..250 ms). Below that the bench lost throughput to the
+        // upstream transport, which has no carrier window at all: a window
+        // a few tens of ms above the bandwidth-delay product leaves the
+        // browser's WebSocket TCP idle between bursts of relay credit.
+        public static final long QUEUE_BUDGET_PERCENT = 100;
+        public static final long QUEUE_BUDGET_MIN = 200;
+        public static final long QUEUE_BUDGET_MAX = 300;
+        // The window holds while the queue stays under this share of the
+        // budget and drains beyond it.
+        public static final long QUEUE_CEILING_PERCENT = 150;
+        public static final long CONGESTION_DELAY = 500;
+        public static final long RATE_WINDOW = 5_000;
+        public static final long RTT_WINDOW = 10_000;
+        public static final long DECREASE_PERCENT = 70;
+        public static final long MAX_GROWTH_PERCENT = 200;
+        public static final long MIN_DECREASE_SPACING = 200;
+        // Never below this much in flight, up to FLOOR_BYTES: on the bench a
+        // window only a round trip or so above the bandwidth-delay product
+        // left the link idle 2-3% of the time (credit comes back in bursts),
+        // while the upstream transport, with no carrier window at all, kept
+        // it busy. 0.8 s of the measured rate keeps the floor short on slow
+        // links (a 2 MiB floor would be 3 s of queue at 5 Mbit/s).
+        public static final long FLOOR_BYTES = 2L * 1024 * 1024;
+        public static final long FLOOR_MS = 800;
+
+        private final long min;
+        private final long max;
+        // (at, value) pairs, oldest first.
+        private final ArrayDeque<long[]> rates = new ArrayDeque<>();
+        private final ArrayDeque<long[]> rtts = new ArrayDeque<>();
+        private long lastBaseRtt = -1;
+        private long window;
+        private long target;
+        private long lastDecreaseAt;
+        private int decreases;
+        private int overIntervals;
+        private long lastRampAt;
+        // The minimum kept past its filter window while our own queue
+        // inflates every newer sample (-1 = none).
+        private long heldBaseRtt = -1;
+        private long lastLimitedAt;
+
+        public AdaptiveWindow(long initial, long min, long max) {
+            this.min = min;
+            this.max = max;
+            window = clamp(initial);
+            target = window;
+        }
+
+        private long clamp(long value) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        public long window() {
+            return window;
+        }
+
+        public long target() {
+            return target;
+        }
+
+        public int decreases() {
+            return decreases;
+        }
+
+        /** Best delivery rate of the recent past, bytes per second. */
+        public long rate() {
+            long result = 0;
+            for (long[] sample : rates) {
+                result = Math.max(result, sample[1]);
+            }
+            return result;
+        }
+
+        /** Lowest recent round trip, or -1 before the first sample. */
+        public long baseRtt() {
+            if (rtts.isEmpty()) {
+                return heldBaseRtt >= 0 ? heldBaseRtt : lastBaseRtt;
+            }
+            long result = heldBaseRtt >= 0 ? heldBaseRtt : Long.MAX_VALUE;
+            for (long[] sample : rtts) {
+                result = Math.min(result, sample[1]);
+            }
+            return result;
+        }
+
+        private long floor() {
+            return Math.min(FLOOR_BYTES, rate() * FLOOR_MS / 1000);
+        }
+
+        /** A new carrier, maybe over another network: learn the path anew. */
+        public void resetRtt() {
+            rtts.clear();
+            lastBaseRtt = -1;
+            heldBaseRtt = -1;
+            lastLimitedAt = 0;
+        }
+
+        public void update(long now, long interval, long bytes, boolean windowLimited, long rtt, long interactiveDelay) {
+            if (interval <= 0) {
+                return;
+            }
+            long sampleRate = bytes * 1000 / interval;
+            if (sampleRate > rate() * 5 / 4) {
+                // Still ramping up: the browser's TCP (or the backend) has
+                // not reached the path rate yet.
+                lastRampAt = now;
+            }
+            rates.addLast(new long[]{now, sampleRate});
+            while (!rates.isEmpty() && now - rates.peekFirst()[0] > RATE_WINDOW) {
+                rates.pollFirst();
+            }
+            if (rtt >= 0) {
+                rtts.addLast(new long[]{now, rtt});
+            }
+            if (windowLimited) {
+                lastLimitedAt = now;
+            } else if (heldBaseRtt >= 0 && now - lastLimitedAt > RTT_WINDOW) {
+                // Our window has not queued anything for a whole filter
+                // window: fresh samples are honest again.
+                heldBaseRtt = -1;
+            }
+            while (!rtts.isEmpty() && now - rtts.peekFirst()[0] > RTT_WINDOW) {
+                long[] expired = rtts.pollFirst();
+                if (windowLimited || heldBaseRtt >= 0) {
+                    // While our own window keeps a queue, every fresh sample
+                    // includes it: forgetting the old minimum would let the
+                    // base, the budget and the window ratchet each other up.
+                    heldBaseRtt = heldBaseRtt >= 0 ? Math.min(heldBaseRtt, expired[1]) : expired[1];
+                } else if (rtts.isEmpty()) {
+                    // An old minimum is forgotten, but never the last one we
+                    // have: with no fresh sample it still is the best guess.
+                    lastBaseRtt = expired[1];
+                }
+            }
+            long base = baseRtt();
+            if (base < 0) {
+                return;
+            }
+            long budget = Math.max(QUEUE_BUDGET_MIN, Math.min(QUEUE_BUDGET_MAX, base * QUEUE_BUDGET_PERCENT / 100));
+            // A slow chat reply means the queue hurts chats, unless the credit
+            // round trip of the same interval shows the queue already drained:
+            // then the reply was held by a transient that is over (typically
+            // the browser's TCP ramping up at the start of a burst), and a cut
+            // would only slow the transfer down.
+            long ceiling = base + budget * QUEUE_CEILING_PERCENT / 100;
+            boolean drained = rtt >= 0 && rtt <= ceiling;
+            if (interactiveDelay >= 0 && interactiveDelay - base > CONGESTION_DELAY && !drained) {
+                long spacing = Math.max(base, MIN_DECREASE_SPACING);
+                if (lastDecreaseAt == 0 || now - lastDecreaseAt >= spacing) {
+                    lastDecreaseAt = now;
+                    window = Math.max(clamp(window * DECREASE_PERCENT / 100), Math.min(window, floor()));
+                    target = window;
+                    decreases++;
+                }
+                return;
+            }
+            long bestRate = rate();
+            if (bestRate > 0) {
+                target = clamp(Math.max(bestRate * (base + budget) / 1000, floor()));
+            }
+            boolean over = rtt >= 0 && rtt > ceiling;
+            if (over) {
+                overIntervals++;
+            } else if (rtt >= 0) {
+                overIntervals = 0;
+            }
+            if (over) {
+                // A queue beyond the ceiling, two intervals in a row (one
+                // alone may be the browser's TCP starting a burst): back to
+                // the target, which is exact now that the path is full, but
+                // at most by half at a time.
+                // Not while the delivered rate still climbs (as a slow start
+                // does, by a quarter or more within the last three
+                // intervals): that queue sits in the browser's own socket
+                // while its TCP opens up, and a smaller window would only
+                // keep it from opening.
+                boolean ramping = lastRampAt != 0 && now - lastRampAt < 3 * interval;
+                if (overIntervals >= 2 && !ramping && bestRate > 0 && target < window) {
+                    window = Math.max(target, clamp(window / 2));
+                }
+            } else if (windowLimited && rtt >= 0) {
+                if (rtt <= base + budget / 2) {
+                    // The window holds the transfer back and nothing queues:
+                    // probe up like a slow start, 2x per interval, until the
+                    // round trip shows a queue. Throughput comes first; the
+                    // queue is bounded by the drain above.
+                    window = clamp(window * MAX_GROWTH_PERCENT / 100);
+                } else if (rtt <= base + budget && window < target) {
+                    window = Math.min(target, clamp(window * MAX_GROWTH_PERCENT / 100));
+                }
+            }
+            // Between the budget and the ceiling the window holds: round-trip
+            // jitter of the browser and the radio does not move it.
+            if (windowLimited) {
+                window = Math.max(window, clamp(floor()));
+            }
+        }
+    }
+
+    /**
+     * Feeds an {@link AdaptiveWindow} from per-tick carrier counters so that
+     * its samples mean what the window assumes.
+     *
+     * <p>Relay credit and relay data arrive in bursts (one WebSocket message
+     * carries whatever the relay had queued), so bytes per short tick
+     * overstate the path rate, and the window then settles well above the
+     * bandwidth-delay product. The rate handed to the window is therefore
+     * measured over the most recent span of at least one base round trip.
+     * Likewise "the window held the transfer back" is only claimed once it
+     * did so for a whole round trip: during the first round trip of a burst
+     * no credit can have come back yet, which says nothing about the path.
+     */
+    public static final class DeliverySampler {
+        public static final long MIN_SPAN_MS = 200;
+        private static final int MAX_HISTORY = 64;
+
+        // (at, delivered so far), oldest first.
+        private final ArrayDeque<long[]> history = new ArrayDeque<>();
+        private long delivered;
+        private long limitedSince = -1;
+
+        public void delivered(long bytes) {
+            if (bytes > 0) {
+                delivered += bytes;
+            }
+        }
+
+        public long total() {
+            return delivered;
+        }
+
+        /**
+         * Called once per tick with what the carrier saw since the previous
+         * tick: whether the window was the limit, the fastest credit round
+         * trip and the fastest interactive reply (-1 when none).
+         */
+        public void tick(AdaptiveWindow window, long now, boolean limited, long rtt, long interactiveDelay) {
+            long base = window.baseRtt();
+            if (base < 0) {
+                base = rtt;
+            }
+            long span = Math.max(MIN_SPAN_MS, base);
+            if (limited) {
+                if (limitedSince < 0) {
+                    // It may have started anywhere in the interval.
+                    limitedSince = now;
+                }
+            } else {
+                limitedSince = -1;
+            }
+            history.addLast(new long[]{now, delivered});
+            while (history.size() > MAX_HISTORY) {
+                history.pollFirst();
+            }
+            // Keep the newest entry at least one span old, drop what is older.
+            while (history.size() > 1) {
+                Iterator<long[]> it = history.iterator();
+                it.next();
+                long[] second = it.next();
+                if (now - second[0] >= span) {
+                    history.pollFirst();
+                } else {
+                    break;
+                }
+            }
+            long[] from = history.peekFirst();
+            long interval = now - from[0];
+            long bytes = delivered - from[1];
+            boolean heldBack = limited && now - limitedSince >= span;
+            window.update(now, interval, bytes, heldBack, rtt, interactiveDelay);
+        }
     }
 
     public static final class CarrierHealth {

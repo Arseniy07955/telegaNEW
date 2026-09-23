@@ -1028,17 +1028,11 @@ public class ConnectionsManager extends BaseController {
         if (isMtProxySoftMuxEnabled()) {
             return ConnectionTypeUpload;
         }
-        if (WebProxyTransport.isActive()) {
-            // Through a WEB proxy every connection is a stream on one shared
-            // carrier: more upload connections only fight over it and each
-            // adds its own handshake behind the backlog. Two keep one part
-            // sending while the other waits for its acknowledgement.
-            return ConnectionTypeUpload | ((requestIndex % WEB_PROXY_UPLOAD_CONNECTIONS) << 16);
-        }
+        // Through a WEB proxy too: the carrier's adaptive upload window, not
+        // the number of upload connections, bounds what waits in front of a
+        // chat request (WebProxyEngine).
         return ConnectionTypeUpload | ((requestIndex % 4) << 16);
     }
-
-    private static final int WEB_PROXY_UPLOAD_CONNECTIONS = 2;
 
     // Called by tgnet on its network thread right after a connect() to the WEB
     // proxy's loopback bridge, so the bridge can schedule the stream by class.

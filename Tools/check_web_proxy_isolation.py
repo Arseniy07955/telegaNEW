@@ -15,20 +15,32 @@ remote relay under DPI; on loopback they only slow connection setup. Real
 MTProxy connections keep every one of those gates.
 
 Every tgnet connection through a WEB proxy is one stream on a single shared
-carrier, so the data path is carrier-aware (mirroring the desktop client):
-- uplink: WebProxyTransport never lets a socket reader write frames; queued
-  bytes are cut into frames in WebProxyFlow.UplinkScheduler order
-  (interactive first, bulk round-robin, uploads capped by relay credit), and
-  tgnet announces each connection's class to the bridge;
-- downlink: download streams get a bounded share of relay credit;
+carrier. The data path is WebProxyEngine: one thread, a selector over the
+loopback sockets, and one flow-control layer (mirroring the desktop client's
+policy in WebProxyFlow):
+- uplink is pulled: a socket is read only when WebProxyFlow.UplinkScheduler
+  grants its stream a frame (interactive first, bulk round-robin, uploads
+  capped by an adaptive window of relay credit), straight into one batch
+  message for the page; tgnet announces each connection's class;
+- downlink is written without blocking, and download streams share an
+  adaptive credit budget; both windows follow the carrier's
+  bandwidth-delay product (WebProxyFlow.AdaptiveWindow fed by
+  WebProxyFlow.DeliverySampler);
+- the page boundary is a WebMessagePort when available (the page's frames
+  are not dispatched on the UI thread), else the origin-scoped listener; the
+  UI thread never takes the engine lock;
 - liveness: a WEB bridge connection silent for its receive timeout asks the
   carrier (WebProxyFlow.decideReceiveWait) instead of closing itself, the
   5.5 s MTProxy first-reply probe does not apply to it, and a stalled carrier
-  is recovered once by the bridge's own watchdog;
-- churn: uploads use two connections instead of four through a WEB proxy, and
-  a first -404 on a WEB stream reconnects instead of dropping the temp key.
-Direct, SOCKS and real MTProxy connections never take any of these paths.
-The pure-Java flow policy is also compiled and run on the host JVM
+  is recovered once by the engine's own watchdog;
+- churn: a first -404 on a WEB stream reconnects instead of dropping the temp
+  key; uploads keep tgnet's four connections (the carrier windows bound the
+  queue, not the number of connections);
+- media routing: through an MTProxy-style route a media connection's DC sign
+  follows the same rule as the key it uses (Datacenter::hasMediaAddress), so
+  a media key never reaches the regular cluster.
+Direct, SOCKS and real MTProxy connections never take the WEB paths.
+The pure-Java policy and engine are also compiled and run on the host JVM
 (Tools/web_proxy_flow_tests).
 """
 from pathlib import Path
@@ -54,7 +66,9 @@ DEFINES_H = ROOT / "TMessagesProj/jni/tgnet/Defines.h"
 CONNECTIONS_MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 WEB_TRANSPORT_JAVA = JAVA / "proxy/WebProxyTransport.java"
 WEB_FLOW_JAVA = JAVA / "proxy/WebProxyFlow.java"
+WEB_ENGINE_JAVA = JAVA / "proxy/WebProxyEngine.java"
 WEB_FLOW_TEST = ROOT / "Tools/web_proxy_flow_tests/WebProxyFlowTest.java"
+WEB_ENGINE_TEST = ROOT / "Tools/web_proxy_flow_tests/WebProxyEngineTest.java"
 
 
 def method_body(text: str, signature: str) -> str:
@@ -141,58 +155,91 @@ def check_web_bridge_bypasses_pacing(require) -> None:
 
 
 def check_carrier_aware_data_path(require) -> None:
-    """Uplink priority, downlink credit, carrier liveness and churn limits."""
+    """Pulled uplink, adaptive windows, non-blocking downlink, carrier liveness."""
     flow = WEB_FLOW_JAVA.read_text(encoding="utf-8")
+    engine = WEB_ENGINE_JAVA.read_text(encoding="utf-8")
     transport = WEB_TRANSPORT_JAVA.read_text(encoding="utf-8")
 
-    require("import android." not in flow,
-            "WebProxyFlow must stay free of Android classes so it runs on the host JVM")
+    for name, text in (("WebProxyFlow", flow), ("WebProxyEngine", engine)):
+        require("import android." not in text and "import androidx." not in text,
+                f"{name} must stay free of Android classes so it runs on the host JVM")
 
-    # Uplink: readers queue, the scheduler decides the frame order.
-    read_loop = method_body(transport, "private void readLoop(Stream stream)")
-    require("sendFrame(" not in read_loop and "stream.pending.addLast(data);" in read_loop
-            and "pumpUplinkLocked();" in read_loop and "STREAM_QUEUE_LIMIT" in read_loop,
-            "a socket reader must only queue bounded stream bytes and let the scheduler write frames")
-    pump = method_body(transport, "private void pumpUplinkLocked()")
-    require("scheduler.next()" in pump and "sendFrame(FRAME_DATA" in pump
-            and "scheduler.sent(" in pump and "addUnackedLocked(" in pump,
-            "DATA frames must be cut in UplinkScheduler order and counted as unacked")
-    require(transport.count("sendFrame(FRAME_DATA") == 1,
-            "pumpUplinkLocked must be the only writer of DATA frames")
-    window = transport[transport.find("} else if (type == FRAME_WINDOW"):]
+    # Uplink: pulled by the scheduler, straight into the batch.
+    pump = method_body(engine, "private void pumpDataLocked(long now)")
+    require("scheduler.next()" in pump and "stream.channel.read(batch)" in pump
+            and "scheduler.sent(" in pump and "stream.unacked += count;" in pump,
+            "DATA frames must be read from a socket only on a scheduler grant, into the batch, and counted as unacked")
+    require(engine.count("(byte) FRAME_DATA") == 1 and "(byte) FRAME_DATA" in pump,
+            "pumpDataLocked must be the only writer of DATA frames")
+    require("channel.read(" not in engine.replace(pump, ""),
+            "no code path but the scheduler grant may read a tgnet socket")
+    interest = method_body(engine, "private void updateInterestLocked(Stream stream)")
+    require("stream.opened && !stream.readable && stream.sendWindow > 0" in interest,
+            "a socket is watched for reading only while its stream could send")
+    sample = method_body(engine, "private void sampleLocked(long now)")
+    require("uplinkSampler.tick(uplinkWindow" in sample and "downlinkSampler.tick(downlinkWindow" in sample
+            and "scheduler.setUploadLimit(uplinkWindow.window());" in sample,
+            "the upload cap and the download budget must follow the adaptive windows")
+    window = engine[engine.find("} else if (type == FRAME_WINDOW"):]
     window = window[:window.find("} else if (type == FRAME_CLOSE")]
-    require("creditUnackedLocked(" in window and "pumpUplinkLocked();" in window,
-            "relay credit must acknowledge unacked bytes and resume the uplink")
+    require("creditLocked(stream, amount, now);" in window and "markReadyLocked(stream);" in window,
+            "relay credit must acknowledge unacked bytes and make the stream eligible again")
+    require("public static final class AdaptiveWindow" in flow and "public static final class DeliverySampler" in flow,
+            "the adaptive window and its sampler live in WebProxyFlow")
 
-    # Downlink credit.
-    data = transport[transport.find("if (type == FRAME_DATA) {"):]
+    # Downlink: never blocks, credit through the download share.
+    data = engine[engine.find("if (type == FRAME_DATA) {"):]
     data = data[:data.find("} else if (type == FRAME_WINDOW")]
-    require("releaseDownlinkCreditLocked(stream)" in data and "sendFrame(FRAME_WINDOW, stream.id, uint32(payload.length))" not in data,
-            "downlink credit must go through WebProxyFlow's download share, not a blanket per-frame refund")
-    release = method_body(transport, "private long releaseDownlinkCreditLocked(Stream stream)")
-    require("WebProxyFlow.downlinkCreditTarget(" in release and "WebProxyFlow.downlinkCreditRelease(" in release,
-            "download credit must be computed by WebProxyFlow")
+    require("flushDownLocked(stream, now);" in data and "FRAME_WINDOW" not in data,
+            "downlink DATA must be queued for a non-blocking write, never credited back blindly")
+    flush = method_body(engine, "private void flushDownLocked(Stream stream, long now)")
+    require("stream.channel.write(head)" in flush and "releaseDownlinkCreditLocked(stream);" in flush,
+            "downlink bytes go to tgnet without blocking, then release credit")
+    require("getOutputStream()" not in engine and "getInputStream()" not in engine,
+            "the engine never uses blocking socket streams")
+    release = method_body(engine, "private void releaseDownlinkCreditLocked(Stream stream)")
+    require("WebProxyFlow.downlinkCreditTarget(stream.streamClass, downloadStreams, downlinkWindow.window())" in release
+            and "WebProxyFlow.downlinkCreditRelease(" in release,
+            "download credit must be computed by WebProxyFlow from the adaptive budget")
 
     # Stream classes announced by tgnet.
     require("public static void registerLocalStream(int bridgePort, int localPort, int streamClass)" in transport
-            and "pendingClasses.remove(stream.localPort)" in transport,
+            and "pendingClasses.remove(localPort)" in engine,
             "the bridge must classify accepted sockets by the class tgnet announced for their local port")
 
-    # Carrier watchdog: one recovery for all streams.
-    health = method_body(transport, "private void checkHealth()")
-    require("WebProxyFlow.carrierStalled(" in health and "failCarrier(failure);" in health
+    # Carrier: HELLO alone, one recovery for all streams.
+    inbound = method_body(engine, "private void handleInboundLocked(Inbound item, long now)")
+    require("host.postToPage(pageToken, frame(FRAME_HELLO, 0, new byte[]{1}, 0, 1));" in inbound,
+            "the page's first binary message must be one HELLO frame")
+    pump_all = method_body(engine, "private void pumpLocked(long now)")
+    require("if (stopped || pageToken == 0) {" in pump_all and "if (connected) {" in pump_all,
+            "no stream frame may go to a page before the relay welcomed it")
+    health = method_body(engine, "private void checkHealthLocked(long now)")
+    require("WebProxyFlow.carrierStalled(" in health and "failCarrierLocked(failure);" in health
             and "WebProxyFlow.WELCOME_TIMEOUT_MS" in health,
-            "a stalled carrier or a page that never welcomes must be recovered once by the bridge watchdog")
-    fail_carrier = method_body(transport, "private void failCarrier(String reason)")
-    require("if (stopped || restartScheduled) {" in fail_carrier and "resetFlowLocked();" in fail_carrier
-            and "web_proxy_carrier event=lost reason=" in fail_carrier,
+            "a stalled carrier or a page that never welcomes must be recovered once by the engine watchdog")
+    fail_carrier = method_body(engine, "private void failCarrierLocked(String reason)")
+    require("if (stopped || restartPending) {" in fail_carrier and "scheduler.clear();" in fail_carrier
+            and "web_proxy_carrier event=lost reason=" in fail_carrier and "host.carrierFailed(reason);" in fail_carrier,
             "carrier recovery must run once, reset the flow state and log its reason")
-    send_frame = method_body(transport, "private void sendFrame(int type, int streamId, byte[] payload)")
-    require("!carrierConnected && type != FRAME_HELLO && type != FRAME_PONG" in send_frame,
-            "stream frames for a lost carrier must never reach the next bridge page")
-    for secret_word in ("bridgeUrl", "secret", "androidNonce"):
-        for line in transport.splitlines():
-            if "FileLog.d(" in line:
+    require("item.token != pageToken || pageToken == 0" in inbound,
+            "frames of a page that is gone must be ignored")
+
+    # Page boundary.
+    on_message = method_body(transport, "private void onWebMessage(")
+    require("engine.pageBytes(pageToken, message.getArrayBuffer());" in on_message and "processFrames" not in transport,
+            "the UI thread only hands the page's bytes to the engine")
+    require("synchronized (lock)" not in transport and "engine.lock" not in transport,
+            "the UI thread never takes the engine lock")
+    require("Object.defineProperty(globalThis,'TelegramWebProxy'" in transport
+            and "Uri.parse(origin)" in method_body(transport, "private void connectPort(WebView view)")
+            and "portsFailed = true;" in transport,
+            "the port shim stands in for TelegramWebProxy, the port goes only to the exact bridge origin, and a failing port falls back to the listener")
+    require(transport.count("androidNonce.equals(object.optString(\"nonce\"))") == 2,
+            "both page boundaries must check the nonce of the init message")
+    for secret_word in ("bridgeUrl", "secret", "androidNonce", "capability"):
+        for line in transport.splitlines() + engine.splitlines():
+            if "FileLog.d(" in line or "host.log(" in line:
                 require(secret_word not in line, f"WEB carrier diagnostics must not log {secret_word}")
 
     # JNI glue.
@@ -273,19 +320,31 @@ def check_carrier_aware_data_path(require) -> None:
     require("#define WEB_PROXY_KEY_NOT_FOUND_STRIKES 2" in defines,
             "a second -404 before any decrypted reply is believed")
 
-    # Churn: fewer upload connections through a WEB proxy.
+    # Connections: the carrier windows bound the queue, so a WEB proxy keeps
+    # tgnet's usual four upload connections (upstream behaviour).
     upload = method_body(connections, "public static int getMtProxySoftMuxUploadConnectionType(int requestIndex)")
-    require("WebProxyTransport.isActive()" in upload
-            and "requestIndex % WEB_PROXY_UPLOAD_CONNECTIONS" in upload
-            and "private static final int WEB_PROXY_UPLOAD_CONNECTIONS = 2;" in connections,
-            "uploads through a WEB proxy must use two connections")
+    require("WebProxyTransport" not in upload and "requestIndex % 4" in upload,
+            "uploads through a WEB proxy must not be cut below tgnet's four connections")
     download = method_body(connections, "public static int getMtProxySoftMuxDownloadConnectionType(int requestIndex)")
     require("ConnectionTypeDownload2" in download,
             "downloads keep at most two connections")
 
 
+def check_media_routing(require) -> None:
+    """Through an MTProxy-style route the DC sign follows the key rule."""
+    connection_cpp = CONNECTION_CPP.read_text(encoding="utf-8")
+    connect = method_body(connection_cpp, "void Connection::connect()")
+    media = connect[connect.find("if (isMediaConnectionType(connectionType)) {"):connect.find("} else if (connectionType == ConnectionTypeTemp) {")]
+    rule = media.find("isMediaConnection = currentDatacenter->hasMediaAddress();")
+    require(rule >= 0 and "!ConnectionsManager::getInstance(currentDatacenter->instanceNum).proxySecret.empty()" in media[:rule],
+            "a proxied media connection must take its media-ness from hasMediaAddress(), the rule of its key")
+    datacenter = (ROOT / "TMessagesProj/jni/tgnet/Datacenter.cpp").read_text(encoding="utf-8")
+    require("bool media = Connection::isMediaConnectionType(connectionType) && hasMediaAddress();" in datacenter,
+            "the key rule this guard relies on must not change unnoticed")
+
+
 def run_flow_tests(require) -> None:
-    """Compiles WebProxyFlow with its tests for Java 8 and runs them."""
+    """Compiles WebProxyFlow and WebProxyEngine with their tests for Java 8 and runs them."""
     javac = shutil.which("javac")
     java = shutil.which("java")
     if javac is None or java is None:
@@ -293,19 +352,21 @@ def run_flow_tests(require) -> None:
         return
     with tempfile.TemporaryDirectory() as out:
         compile_result = subprocess.run(
-            [javac, "--release", "8", "-Xlint:all", "-Werror", "-d", out, str(WEB_FLOW_JAVA), str(WEB_FLOW_TEST)],
+            [javac, "--release", "8", "-Xlint:all", "-Werror", "-d", out,
+             str(WEB_FLOW_JAVA), str(WEB_ENGINE_JAVA), str(WEB_FLOW_TEST), str(WEB_ENGINE_TEST)],
             capture_output=True, text=True, check=False)
         require(compile_result.returncode == 0,
-                "WebProxyFlow and its tests must compile for Java 8 without warnings:\n" + compile_result.stdout + compile_result.stderr)
+                "WebProxyFlow, WebProxyEngine and their tests must compile for Java 8 without warnings:\n" + compile_result.stdout + compile_result.stderr)
         if compile_result.returncode != 0:
             return
-        run_result = subprocess.run(
-            [java, "-ea", "-cp", out, "org.telegram.proxy.WebProxyFlowTest"],
-            capture_output=True, text=True, check=False)
-        require(run_result.returncode == 0,
-                "WebProxyFlow tests failed:\n" + run_result.stdout + run_result.stderr)
-        if run_result.returncode == 0:
-            print(run_result.stdout.strip())
+        for test in ("org.telegram.proxy.WebProxyFlowTest", "org.telegram.proxy.WebProxyEngineTest"):
+            run_result = subprocess.run(
+                [java, "-ea", "-cp", out, test],
+                capture_output=True, text=True, check=False, timeout=120)
+            require(run_result.returncode == 0,
+                    f"{test} failed:\n" + run_result.stdout + run_result.stderr)
+            if run_result.returncode == 0:
+                print(run_result.stdout.strip())
 
 
 def main() -> int:
@@ -368,6 +429,7 @@ def main() -> int:
 
     check_web_bridge_bypasses_pacing(require)
     check_carrier_aware_data_path(require)
+    check_media_routing(require)
     run_flow_tests(require)
 
     if failures:

@@ -437,6 +437,19 @@ void Connection::connect() {
                 isMediaConnection = true;
             }
         }
+        // Through an MTProxy-style route (a real MTProxy or the WEB bridge)
+        // the address above is never dialled: the relay picks the cluster
+        // from the DC id in the obfuscated header, whose sign follows
+        // isMediaConnection. The key this connection signs with is chosen by
+        // Datacenter::getAuthKey from hasMediaAddress(), which looks at the
+        // IPv4 list (IPv6 only for USE_IPV6_ONLY). Deciding media-ness from
+        // the address list of a random IPv6 pick instead would send the media
+        // temp key to the regular cluster (or the reverse): -404 right after
+        // every new key, and a key re-creation loop. Keep both on one rule.
+        if (isStatic != 0 && !ConnectionsManager::getInstance(currentDatacenter->instanceNum).proxyAddress.empty()
+                && !ConnectionsManager::getInstance(currentDatacenter->instanceNum).proxySecret.empty()) {
+            isMediaConnection = currentDatacenter->hasMediaAddress();
+        }
     } else if (connectionType == ConnectionTypeTemp) {
         currentAddressFlags = TcpAddressFlagTemp;
         tcpAddress = currentDatacenter->getCurrentAddress(currentAddressFlags);
