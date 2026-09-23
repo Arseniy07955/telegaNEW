@@ -175,7 +175,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             releaseTag = getString(R.string.ZastoUpdateChannel).trim();
         }
         int buildNumber = getResources().getInteger(R.integer.ZastoBuildNumber);
-        return LocaleController.formatString(R.string.ZaStoGramVersion, releaseTag, buildNumber);
+        return LocaleController.formatString(org.telegram.messenger.R.string.ZaStoGramVersion, releaseTag, buildNumber);
     }
 
     @Override
@@ -220,7 +220,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                         new AlertDialog.Builder(LaunchActivity.instance)
                                 .setTitle(LocaleController.getString(R.string.SmsNoSimTitle))
                                 .setMessage(AndroidUtilities.replaceTags(LocaleController.getString(R.string.SmsNoSimMessage)))
-                                .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                                .setPositiveButton(LocaleController.getString(org.telegram.messenger.R.string.OK), null)
                                 .show();
                         return;
                     }
@@ -232,7 +232,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                             new AlertDialog.Builder(LaunchActivity.instance)
                                     .setTitle(LocaleController.getString(R.string.SmsNoSimTitle))
                                     .setMessage(AndroidUtilities.replaceTags(LocaleController.getString(R.string.SmsNoSimMessage)))
-                                    .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                                    .setPositiveButton(LocaleController.getString(org.telegram.messenger.R.string.OK), null)
                                     .show();
                             return;
                         }
@@ -240,7 +240,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                             if (err != null) {
                                 BulletinFactory.showError(err);
                             } else if (res instanceof TLRPC.TL_boolFalse) {
-                                BulletinFactory.global().createErrorBulletin(LocaleController.getString(R.string.UnknownError)).show();
+                                BulletinFactory.global().createErrorBulletin(LocaleController.getString(org.telegram.messenger.R.string.UnknownError)).show();
                             } else {
                                 controller.setState(SMSJobController.STATE_JOINED);
                                 controller.loadStatus(true);

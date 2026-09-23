@@ -350,6 +350,8 @@
     <string name="ProxyWindowStatusChecking">Проверяем маршрут прокси...</string>
     <string name="UseProxyLink">Ссылка на прокси</string>
     <string name="UseProxyTelegramInfoStealth">FakeTLS-секреты, которые начинаются с ee, используют браузерный TLS-профиль. Короткие dd/legacy-секреты работают как обычный MTProxy и не используют новую TLS-маскировку.</string>
+    <string name="UseProxyWeb">WEB-прокси</string>
+    <string name="UseProxyWebInfo">WEB-прокси открывает HTTPS-страницу в закрытом WebView и передаёт через неё обычный поток MTProxy. Укажите имя хоста без схемы и пути и 16-байтный секрет MTProxy. Нужен актуальный Android System WebView; работает, пока приложение открыто.</string>
     <string name="MtProxyClientHelloFragmentation">Мягкая фрагментация ClientHello</string>
     <string name="MtProxyClientHelloFragmentationInfo">Делит только FakeTLS ClientHello на небольшие TCP-отправки. MTProto-трафик после подключения не меняется.</string>
     <string name="MtProxySoftMux">Меньше параллельных каналов MTProxy</string>

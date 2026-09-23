@@ -251,7 +251,7 @@ public class ProxyCheckScheduler {
         SharedConfig.ProxyInfo proxyInfo = request.proxyInfo;
         request.setChecking(true);
         log("start endpoint=" + endpoint(proxyInfo) + " queued=" + queue.size());
-        long nativePingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
+        long nativePingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.settings, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
         request.nativePingId = nativePingId;
         request.setProxyCheckPingId(nativePingId);
         if (nativePingId == 0) {

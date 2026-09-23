@@ -184,7 +184,7 @@ public final class ProxyRuntimeStateStore {
     static boolean shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(SharedConfig.ProxyInfo proxyInfo, String phase, long now) {
         return proxyInfo != null
                 && ProxyCheckDiagnostics.CONNECTION_NOT_STARTED.equals(ProxyCheckDiagnostics.normalize(phase))
-                && previousPhaseWasDnsOutageOrResolveFailed(proxyInfo.address, now);
+                && previousPhaseWasDnsOutageOrResolveFailed(proxyInfo.settings.getAddress(), now);
     }
 
     public static boolean isFresh(SharedConfig.ProxyInfo proxyInfo) {
@@ -466,7 +466,7 @@ public final class ProxyRuntimeStateStore {
                 && !ProxyCheckDiagnostics.DNS_BLOCKED_ZERO_ADDRESS.equals(normalized)) {
             return;
         }
-        String key = normalizeDnsHost(proxyInfo.address);
+        String key = normalizeDnsHost(proxyInfo.settings.getAddress());
         if (key.length() == 0) {
             return;
         }
@@ -571,14 +571,14 @@ public final class ProxyRuntimeStateStore {
     static boolean shouldHoldHostResolveFailureByDnsOutage(SharedConfig.ProxyInfo proxyInfo, String phase, long now) {
         return proxyInfo != null
                 && ProxyCheckDiagnostics.HOST_RESOLVE_FAILED.equals(ProxyCheckDiagnostics.normalize(phase))
-                && isDnsGlobalOutage(proxyInfo.address, now);
+                && isDnsGlobalOutage(proxyInfo.settings.getAddress(), now);
     }
 
     static int dnsOutageFailures(SharedConfig.ProxyInfo proxyInfo, long now) {
         if (proxyInfo == null) {
             return 0;
         }
-        String key = normalizeDnsHost(proxyInfo.address);
+        String key = normalizeDnsHost(proxyInfo.settings.getAddress());
         synchronized (dnsOutageStates) {
             DnsOutageState state = dnsOutageStates.get(key);
             if (state == null || now - state.windowStartedAtMs > DNS_OUTAGE_WINDOW_MS) {
@@ -589,7 +589,7 @@ public final class ProxyRuntimeStateStore {
     }
 
     static String dnsHost(SharedConfig.ProxyInfo proxyInfo) {
-        return proxyInfo == null ? "" : normalizeDnsHost(proxyInfo.address);
+        return proxyInfo == null ? "" : normalizeDnsHost(proxyInfo.settings.getAddress());
     }
 
     private static DnsOutageState dnsOutageStateForHostLocked(String host, long now) {

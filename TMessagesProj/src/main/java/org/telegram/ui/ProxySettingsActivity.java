@@ -54,6 +54,8 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.SvgHelper;
 import org.telegram.messenger.Utilities;
+import org.telegram.proxy.ProxySettings;
+import org.telegram.proxy.WebProxyTransport;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
@@ -78,6 +80,7 @@ public class ProxySettingsActivity extends BaseFragment {
 
     private final static int TYPE_SOCKS5 = ProxyLinkHelper.TYPE_SOCKS5;
     private final static int TYPE_MTPROTO = ProxyLinkHelper.TYPE_MTPROTO;
+    private final static int TYPE_WEB = ProxyLinkHelper.TYPE_WEB;
 
     private final static int FIELD_IP = 0;
     private final static int FIELD_PORT = 1;
@@ -95,7 +98,7 @@ public class ProxySettingsActivity extends BaseFragment {
     private TextSettingsCell shareCell;
     private TextSettingsCell pasteCell;
     private ActionBarMenuItem doneItem;
-    private RadioCell[] typeCell = new RadioCell[2];
+    private RadioCell[] typeCell = new RadioCell[3];
     private EditTextBoldCursor quickProxyLinkField;
     private int currentType = -1;
     private int initialType = -1;
@@ -222,17 +225,15 @@ public class ProxySettingsActivity extends BaseFragment {
                     if (getParentActivity() == null) {
                         return;
                     }
-                    currentProxyInfo.address = inputFields[FIELD_IP].getText().toString();
-                    currentProxyInfo.port = Utilities.parseInt(inputFields[FIELD_PORT].getText().toString());
-                    if (currentType == TYPE_SOCKS5) {
-                        currentProxyInfo.secret = "";
-                        currentProxyInfo.username = inputFields[FIELD_USER].getText().toString();
-                        currentProxyInfo.password = inputFields[FIELD_PASSWORD].getText().toString();
-                    } else {
-                        currentProxyInfo.secret = inputFields[FIELD_SECRET].getText().toString();
-                        currentProxyInfo.username = "";
-                        currentProxyInfo.password = "";
-                    }
+                    final String address = inputFields[FIELD_IP].getText().toString();
+                    currentProxyInfo.settings = ProxySettings.builder()
+                            .setType(ProxyLinkHelper.toSettingsType(currentType))
+                            .setAddress(currentType == TYPE_WEB ? WebProxyTransport.normalizeHost(address) : address)
+                            .setPort(currentType == TYPE_WEB ? 0 : Utilities.parseInt(inputFields[FIELD_PORT].getText().toString()))
+                            .setUser(currentType == TYPE_SOCKS5 ? inputFields[FIELD_USER].getText().toString() : "")
+                            .setPassword(currentType == TYPE_SOCKS5 ? inputFields[FIELD_PASSWORD].getText().toString() : "")
+                            .setSecret(currentType != TYPE_SOCKS5 ? inputFields[FIELD_SECRET].getText().toString() : "")
+                            .build();
 
                     SharedPreferences preferences = MessagesController.getGlobalMainSettings();
                     SharedPreferences.Editor editor = preferences.edit();
@@ -247,15 +248,11 @@ public class ProxySettingsActivity extends BaseFragment {
                         SharedConfig.saveProxyList();
                     }
                     if (addingNewProxy || SharedConfig.currentProxy == currentProxyInfo) {
-                        editor.putString("proxy_ip", currentProxyInfo.address);
-                        editor.putString("proxy_pass", currentProxyInfo.password);
-                        editor.putString("proxy_user", currentProxyInfo.username);
-                        editor.putInt("proxy_port", currentProxyInfo.port);
-                        editor.putString("proxy_secret", currentProxyInfo.secret);
+                        currentProxyInfo.settings.toSharedPreferences(editor);
                         if (enabled) {
                             ProxyCheckScheduler.markConnectionStarting(currentProxyInfo, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
                         }
-                        ConnectionsManager.setProxySettings(enabled, currentProxyInfo.address, currentProxyInfo.port, currentProxyInfo.username, currentProxyInfo.password, currentProxyInfo.secret, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+                        ConnectionsManager.setProxySettings(enabled, currentProxyInfo.settings, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
                     }
                     editor.commit();
 
@@ -286,7 +283,7 @@ public class ProxySettingsActivity extends BaseFragment {
 
         final View.OnClickListener typeCellClickListener = view -> setProxyType((Integer) view.getTag(), true);
 
-        for (int a = 0; a < 2; a++) {
+        for (int a = 0; a < typeCell.length; a++) {
             typeCell[a] = new RadioCell(context);
             typeCell[a].setBackground(Theme.getSelectorDrawable(true));
             typeCell[a].setTag(a);
@@ -294,6 +291,8 @@ public class ProxySettingsActivity extends BaseFragment {
                 typeCell[a].setText(LocaleController.getString(R.string.UseProxySocks5), a == currentType, true);
             } else if (a == TYPE_MTPROTO) {
                 typeCell[a].setText(LocaleController.getString(R.string.UseProxyTelegram), a == currentType, true);
+            } else if (a == TYPE_WEB) {
+                typeCell[a].setText(LocaleController.getString(R.string.UseProxyWeb), a == currentType, false);
             }
             linearLayout2.addView(typeCell[a], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 50));
             typeCell[a].setOnClickListener(typeCellClickListener);
@@ -456,28 +455,47 @@ public class ProxySettingsActivity extends BaseFragment {
                 inputFields[a].setTransformationMethod(PasswordTransformationMethod.getInstance());
             } else {
                 inputFields[a].setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+                if (a == FIELD_SECRET) {
+                    // WEB proxies are valid only with a well-formed secret.
+                    inputFields[a].addTextChangedListener(new TextWatcher() {
+                        @Override
+                        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+
+                        }
+
+                        @Override
+                        public void onTextChanged(CharSequence s, int start, int before, int count) {
+
+                        }
+
+                        @Override
+                        public void afterTextChanged(Editable s) {
+                            checkShareDone(true);
+                        }
+                    });
+                }
             }
             inputFields[a].setImeOptions(EditorInfo.IME_ACTION_NEXT | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
             switch (a) {
                 case FIELD_IP:
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxyAddress));
-                    inputFields[a].setText(currentProxyInfo.address);
+                    inputFields[a].setText(currentProxyInfo.settings.getAddress());
                     break;
                 case FIELD_PASSWORD:
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxyPassword));
-                    inputFields[a].setText(currentProxyInfo.password);
+                    inputFields[a].setText(currentProxyInfo.settings.getPassword());
                     break;
                 case FIELD_PORT:
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxyPort));
-                    inputFields[a].setText("" + currentProxyInfo.port);
+                    inputFields[a].setText(currentProxyInfo.settings.getPort() != 0 ? "" + currentProxyInfo.settings.getPort() : "");
                     break;
                 case FIELD_USER:
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxyUsername));
-                    inputFields[a].setText(currentProxyInfo.username);
+                    inputFields[a].setText(currentProxyInfo.settings.getUser());
                     break;
                 case FIELD_SECRET:
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxySecret));
-                    inputFields[a].setText(currentProxyInfo.secret);
+                    inputFields[a].setText(currentProxyInfo.settings.getSecret());
                     break;
             }
             inputFields[a].setSelection(inputFields[a].length());
@@ -597,7 +615,7 @@ public class ProxySettingsActivity extends BaseFragment {
         checkShareDone(false);
 
         currentType = -1;
-        setProxyType(initialType >= 0 ? initialType : TextUtils.isEmpty(currentProxyInfo.secret) ? TYPE_SOCKS5 : TYPE_MTPROTO, false);
+        setProxyType(initialType >= 0 ? initialType : ProxyLinkHelper.fromSettingsType(currentProxyInfo.settings.getType()), false);
 
         pasteType = -1;
         pasteString = null;
@@ -631,13 +649,13 @@ public class ProxySettingsActivity extends BaseFragment {
             case FIELD_IP:
                 return proxyLink.address;
             case FIELD_PORT:
-                return String.valueOf(proxyLink.port);
+                return proxyLink.port > 0 ? String.valueOf(proxyLink.port) : "";
             case FIELD_USER:
                 return proxyLink.type == TYPE_SOCKS5 ? proxyLink.username : "";
             case FIELD_PASSWORD:
                 return proxyLink.type == TYPE_SOCKS5 ? proxyLink.password : "";
             case FIELD_SECRET:
-                return proxyLink.type == TYPE_MTPROTO ? proxyLink.secret : "";
+                return proxyLink.type != TYPE_SOCKS5 ? proxyLink.secret : "";
         }
         return "";
     }
@@ -713,7 +731,13 @@ public class ProxySettingsActivity extends BaseFragment {
         if (shareCell == null || doneItem == null || inputFields[FIELD_IP] == null || inputFields[FIELD_PORT] == null) {
             return;
         }
-        setShareDoneEnabled(inputFields[FIELD_IP].length() != 0 && Utilities.parseInt(inputFields[FIELD_PORT].getText().toString()) != 0, animated);
+        boolean enabled = currentType == TYPE_WEB
+                ? !TextUtils.isEmpty(WebProxyTransport.normalizeHost(inputFields[FIELD_IP].getText().toString()))
+                    && inputFields[FIELD_SECRET] != null
+                    && WebProxyTransport.isValidSecret(inputFields[FIELD_SECRET].getText().toString())
+                : inputFields[FIELD_IP].length() != 0
+                    && Utilities.parseInt(inputFields[FIELD_PORT].getText().toString()) != 0;
+        setShareDoneEnabled(enabled, animated);
     }
 
     private void setProxyType(int type, boolean animated) {
@@ -762,7 +786,7 @@ public class ProxySettingsActivity extends BaseFragment {
                 TransitionManager.beginDelayedTransition(linearLayout2, transitionSet);
             }
             ((View) inputFields[FIELD_IP].getParent()).setVisibility(View.VISIBLE);
-            ((View) inputFields[FIELD_PORT].getParent()).setVisibility(View.VISIBLE);
+            ((View) inputFields[FIELD_PORT].getParent()).setVisibility(currentType == TYPE_WEB ? View.GONE : View.VISIBLE);
             if (currentType == TYPE_SOCKS5) {
                 bottomCells[0].setVisibility(View.VISIBLE);
                 bottomCells[1].setVisibility(View.GONE);
@@ -772,10 +796,21 @@ public class ProxySettingsActivity extends BaseFragment {
             } else if (currentType == TYPE_MTPROTO) {
                 bottomCells[0].setVisibility(View.GONE);
                 bottomCells[1].setVisibility(View.VISIBLE);
+                bottomCells[1].setText(LocaleController.getString(R.string.UseProxyTelegramInfo) + "\n\n" + LocaleController.getString(R.string.UseProxyTelegramInfo2) + "\n\n" + LocaleController.getString(R.string.UseProxyTelegramInfoStealth));
+                ((View) inputFields[FIELD_SECRET].getParent()).setVisibility(View.VISIBLE);
+                ((View) inputFields[FIELD_PASSWORD].getParent()).setVisibility(View.GONE);
+                ((View) inputFields[FIELD_USER].getParent()).setVisibility(View.GONE);
+            } else if (currentType == TYPE_WEB) {
+                bottomCells[0].setVisibility(View.GONE);
+                bottomCells[1].setVisibility(View.VISIBLE);
+                bottomCells[1].setText(LocaleController.getString(R.string.UseProxyWebInfo));
                 ((View) inputFields[FIELD_SECRET].getParent()).setVisibility(View.VISIBLE);
                 ((View) inputFields[FIELD_PASSWORD].getParent()).setVisibility(View.GONE);
                 ((View) inputFields[FIELD_USER].getParent()).setVisibility(View.GONE);
             }
+            // A WEB proxy link has no port and is not a t.me/proxy link, so the
+            // ZaStoGram share sheet (which builds socks/proxy links) stays hidden.
+            shareCell.setVisibility(currentType == TYPE_WEB ? View.GONE : View.VISIBLE);
             for (int i = 0; i < typeCell.length; i++) {
                 typeCell[i].setChecked(currentType == i, animated);
             }

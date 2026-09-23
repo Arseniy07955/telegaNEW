@@ -57,6 +57,7 @@ CHECKS = [
     "check_mtproxy_probe_coordinator.py",
     "check_mtproxy_verdict_reducer.py",
     "check_mtproxy_analyzer.py",
+    "check_web_proxy_isolation.py",
 ]
 
 STAGE1_FREEZE_CHECKS = {

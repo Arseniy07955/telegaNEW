@@ -108,7 +108,8 @@ def main() -> None:
     soft_mux_end = connections.find("public static int getMtProxySoftMuxDownloadConnectionType", soft_mux_start)
     soft_mux_body = connections[soft_mux_start:soft_mux_end]
     require(
-        'preferences.getString("proxy_secret", "")' in soft_mux_body
+        "settings.getSecret()" in soft_mux_body
+        and "ProxySettings.Type.MTPROTO" in soft_mux_body
         and '"\\xee"' not in soft_mux_body
         and "MT_PROXY_TLS_PROFILE" not in soft_mux_body,
         "soft mux must apply to every MTProxy secret, including dd/legacy, not only ee FakeTLS",

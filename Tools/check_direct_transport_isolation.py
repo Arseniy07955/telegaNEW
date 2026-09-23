@@ -54,7 +54,7 @@ def main() -> int:
     send_messages = method_body(manager, "bool ConnectionsManager::sendMessagesToConnection(")
     resume_maybe = method_body(java, "public void resumeNetworkMaybe()")
     background = method_body(java, "public void applyBackgroundNetworkPolicy()")
-    proxy_settings = method_body(java, "public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret, ProxyConnectionEvent.Origin origin)")
+    proxy_settings = method_body(java, "public static void setProxySettings(boolean enabled, ProxySettings settings, ProxyConnectionEvent.Origin origin)")
     native_stage = method_body(java, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs)")
     socket_policy = method_body(socket, "bool ConnectionSocket::checkTransportActionRequirements")
     socket_queue = method_body(socket, "bool ConnectionSocket::canQueueOutboundBuffer")

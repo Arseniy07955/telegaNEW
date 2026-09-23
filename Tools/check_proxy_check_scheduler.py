@@ -136,7 +136,7 @@ if "request.proxyInfo == proxyInfo" in scheduler_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: pending checks must be matched by endpoint key, not ProxyInfo object identity")
     sys.exit(1)
-if "proxyInfo.address.toLowerCase(Locale.US)" in endpoint_key_text:
+if "proxyInfo.settings.getAddress().toLowerCase(Locale.US)" in endpoint_key_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {ENDPOINT_KEY.relative_to(ROOT)}: endpointKey must normalize null host values before lowercasing")
     sys.exit(1)
@@ -356,18 +356,18 @@ if "listener.proxyInfo.checking = false;" in scheduler_text and "clearCancelledL
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: listener cancel must not blindly clear shared ProxyInfo checking state")
     sys.exit(1)
-if ' + ":" + proxyInfo.port + ":" +' in scheduler_text or ' + ":" + proxyInfo.port + ":" +' in endpoint_key_text:
+if ' + ":" + proxyInfo.settings.getPort() + ":" +' in scheduler_text or ' + ":" + proxyInfo.settings.getPort() + ":" +' in endpoint_key_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {ENDPOINT_KEY.relative_to(ROOT)}: exact endpointKey must not use delimiter-only concatenation")
     sys.exit(1)
 network_key_method = endpoint_key_text[endpoint_key_text.find("public static String network("):]
 network_key_method = network_key_method[:network_key_method.find("\n    public static", 1)]
 if (
-    "normalizeKeyPart(proxyInfo.address, true)" not in network_key_method
-    or "String.valueOf(proxyInfo.port)" not in network_key_method
-    or "proxyInfo.secret" in network_key_method
-    or "proxyInfo.username" in network_key_method
-    or "proxyInfo.password" in network_key_method
+    "normalizeKeyPart(proxyInfo.settings.getAddress(), true)" not in network_key_method
+    or "String.valueOf(proxyInfo.settings.getPort())" not in network_key_method
+    or "getSecret()" in network_key_method
+    or "getUser()" in network_key_method
+    or "getPassword()" in network_key_method
 ):
     print("Proxy check scheduler guard failed:")
     print(f" - {ENDPOINT_KEY.relative_to(ROOT)}: endpoint network key must be host/port only, without secret or auth fields")

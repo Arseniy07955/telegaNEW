@@ -370,8 +370,8 @@ public final class ProxyWarmupGate {
         SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
         return SharedConfig.isProxyEnabled()
                 && currentProxy != null
-                && currentProxy.secret != null
-                && currentProxy.secret.length() > 0;
+                && currentProxy.settings.getSecret() != null
+                && currentProxy.settings.getSecret().length() > 0;
     }
 
     private static String delayedBucketKeyLocked(int account, NetworkRequestClass requestClass) {

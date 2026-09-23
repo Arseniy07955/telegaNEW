@@ -16,7 +16,9 @@ import android.util.Base64;
 
 import androidx.annotation.Keep;
 
-import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
+import androidx.annotation.OptIn;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -42,6 +44,9 @@ import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.StatsController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
+import org.telegram.proxy.WebProxyConnectionTester;
+import org.telegram.proxy.WebProxyTransport;
+import org.telegram.proxy.ProxySettings;
 import org.telegram.ui.Components.VideoPlayer;
 
 import java.io.ByteArrayOutputStream;
@@ -78,10 +83,12 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLException;
 
+@OptIn(markerClass = UnstableApi.class)
 public class ConnectionsManager extends BaseController {
 
     public final static int ConnectionTypeGeneric = 1;
@@ -902,17 +909,26 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-        String proxyAddress = preferences.getString("proxy_ip", "");
-        String proxyUsername = preferences.getString("proxy_user", "");
-        String proxyPassword = preferences.getString("proxy_pass", "");
-        String proxySecret = preferences.getString("proxy_secret", "");
-        int proxyPort = preferences.getInt("proxy_port", 1080);
+        final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
+        final ProxySettings proxySettings = ProxySettings.fromSharedPreferences(preferences);
+        String proxyAddress = proxySettings.getAddress();
+        String proxyUsername = proxySettings.getUser();
+        String proxyPassword = proxySettings.getPassword();
+        String proxySecret = proxySettings.getSecret();
+        int proxyPort = proxySettings.getPort();
 
-        final boolean legacyProxyEnabled = preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress);
+        final boolean legacyProxyEnabled = preferences.getBoolean("proxy_enabled", false) && proxySettings.isValid();
         if (legacyProxyEnabled) {
             int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount);
-            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
+            if (proxySettings.getType() == ProxySettings.Type.WEB) {
+                // WEB proxy: the browser bridge carries a plain MTProxy stream, so the
+                // native side must see an ordinary obfuscated2 proxy on loopback with
+                // the proxy's own secret and every ZaStoGram stealth mode disabled.
+                int localPort = WebProxyTransport.start(proxyAddress, proxySecret);
+                native_setProxySettings(currentAccount, "127.0.0.1", localPort != 0 ? localPort : 9, "", "", proxySecret, MtProxyOptions.disabled(), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
+            } else {
+                native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
+            }
         }
         if (legacyProxyEnabled && SharedConfig.wssTransportEnabled) {
             SharedConfig.setWssTransportEnabled(false);
@@ -989,9 +1005,14 @@ public class ConnectionsManager extends BaseController {
             return false;
         }
         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
-        return preferences.getBoolean("proxy_enabled", false)
-                && !TextUtils.isEmpty(preferences.getString("proxy_ip", ""))
-                && !TextUtils.isEmpty(preferences.getString("proxy_secret", ""));
+        if (!preferences.getBoolean("proxy_enabled", false)) {
+            return false;
+        }
+        // Soft mux is an MTProto-proxy policy; a WEB proxy keeps stock Telegram behaviour.
+        ProxySettings settings = ProxySettings.fromSharedPreferences(preferences);
+        return settings.getType() == ProxySettings.Type.MTPROTO
+                && !TextUtils.isEmpty(settings.getAddress())
+                && !TextUtils.isEmpty(settings.getSecret());
     }
 
     public static int getMtProxySoftMuxDownloadConnectionType(int requestIndex) {
@@ -1041,27 +1062,32 @@ public class ConnectionsManager extends BaseController {
         return lastPauseTime;
     }
 
-    public long checkProxy(String address, int port, String username, String password, String secret, RequestTimeDelegate requestTimeDelegate) {
-        if (TextUtils.isEmpty(address)) {
+    private static final AtomicLong webProxyCheckIds = new AtomicLong();
+
+    public long checkProxy(ProxySettings settings, RequestTimeDelegate requestTimeDelegate) {
+        if (settings == null || !settings.isValid()) {
             return 0;
         }
-        if (address == null) {
-            address = "";
+        if (settings.getType() == ProxySettings.Type.WEB) {
+            WebProxyConnectionTester.getInstance().checkProxy(settings, requestTimeDelegate, this::checkWebProxyInternal);
+            return webProxyCheckIds.decrementAndGet();
         }
-        if (username == null) {
-            username = "";
-        }
-        if (password == null) {
-            password = "";
-        }
-        if (secret == null) {
-            secret = "";
-        }
+        String address = settings.getAddress();
+        int port = settings.getPort();
+        String username = settings.getUser();
+        String password = settings.getPassword();
+        String secret = settings.getSecret();
         return native_checkProxy(currentAccount, address, port, username, password, secret, MtProxyOptions.resolve(address, port, secret), requestTimeDelegate);
     }
 
+    private void checkWebProxyInternal(ProxySettings settings, int port, RequestTimeDelegate requestTimeDelegate) {
+        native_checkProxy(currentAccount, "127.0.0.1", port, "", "", settings.getSecret(), MtProxyOptions.disabled(), requestTimeDelegate);
+    }
+
     public void cancelProxyCheck(long pingId) {
-        if (pingId != 0) {
+        // WEB proxy checks use negative ids: they run in WebProxyConnectionTester
+        // and have no native ping to cancel.
+        if (pingId > 0) {
             native_cancelProxyCheck(currentAccount, pingId);
         }
     }
@@ -1522,22 +1548,37 @@ public class ConnectionsManager extends BaseController {
         KeepAliveJob.startJob();
     }
 
-    public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret) {
-        setProxySettings(enabled, address, port, username, password, secret, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+    public static void setProxySettings(boolean enabled, ProxySettings settings) {
+        setProxySettings(enabled, settings, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
     }
 
-    public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret, ProxyConnectionEvent.Origin origin) {
-        if (address == null) {
-            address = "";
-        }
-        if (username == null) {
-            username = "";
-        }
-        if (password == null) {
-            password = "";
-        }
-        if (secret == null) {
-            secret = "";
+    public static void setProxySettings(boolean enabled, ProxySettings settings, ProxyConnectionEvent.Origin origin) {
+        String address = "";
+        int port = 0;
+        String username = "";
+        String password = "";
+        String secret = "";
+        boolean webProxy = false;
+
+        if (enabled && settings != null && settings.isValid()) {
+            address = settings.getAddress();
+            port = settings.getPort();
+            username = settings.getUser();
+            password = settings.getPassword();
+            secret = settings.getSecret();
+
+            if (settings.getType() == ProxySettings.Type.WEB) {
+                int localPort = WebProxyTransport.start(address, secret);
+                address = "127.0.0.1";
+                port = localPort != 0 ? localPort : 9;
+                username = "";
+                password = "";
+                webProxy = true;
+            } else {
+                WebProxyTransport.stop();
+            }
+        } else {
+            WebProxyTransport.stop();
         }
 
         boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address);
@@ -1547,7 +1588,9 @@ public class ConnectionsManager extends BaseController {
         }
         ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.SETTINGS_CHANGE : origin;
         int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
-        MtProxyOptions enabledOptions = hasSelectedProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
+        // WEB proxy keeps plain obfuscated2 to the local bridge: no FakeTLS, no
+        // fragmentation, no pacing/cover modes on top of the browser carrier.
+        MtProxyOptions enabledOptions = hasSelectedProxy && !webProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (hasSelectedProxy) {
                 native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName);
@@ -2722,4 +2765,8 @@ public class ConnectionsManager extends BaseController {
     public static void onCaptchaCheck(final int currentAccount, final int requestToken, final String action, final String key_id) {
         CaptchaController.request(currentAccount, requestToken, action, key_id);
     }
+
+    public static native byte[] nativeTestGenerateClientHello(String domain);
+
+
 }
