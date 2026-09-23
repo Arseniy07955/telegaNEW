@@ -61,6 +61,11 @@ struct MtProxyOptions {
     int32_t recordSizingMode = MT_PROXY_RECORD_SIZING_OFF;
     int32_t timingMode = MT_PROXY_TIMING_OFF;
     int32_t startupCoverMode = MT_PROXY_STARTUP_COVER_OFF;
+    // Set only for the WEB proxy's loopback bridge into the WebView carrier.
+    // Such connections bypass the MTProxy dial pacing (per-endpoint TCP
+    // connect gate, endpoint cooldown, reconnect backoff): the pacer exists to
+    // spare a remote relay under DPI, and loopback has neither.
+    bool webBridge = false;
 
     bool operator==(const MtProxyOptions &other) const {
         return tlsProfile == other.tlsProfile
@@ -68,7 +73,8 @@ struct MtProxyOptions {
                && connectionPatternMode == other.connectionPatternMode
                && recordSizingMode == other.recordSizingMode
                && timingMode == other.timingMode
-               && startupCoverMode == other.startupCoverMode;
+               && startupCoverMode == other.startupCoverMode
+               && webBridge == other.webBridge;
     }
 
     bool operator!=(const MtProxyOptions &other) const {
@@ -133,6 +139,7 @@ static inline MtProxyOptions normalizeMtProxyOptions(const MtProxyOptions &optio
     normalized.recordSizingMode = normalizeMtProxyRecordSizingOption(options.recordSizingMode);
     normalized.timingMode = normalizeMtProxyTimingOption(options.timingMode);
     normalized.startupCoverMode = normalizeMtProxyStartupCoverOption(options.startupCoverMode);
+    normalized.webBridge = options.webBridge;
     return normalized;
 }
 

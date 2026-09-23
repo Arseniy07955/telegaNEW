@@ -1406,7 +1406,7 @@ ConnectionSocket::~ConnectionSocket() {
 }
 
 bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode) {
-    if (proxyAuthState < 10 || socketFd < 0) {
+    if (proxyAuthState < 10 || socketFd < 0 || isCurrentWebProxyBridge()) {
         return false;
     }
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
@@ -1728,6 +1728,12 @@ bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6) 
     if (!isCurrentMtProxyConnection() || (currentMtProxyEndpointKey.empty() && currentMtProxyNetworkEndpointKey.empty())) {
         return false;
     }
+    if (isCurrentWebProxyBridge()) {
+        // The WEB bridge is a loopback socket into the WebView carrier: no
+        // remote relay to spare and no DPI to hide from, so an endpoint
+        // cooldown would only delay recovery of the carrier's streams.
+        return false;
+    }
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
     if (proxyEndpointBackoffReady) {
         setProxyEndpointBackoffReady(false, "endpoint_backoff_ready_consumed");
@@ -1825,6 +1831,11 @@ bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) 
     if (!isCurrentMtProxyConnection() || currentMtProxyNetworkEndpointKey.empty()) {
         return false;
     }
+    if (isCurrentWebProxyBridge()) {
+        // Loopback bridge connects are cheap logical streams on one browser
+        // carrier; serializing them per endpoint only slows connection setup.
+        return false;
+    }
     if (proxyEndpointTcpConnectActive) {
         return false;
     }
@@ -1871,7 +1882,7 @@ void ConnectionSocket::releaseMtProxyEndpointTcpConnect(const char *reason) {
 }
 
 bool ConnectionSocket::scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6) {
-    if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty()) {
+    if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty() || isCurrentWebProxyBridge()) {
         return false;
     }
     if (proxyEndpointDnsCoalesceReady) {
@@ -3395,6 +3406,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
         proxyOptions = ConnectionsManager::getInstance(instanceNum).proxyMtProxyOptions;
     }
+    stateMachine.endpointGate.webProxyBridge = proxyOptions.webBridge && !proxyAddress->empty() && !proxySecret->empty();
 
     bool shouldUseWss = overrideProxyAddress.empty()
             && manager.wssEnabled
@@ -3923,6 +3935,10 @@ bool ConnectionSocket::isCurrentDirectConnection() const {
     return stateMachine.diagnostics.transportMode == TransportMode::Direct;
 }
 
+bool ConnectionSocket::isCurrentWebProxyBridge() const {
+    return stateMachine.endpointGate.webProxyBridge;
+}
+
 bool ConnectionSocket::hasMtProxyOverride() const {
     return !overrideProxyAddress.empty() && !overrideProxySecret.empty();
 }
@@ -4049,7 +4065,9 @@ void ConnectionSocket::publishProxyConnectionStage(const char *diagnostic) {
     // consumeSuggestedReconnectHoldMs (retrying earlier is denied pre-TCP
     // anyway) and (b) the Java layer receives THE hold with the event and
     // never re-derives it from its own clock.
-    if (MtProxyEndpointPolicy::failureNeedsCooldown(diagnostic)) {
+    // The WEB loopback bridge has no endpoint cooldown, so it never carries a
+    // cooldown-derived reconnect hold either.
+    if (!isCurrentWebProxyBridge() && MtProxyEndpointPolicy::failureNeedsCooldown(diagnostic)) {
         int64_t cooldownHoldMs = MtProxyEndpointPolicy::cooldownMs(
                 diagnostic,
                 normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode),

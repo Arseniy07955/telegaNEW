@@ -181,6 +181,9 @@ public:
         bool tcpConnectReady = false;
         bool tcpConnectGatePublished = false;
         bool dnsCoalesceReady = false;
+        // The current proxy is the WEB proxy's loopback bridge. Such
+        // connections never enter the MTProxy endpoint gates above.
+        bool webProxyBridge = false;
     };
 
     struct PendingWriteSubstate {

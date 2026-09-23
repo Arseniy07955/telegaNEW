@@ -923,9 +923,10 @@ public class ConnectionsManager extends BaseController {
             if (proxySettings.getType() == ProxySettings.Type.WEB) {
                 // WEB proxy: the browser bridge carries a plain MTProxy stream, so the
                 // native side must see an ordinary obfuscated2 proxy on loopback with
-                // the proxy's own secret and every ZaStoGram stealth mode disabled.
+                // the proxy's own secret and every ZaStoGram stealth mode disabled;
+                // webBridge() also exempts the loopback bridge from MTProxy pacing.
                 int localPort = WebProxyTransport.start(proxyAddress, proxySecret);
-                native_setProxySettings(currentAccount, "127.0.0.1", localPort != 0 ? localPort : 9, "", "", proxySecret, MtProxyOptions.disabled(), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
+                native_setProxySettings(currentAccount, "127.0.0.1", localPort != 0 ? localPort : 9, "", "", proxySecret, MtProxyOptions.webBridge(), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
             } else {
                 native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
             }
@@ -1081,7 +1082,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     private void checkWebProxyInternal(ProxySettings settings, int port, RequestTimeDelegate requestTimeDelegate) {
-        native_checkProxy(currentAccount, "127.0.0.1", port, "", "", settings.getSecret(), MtProxyOptions.disabled(), requestTimeDelegate);
+        native_checkProxy(currentAccount, "127.0.0.1", port, "", "", settings.getSecret(), MtProxyOptions.webBridge(), requestTimeDelegate);
     }
 
     public void cancelProxyCheck(long pingId) {
@@ -1590,7 +1591,9 @@ public class ConnectionsManager extends BaseController {
         int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
         // WEB proxy keeps plain obfuscated2 to the local bridge: no FakeTLS, no
         // fragmentation, no pacing/cover modes on top of the browser carrier.
-        MtProxyOptions enabledOptions = hasSelectedProxy && !webProxy ? MtProxyOptions.resolve(address, port, secret) : MtProxyOptions.disabled();
+        // webBridge() also keeps loopback connects out of the MTProxy dial
+        // queue, endpoint cooldown and reconnect backoff.
+        MtProxyOptions enabledOptions = !hasSelectedProxy ? MtProxyOptions.disabled() : webProxy ? MtProxyOptions.webBridge() : MtProxyOptions.resolve(address, port, secret);
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (hasSelectedProxy) {
                 native_setProxySettings(a, address, port, username, password, secret, enabledOptions, activationGeneration, activationOrigin.wireName);

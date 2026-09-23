@@ -44,6 +44,9 @@ public:
     bool isCurrentMtProxyConnection();
     bool isCurrentDirectConnection() const;
     bool hasMtProxyOverride() const;
+    // True while this socket dials the WEB proxy's loopback bridge
+    // (MtProxyOptions::webBridge). MTProxy pacing never applies to it.
+    bool isCurrentWebProxyBridge() const;
     void dropConnection();
     void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);

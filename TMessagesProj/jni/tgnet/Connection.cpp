@@ -381,7 +381,8 @@ void Connection::connect() {
     }
     int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
     const bool mtProxyRouteActive = isMtProxyRouteActive();
-    if (mtProxyRouteActive && connectionType != ConnectionTypeProxy && mtProxyReconnectHoldUntil > now) {
+    const bool mtProxyReconnectPacing = isMtProxyReconnectPacingActive();
+    if (mtProxyReconnectPacing && connectionType != ConnectionTypeProxy && mtProxyReconnectHoldUntil > now) {
         uint32_t delay = (uint32_t) (mtProxyReconnectHoldUntil - now);
         waitForReconnectTimer = true;
         reconnectTimer->setTimeout(delay, false);
@@ -554,6 +555,20 @@ bool Connection::isMtProxyRouteActive() const {
     }
     const ConnectionsManager &manager = ConnectionsManager::getInstance(currentDatacenter->instanceNum);
     return !manager.proxyAddress.empty() && !manager.proxySecret.empty();
+}
+
+bool Connection::isMtProxyReconnectPacingActive() const {
+    if (!isMtProxyRouteActive()) {
+        return false;
+    }
+    // The WEB proxy reaches tgnet as a plain MTProxy on a loopback bridge into
+    // the WebView carrier. Reconnect holds exist to spare a remote relay under
+    // DPI; on loopback they only delay recovery, so the bridge keeps the plain
+    // tgnet reconnect timer like any non-MTProxy route.
+    if (((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy) {
+        return !overrideMtProxyOptions.webBridge;
+    }
+    return !ConnectionsManager::getInstance(currentDatacenter->instanceNum).proxyMtProxyOptions.webBridge;
 }
 
 bool Connection::canSendRequestData(const char *reason) {
@@ -860,10 +875,11 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
     connectionToken = 0;
 
     const bool mtProxyRouteActive = isMtProxyRouteActive();
+    const bool mtProxyReconnectPacing = isMtProxyReconnectPacingActive();
     const char *mtProxyReconnectDiagnostic = mtProxyRouteActive ? getProxyCheckDiagnostic() : "";
     uint32_t mtProxyReconnectDelay = 0;
     uint32_t mtProxySuggestedHoldMs = mtProxyRouteActive ? consumeSuggestedReconnectHoldMs() : 0;
-    if (mtProxyRouteActive && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+    if (mtProxyReconnectPacing && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && !isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         int64_t now = ConnectionsManager::getInstance(currentDatacenter->instanceNum).getCurrentTimeMonotonicMillis();
         MtProxyRetry::ReconnectHoldInput holdInput;
         holdInput.diagnostic = mtProxyReconnectDiagnostic;
@@ -875,7 +891,7 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
         mtProxyReconnectDelay = holdDecision.delayMs;
         mtProxyReconnectHoldUntil = now + mtProxyReconnectDelay;
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff phase=%s delay_ms=%u coordinator_hold_ms=%u failed=%u", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic, mtProxyReconnectDelay, mtProxySuggestedHoldMs, failedConnectionCount + 1);
-    } else if (mtProxyRouteActive && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
+    } else if (mtProxyReconnectPacing && connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && isProxyCloseDiagnosticSuppressed() && mtProxyDiagnosticNeedsReconnectBackoff(mtProxyReconnectDiagnostic)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) mtproxy_startup reconnect_backoff_suppressed phase=%s", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, mtProxyReconnectDiagnostic);
     }
     if (mtProxyRouteActive && strcmp(mtProxyReconnectDiagnostic, "ignored_cancelled_generation") == 0) {
