@@ -193,6 +193,10 @@ static constexpr int64_t TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
+// На медиа-соединении первым уходит запрос куска файла, а не рукопожатие: для
+// «холодного» файла сервер честно думает дольше 5,5 с. Короткий сторож здесь
+// ложно объявлял живой kwsN-1 чёрной дырой и уводил медиа в обход.
+static constexpr int64_t WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS = 20000;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 
 // WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
@@ -5296,7 +5300,8 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
         && currentWssTransport->isReady()
         && transportAppDataUnanswered(now, wssFirstFrameSentTime > 0,
                 currentWssTransport->handshakePhase() != tgnet::transport::HandshakePhase::FirstDataReceived,
-                wssFirstFrameSentTime, WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
+                wssFirstFrameSentTime,
+                currentMediaConnection ? WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS : WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_appdata_no_response_timeout elapsed=%lld", this, (long long) (now - wssFirstFrameSentTime));
         currentWssTransport->noteAppDataTimeout();
         proxyCheckDiagnostic = "wss_appdata_no_response_timeout";
