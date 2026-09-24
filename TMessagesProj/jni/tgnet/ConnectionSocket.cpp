@@ -12,6 +12,8 @@
 #include <time.h>
 #include <cerrno>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 #include <memory.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -236,6 +238,11 @@ static const char *webProxyStreamClassName(int32_t streamClass) {
         default:
             return "interactive";
     }
+}
+
+static int socketUnsentBytes(int fd) {
+    int value = 0;
+    return (fd >= 0 && ioctl(fd, SIOCOUTQ, &value) == 0) ? value : 0;
 }
 
 static bool transportAppDataUnanswered(int64_t now, bool firstDataSent, bool noReplyYet, int64_t firstDataSentTime, int64_t timeoutMs) {
@@ -5318,8 +5325,13 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     if (isCurrentTransportWss()
         && currentWssTransport->isReady()
         && wssFirstFrameSentTime > 0
-        && (outgoingByteStream->hasData() || currentWssTransport->queuedOutputBytes() > 0)) {
-        // Кусок файла в 512 КБ на медленной отдаче уходит дольше сторожа.
+        && (webProxyStreamClass == WEB_PROXY_STREAM_CLASS_UPLOAD
+            || outgoingByteStream->hasData()
+            || currentWssTransport->queuedOutputBytes() > 0
+            || socketUnsentBytes(currentWssTransport->fd()) > 0)) {
+        // WHY: кусок файла в 512 КБ на медленной отдаче или за VPN, который сам
+        // подтверждает TCP, уходит дольше сторожа, и отправка перезапускалась
+        // с нуля каждые 5,5 с, так и не завершившись; её держит таймаут соединения.
         wssFirstFrameSentTime = now;
     }
     if (isCurrentTransportWss()
