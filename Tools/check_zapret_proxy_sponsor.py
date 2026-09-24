@@ -17,7 +17,7 @@ ZASTO_PRIVACY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ZaSto
 
 
 EXPECTED_STRINGS = {
-    "ZapretVpnBot": "ZaSto VPN",
+    "ZapretVpnBot": "Senkapopka VPN",
     "FreeProxyChannels": "Бесплатные прокси",
     "FreeProxyMtProxyEveryday": "MTProxy everyday",
     "FreeProxyProxyMtProto": "Proxy MTProto",
