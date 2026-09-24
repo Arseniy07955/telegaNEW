@@ -3965,6 +3965,10 @@ bool ConnectionSocket::isCurrentTransportWss() {
     return currentTransportWss && currentWssTransport != nullptr;
 }
 
+bool ConnectionSocket::isCurrentWssTunnel() {
+    return isCurrentTransportWss() && currentWssRoute.tunnel;
+}
+
 bool ConnectionSocket::isCurrentMtProxyConnection() {
     return currentSecretKind != nullptr
            && strcmp(currentSecretKind, "none") != 0

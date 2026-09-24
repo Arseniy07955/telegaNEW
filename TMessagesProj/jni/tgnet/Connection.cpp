@@ -729,8 +729,9 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
                 // The official WebSocket hostname already selects both the
                 // datacenter and the traffic class (kwsN / kwsN-1). Match
                 // Telegram Web and keep bytes 60..61 random for direct WSS;
-                // a DC marker belongs only to MTProxy secret transports.
-                if (useSecret != 0) {
+                // a DC marker belongs only to MTProxy secret transports and to
+                // the Worker tunnel, which reaches the DC over plain TCP.
+                if (useSecret != 0 || isCurrentWssTunnel()) {
                     int16_t datacenterId;
                     if (isMediaConnection) {
                         if (ConnectionsManager::getInstance(currentDatacenter->instanceNum).testBackend) {

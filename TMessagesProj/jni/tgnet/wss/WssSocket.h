@@ -25,6 +25,9 @@ struct Route {
     std::string domain;
     std::string path = "/apiws";
     bool viaFallback = false;
+    // The Worker tunnel reaches the DC over plain TCP, where bytes 60..61 of
+    // the obfuscation header must name the DC and traffic class.
+    bool tunnel = false;
 };
 
 // Telegram's public web relays cover production DC1-DC5. Media connections

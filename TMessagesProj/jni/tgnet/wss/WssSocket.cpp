@@ -259,6 +259,7 @@ static bool TunnelRoute(const std::string &dcAddress, Route *route) {
     result.relayPort = 443;
     result.domain = kTunnelHost;
     result.path = std::string(kOfficialPath) + "?dst=" + dcAddress;
+    result.tunnel = true;
     if (routeSuppressed(result.domain)) {
         return false;
     }
