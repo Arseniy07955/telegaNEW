@@ -33,6 +33,7 @@ namespace {
 
 constexpr const char *kOfficialPath = "/apiws";
 constexpr const char *kTunnelHost = "edge.amberwick.workers.dev";
+constexpr int32_t kTunnelOnlyDcId = 203;
 // Size of the MTProto obfuscation header. Measured against the official relays:
 // a first binary frame of 63 bytes never gets a reply, 64 always does.
 constexpr size_t kObfuscationHeaderSize = 64;
@@ -268,6 +269,10 @@ static bool TunnelRoute(const std::string &dcAddress, Route *route) {
 }
 
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route) {
+    if (route != nullptr && !testBackend && dcId == kTunnelOnlyDcId) {
+        // DC203 отдаёт медиа аккаунтам без Premium и своего kws-релея не имеет.
+        return TunnelRoute(dcAddress, route);
+    }
     const char *relayIp = officialRelayIpForDc(dcId);
     if (route == nullptr || testBackend || dcId < 1 || dcId > 5 || relayIp == nullptr) {
         return false;
