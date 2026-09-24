@@ -178,7 +178,8 @@ def main() -> int:
     require(
         "SettingCell.Factory.of(27," in free_proxy_settings_activity
         and "LocaleController.getString(R.string.ZapretVpnBot)" in free_proxy_settings_activity
-        and '"@zapretvpns_bot"' in free_proxy_settings_activity,
+        # telegaNEW: подпись берётся из той же константы, что и открываемый бот.
+        and '"@" + DialogsAdapter.ZAPRET_VPN_SPONSOR_USERNAME' in free_proxy_settings_activity,
         "FreeProxySettingsActivity must pin the ZaSto VPN bot above the catalog",
     )
     require(
@@ -188,7 +189,7 @@ def main() -> int:
         "ZaSto VPN bot must be the first row in FreeProxySettingsActivity",
     )
     require(
-        'getMessagesController().openByUserName("zapretvpns_bot", this, 1)' in free_proxy_settings_activity,
+        'getMessagesController().openByUserName(DialogsAdapter.ZAPRET_VPN_SPONSOR_USERNAME, this, 1)' in free_proxy_settings_activity,
         "FreeProxySettingsActivity must open the pinned bot inside Telegram",
     )
 
