@@ -186,17 +186,17 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         String downloadUrl = APK_URL_PREFIX + abi + ".apk";
 
         new AlertDialog.Builder(context)
-                .setTitle(LocaleController.getString(R.string.AppUpdate))
-                .setMessage(update.changelog != null && !update.changelog.isEmpty() ? update.changelog : LocaleController.formatString("AppUpdateVersionAndSize", R.string.AppUpdateVersionAndSize, update.version, ""))
-                .setPositiveButton(LocaleController.getString(R.string.AppUpdateDownloadNow), (dialog, which) -> showDownloadProgressDialog(context, downloadUrl))
-                .setNegativeButton(LocaleController.getString(R.string.AppUpdateRemindMeLater), null)
+                .setTitle(LocaleController.getString(org.telegram.messenger.R.string.AppUpdate))
+                .setMessage(update.changelog != null && !update.changelog.isEmpty() ? update.changelog : LocaleController.formatString("AppUpdateVersionAndSize", org.telegram.messenger.R.string.AppUpdateVersionAndSize, update.version, ""))
+                .setPositiveButton(LocaleController.getString(org.telegram.messenger.R.string.AppUpdateDownloadNow), (dialog, which) -> showDownloadProgressDialog(context, downloadUrl))
+                .setNegativeButton(LocaleController.getString(org.telegram.messenger.R.string.AppUpdateRemindMeLater), null)
                 .show();
         return true;
     }
 
     private void showDownloadProgressDialog(Context context, String url) {
         AlertDialog progressDialog = new AlertDialog(context, AlertDialog.ALERT_TYPE_LOADING);
-        progressDialog.setMessage(LocaleController.getString(R.string.Loading));
+        progressDialog.setMessage(LocaleController.getString(org.telegram.messenger.R.string.Loading));
         progressDialog.setCanceledOnTouchOutside(false);
         progressDialog.show();
 
