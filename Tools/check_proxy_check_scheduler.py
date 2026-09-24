@@ -22,7 +22,8 @@ ROTATION = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRotat
 ENGINE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRotationEngine.java"
 JAVA_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
-README = ROOT / "README.md"
+# В форке технический README ZaStoGram перенесён в docs/, корневой README — о форке.
+README = ROOT / "docs" / "ZaStoGram.md"
 
 checks = [
     (SCHEDULER, "PROXY_CHECK_SPACING_MS", "scheduler must space background proxy checks"),

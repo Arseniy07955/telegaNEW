@@ -8,7 +8,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = ROOT / "Tools/verify_mtproxy_runtime_logs.py"
 COLLECTOR = ROOT / "Tools/collect_mtproxy_logs.ps1"
-README = ROOT / "README.md"
+# В форке технический README ZaStoGram перенесён в docs/, корневой README — о форке.
+README = ROOT / "docs" / "ZaStoGram.md"
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 PUBLISHER_HEADER = ROOT / "TMessagesProj/jni/mtproxy/MtProxySocketPublisher.h"

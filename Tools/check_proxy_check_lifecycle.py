@@ -11,7 +11,8 @@ COLLECT = ROOT / "Tools/collect_mtproxy_logs.ps1"
 ANALYZE = ROOT / "Tools/analyze_mtproxy_markers.py"
 WRAPPER = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
 JAVA_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
-README = ROOT / "README.md"
+# В форке технический README ZaStoGram перенесён в docs/, корневой README — о форке.
+README = ROOT / "docs" / "ZaStoGram.md"
 
 
 def require(condition, message):

@@ -27,7 +27,8 @@ HEALTH = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyHealthS
 STATUS_MIRROR = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyStatusMirror.java"
 POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
-README = ROOT / "README.md"
+# В форке технический README ZaStoGram перенесён в docs/, корневой README — о форке.
+README = ROOT / "docs" / "ZaStoGram.md"
 NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseContract.h"
 
 

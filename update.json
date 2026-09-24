@@ -32,6 +32,16 @@
       "secret": "04040404000044440000444404040000"
     },
     {
+      "server": "nnmm.me",
+      "port": 443,
+      "secret": "ddf390d9757cb92d87826bcef28a6e75ed"
+    },
+    {
+      "server": "chestno.servera-dlya-tg-zdes-net.abrdns.com",
+      "port": 443,
+      "secret": "eea65c7fc5a0d5669ba371a7ca88fc19496f7a6f6e2e7275"
+    },
+    {
       "server": "37.139.34.199",
       "port": 443,
       "secret": "ee5f52936aa7e559b6bf6b6c62d28f0ae6",
