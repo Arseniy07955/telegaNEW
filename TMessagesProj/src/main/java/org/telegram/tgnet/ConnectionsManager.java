@@ -932,10 +932,7 @@ public class ConnectionsManager extends BaseController {
                 native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, MtProxyOptions.resolve(proxyAddress, proxyPort, proxySecret), activationGeneration, ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName);
             }
         }
-        if (legacyProxyEnabled && SharedConfig.wssTransportEnabled) {
-            SharedConfig.setWssTransportEnabled(false);
-        }
-        setWssTransportEnabled();
+        applyWssTransport(legacyProxyEnabled);
         String installer = "";
         try {
             Context context = ApplicationLoader.applicationContext;
@@ -1608,10 +1605,9 @@ public class ConnectionsManager extends BaseController {
         }
 
         boolean hasSelectedProxy = enabled && !TextUtils.isEmpty(address);
-        if (hasSelectedProxy && SharedConfig.wssTransportEnabled) {
-            SharedConfig.setWssTransportEnabled(false);
-            setWssTransportEnabled();
-        }
+        // The WSS toggle is a preference, not a mode: a selected proxy only
+        // suspends it, and turning the proxy off falls back to WSS again.
+        applyWssTransport(hasSelectedProxy);
         ProxyConnectionEvent.Origin activationOrigin = origin == null ? ProxyConnectionEvent.Origin.SETTINGS_CHANGE : origin;
         int activationGeneration = hasSelectedProxy ? ProxyRuntimeStateStore.noteProxySettingsActivation(activationOrigin) : 0;
         // WEB proxy keeps plain obfuscated2 to the local bridge: no FakeTLS, no
@@ -1633,7 +1629,13 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setWssTransportEnabled() {
-        boolean enabled = isWssTransportActive();
+        applyWssTransport(SharedConfig.isProxyEnabled());
+    }
+
+    private static void applyWssTransport(boolean proxyActive) {
+        boolean enabled = SharedConfig.wssTransportEnabled
+                && !proxyActive
+                && !ApplicationLoader.isVpnActive();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             native_setWssTransportEnabled(a, enabled);
         }

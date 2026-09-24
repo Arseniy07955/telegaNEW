@@ -67,7 +67,10 @@ def main() -> None:
         connections_java,
         "public static void setWssTransportEnabled()",
         "public static boolean isWssTransportActive()")
-    require("isWssTransportActive()" in setter
+    require("applyWssTransport(SharedConfig.isProxyEnabled())" in setter
+            and "SharedConfig.wssTransportEnabled" in setter
+            and "!proxyActive" in setter
+            and "!ApplicationLoader.isVpnActive()" in setter
             and "native_setWssTransportEnabled(a, enabled)" in setter,
             "native WSS propagation must use the effective transport state")
     check_connection = method_body(

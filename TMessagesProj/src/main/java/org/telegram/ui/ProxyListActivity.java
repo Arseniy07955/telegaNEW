@@ -548,10 +548,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     }
                 }
                 useProxySettings = !useProxySettings;
-                if (useProxySettings && SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 updateRows(true);
 
                 SharedPreferences preferences = MessagesController.getGlobalMainSettings();
@@ -606,7 +602,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 SharedConfig.saveConfig();
                 reapplyCurrentProxySettings();
             } else if (position == wssTransportRow) {
-                boolean enabled = !SharedConfig.wssTransportEnabled;
+                boolean enabled = !isWssTransportSelected();
                 if (enabled) {
                     disableLegacyProxyForWss();
                 }
@@ -621,10 +617,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 ((TextCheckCell) view).setChecked(enabled);
             } else if (position == callsRow) {
                 useProxyForCalls = !useProxyForCalls;
-                if (useProxyForCalls && SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 TextCheckCell textCheckCell = (TextCheckCell) view;
                 textCheckCell.setChecked(useProxyForCalls);
                 SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
@@ -636,10 +628,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     return;
                 }
                 SharedConfig.ProxyInfo info = proxyList.get(position - proxyStartRow);
-                if (SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 useProxySettings = true;
                 SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
                 info.settings.toSharedPreferences(editor);
@@ -829,7 +817,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     }
 
     private boolean isWssTransportSelected() {
-        return SharedConfig.wssTransportEnabled;
+        return SharedConfig.wssTransportEnabled && !useProxySettings;
     }
 
     private boolean isProxySelectedForCurrentMode(SharedConfig.ProxyInfo info) {
@@ -923,10 +911,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
 
     private void updateRows(boolean notify) {
         rowCount = 0;
-        boolean wssTransportSelected = isWssTransportSelected();
-        if (wssTransportSelected && (useProxySettings || useProxyForCalls)) {
-            disableLegacyProxyForWss();
-        }
         useProxyRow = rowCount++;
         if (useProxySettings && SharedConfig.currentProxy != null && SharedConfig.currentProxy.settings.getType() != ProxySettings.Type.WEB && SharedConfig.proxyList.size() > 1 && IS_PROXY_ROTATION_AVAILABLE) {
             rotationRow = rowCount++;
@@ -1416,7 +1400,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     } else if (position == mtProxySoftMuxRow) {
                         checkCell.setTextAndCheck(getString(R.string.MtProxySoftMux), SharedConfig.mtProxySoftMux, true);
                     } else if (position == wssTransportRow) {
-                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), SharedConfig.wssTransportEnabled, true);
+                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), isWssTransportSelected(), true);
                     } else if (position == callRelayTcpTlsRow) {
                         checkCell.setTextAndCheck(getString(R.string.CallRelayTcpTls), SharedConfig.callRelayTcpTlsEnabled, false);
                     }
@@ -1558,7 +1542,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 } else if (position == rotationRow) {
                     checkCell.setChecked(SharedConfig.proxyRotationEnabled);
                 } else if (position == wssTransportRow) {
-                    checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                    checkCell.setChecked(isWssTransportSelected());
                 } else if (position == callRelayTcpTlsRow) {
                     checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }
@@ -1584,7 +1568,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 } else if (position == mtProxySoftMuxRow) {
                     checkCell.setChecked(SharedConfig.mtProxySoftMux);
                 } else if (position == wssTransportRow) {
-                    checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                    checkCell.setChecked(isWssTransportSelected());
                 } else if (position == callRelayTcpTlsRow) {
                     checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }
