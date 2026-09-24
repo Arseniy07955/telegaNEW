@@ -36,6 +36,9 @@ public class GcmPushListenerService extends FirebaseMessagingService {
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.d("Refreshed FCM token: " + token);
             }
+            if (ApplicationLoader.getPushProvider().getPushType() != PushListenerController.PUSH_TYPE_FIREBASE) {
+                return;
+            }
             ApplicationLoader.postInitApplication();
             PushListenerController.sendRegistrationToServer(PushListenerController.PUSH_TYPE_FIREBASE, token);
         });

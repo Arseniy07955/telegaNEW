@@ -441,7 +441,7 @@ public class ConnectionsManager extends BaseController {
             pushString = SharedConfig.pushStringStatus;
         }
         if (TextUtils.isEmpty(pushString)) {
-            String tag = SharedConfig.pushType == PushListenerController.PUSH_TYPE_FIREBASE ? "FIREBASE" : "HUAWEI";
+            String tag = SharedConfig.pushType == PushListenerController.PUSH_TYPE_FIREBASE ? "FIREBASE" : SharedConfig.pushType == PushListenerController.PUSH_TYPE_SIMPLE ? "UNIFIEDPUSH" : "HUAWEI";
             pushString = SharedConfig.pushStringStatus = "__" + tag + "_GENERATING_SINCE_" + getCurrentTime() + "__";
         }
         return pushString;
@@ -992,7 +992,7 @@ public class ConnectionsManager extends BaseController {
             pushString = status;
         }
         if (TextUtils.isEmpty(pushString)) {
-            String tag = type == PushListenerController.PUSH_TYPE_FIREBASE ? "FIREBASE" : "HUAWEI";
+            String tag = type == PushListenerController.PUSH_TYPE_FIREBASE ? "FIREBASE" : type == PushListenerController.PUSH_TYPE_SIMPLE ? "UNIFIEDPUSH" : "HUAWEI";
             pushString = SharedConfig.pushStringStatus = "__" + tag + "_GENERATING_SINCE_" + getInstance(0).getCurrentTime() + "__";
         }
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
