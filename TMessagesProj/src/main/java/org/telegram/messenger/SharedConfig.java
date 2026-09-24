@@ -678,15 +678,38 @@ public class SharedConfig {
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);
             mtProxyStartupCoverMode = clampInt(preferences.getInt("mtProxyStartupCoverMode", 0), 0, 2);
-            // WSS включён по умолчанию: на большинстве сетей он и нужен, а там,
-            // где релей датацентра закрыт, транспорт сам отходит на прямое
-            // соединение для этого датацентра. Осознанный выбор пользователя
-            // сохраняется: если тумблер уже трогали, берётся его значение.
+            // telegaNEW: один раз приводим маскировку MTProxy к набору для скорости
+            // и стабильности. Всё, что замедляет уже установленный поток (размер
+            // записей, паузы, стартовая маскировка), выключено; меньше
+            // параллельных каналов — меньше поводов для DPI и лимитов прокси.
+            // Фрагментацию ClientHello, смену TLS-профиля и более тихий темп
+            // подключений клиент включает сам для конкретной точки после сбоев
+            // рукопожатия, поэтому держать их включёнными постоянно незачем.
+            // Auto rotate даёт этой адаптации менять TLS-профиль.
+            if (!preferences.getBoolean("zasto_masking_defaults_v1", false)) {
+                mtProxyClientHelloFragmentation = false;
+                mtProxySoftMux = true;
+                mtProxyConnectionPatternMode = 0;
+                mtProxyRecordSizingMode = 0;
+                mtProxyTimingMode = 0;
+                mtProxyStartupCoverMode = 0;
+                preferences.edit()
+                        .putBoolean("mtProxyClientHelloFragmentation", false)
+                        .putBoolean("mtProxySoftMux", true)
+                        .putInt("mtProxyConnectionPatternMode", 0)
+                        .putInt("mtProxyRecordSizingMode", 0)
+                        .putInt("mtProxyTimingMode", 0)
+                        .putInt("mtProxyStartupCoverMode", 0)
+                        .putBoolean("zasto_masking_defaults_v1", true)
+                        .apply();
+                ConnectionsManager.setMtProxyTlsProfileOverride(ConnectionsManager.MT_PROXY_TLS_PROFILE_AUTO_ROTATE);
+            }
+            // telegaNEW: WSS выключен по умолчанию. Релеи Telegram и запасной
+            // туннель через Cloudflare в России чаще недоступны, и попытки
+            // через них только задерживают подключение. Кому нужен WSS, включает
+            // его в настройках прокси; осознанный выбор сохраняется.
             final boolean hasWssToggle = preferences.contains("wssTransportEnabled");
-            wssTransportEnabled = hasWssToggle
-                    ? preferences.getBoolean("wssTransportEnabled", true)
-                    : preferences.getInt("wssTransportMode", TRANSPORT_LEGACY_PROXY) != TRANSPORT_LEGACY_PROXY
-                            || !preferences.contains("wssTransportMode");
+            wssTransportEnabled = hasWssToggle && preferences.getBoolean("wssTransportEnabled", false);
             if (!hasWssToggle
                     || preferences.contains("wssTransportMode")
                     || preferences.contains("wssHost")
@@ -704,13 +727,15 @@ public class SharedConfig {
                         .remove("wss_default_applied")
                         .apply();
             }
-            // Selecting a proxy used to clear this toggle silently; now a proxy only
-            // suspends WSS, so give those users their WSS fallback back once.
-            if (!preferences.getBoolean("wssProxyDecoupled", false)) {
-                wssTransportEnabled = true;
+            // Апстрим включал WSS сам — при первом запуске и миграцией
+            // wssProxyDecoupled, — так что у большинства он включён не по их
+            // выбору. Выключаем один раз; дальше тумблер принадлежит пользователю.
+            if (!preferences.getBoolean("zasto_wss_default_off_applied", false)) {
+                wssTransportEnabled = false;
                 preferences.edit()
-                        .putBoolean("wssTransportEnabled", true)
+                        .putBoolean("wssTransportEnabled", false)
                         .putBoolean("wssProxyDecoupled", true)
+                        .putBoolean("zasto_wss_default_off_applied", true)
                         .apply();
             }
             // Экспериментально и потому выключено по умолчанию: TURN-серверы звонка

@@ -26,11 +26,12 @@ def main() -> None:
     connections_java = CONNECTIONS_JAVA.read_text(encoding="utf-8", errors="replace")
     file_loader = FILE_LOADER.read_text(encoding="utf-8", errors="replace")
 
-    require('preferences.getBoolean("wssTransportEnabled", true)' in shared_config
-            and "WSS включён по умолчанию" in shared_config,
-            "WSS must be enabled by default while keeping an explicit user choice")
-    require('preferences.getInt("wssTransportMode"' in shared_config,
-            "legacy WSS mode must migrate to the checkbox")
+    # telegaNEW: в отличие от ZaStoGram, WSS выключен по умолчанию (в России
+    # релеи и туннель Cloudflare чаще недоступны), выбор пользователя сохраняется.
+    require('preferences.getBoolean("wssTransportEnabled", false)' in shared_config
+            and "WSS выключен по умолчанию" in shared_config
+            and "zasto_wss_default_off_applied" in shared_config,
+            "WSS must be disabled by default while keeping an explicit user choice")
     require('.remove("wssHost")' in shared_config and '.remove("wssPath")' in shared_config,
             "custom gateway keys must be removed during migration")
     require("UseWssTransport" in proxy_list and "wssTransportEnabled" in proxy_list,
