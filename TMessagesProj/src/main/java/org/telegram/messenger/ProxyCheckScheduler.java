@@ -251,7 +251,7 @@ public class ProxyCheckScheduler {
         SharedConfig.ProxyInfo proxyInfo = request.proxyInfo;
         request.setChecking(true);
         log("start endpoint=" + endpoint(proxyInfo) + " queued=" + queue.size());
-        long nativePingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
+        long nativePingId = ConnectionsManager.getInstance(request.currentAccount).checkProxy(proxyInfo.settings, (time, diagnostic) -> AndroidUtilities.runOnUIThread(() -> finishRequest(request, time, diagnostic)));
         request.nativePingId = nativePingId;
         request.setProxyCheckPingId(nativePingId);
         if (nativePingId == 0) {
@@ -322,64 +322,6 @@ public class ProxyCheckScheduler {
             ProxyRuntimeStateStore.clearTransientState(proxyInfo);
             log("clear_detached endpoint=" + endpoint(proxyInfo) + " reason=" + reason);
         }
-    }
-
-    public static void startFastSweep(int currentAccount, List<SharedConfig.ProxyInfo> proxies) {
-        if (proxies == null || proxies.isEmpty()) {
-            return;
-        }
-        log("fast_sweep start count=" + proxies.size());
-        final SharedConfig.ProxyInfo[] bestProxy = {null};
-        final long[] bestPing = {Long.MAX_VALUE};
-
-        for (SharedConfig.ProxyInfo info : proxies) {
-            if (info.checking) continue;
-            ProxyStatusMirror.setChecking(info, true);
-            ConnectionsManager.getInstance(currentAccount).checkProxy(info.address, info.port, info.username, info.password, info.secret, (time, diagnostic) -> {
-                AndroidUtilities.runOnUIThread(() -> {
-                    ProxyStatusMirror.applyMeasuredProxyCheckResult(info, time, diagnostic);
-                    if (time >= 0) {
-                        log("fast_sweep result ok endpoint=" + endpoint(info) + " ping=" + time);
-                        
-                        if (time < bestPing[0]) {
-                            bestPing[0] = time;
-                            bestProxy[0] = info;
-                            
-                            // If it's fast enough (< 400ms), apply immediately if not logged in
-                            if (time < 400 && !UserConfig.getInstance(currentAccount).isClientActivated()) {
-                                applyBestProxy(currentAccount, info);
-                            }
-                        }
-                    } else {
-                        log("fast_sweep result fail endpoint=" + endpoint(info) + " diag=" + diagnostic);
-                    }
-                    NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, info);
-                });
-            });
-        }
-
-        // Final check after 3.5 seconds to pick the best one found so far
-        AndroidUtilities.runOnUIThread(() -> {
-            if (bestProxy[0] != null && !UserConfig.getInstance(currentAccount).isClientActivated()) {
-                applyBestProxy(currentAccount, bestProxy[0]);
-            }
-        }, 3500);
-    }
-
-    private static void applyBestProxy(int account, SharedConfig.ProxyInfo info) {
-        if (SharedConfig.currentProxy == info) return;
-        log("fast_sweep applying best proxy=" + endpoint(info) + " ping=" + info.ping);
-        SharedConfig.currentProxy = info;
-        MessagesController.getGlobalMainSettings().edit()
-                .putString("proxy_ip", info.address)
-                .putInt("proxy_port", info.port)
-                .putString("proxy_user", info.username)
-                .putString("proxy_pass", info.password)
-                .putString("proxy_secret", info.secret)
-                .putBoolean("proxy_enabled", true)
-                .apply();
-        ConnectionsManager.setProxySettings(true, info.address, info.port, info.username, info.password, info.secret);
-        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
     }
 
     private static void log(String message) {

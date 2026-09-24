@@ -146,13 +146,14 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager.widget.ViewPager;
 
 import com.android.internal.telephony.ITelephony;
-import com.google.android.exoplayer2.util.Consumer;
+import androidx.media3.common.util.Consumer;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
 import com.google.android.gms.tasks.Task;
 
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.browser.Browser;
+import org.telegram.proxy.ProxySettings;
 import org.telegram.messenger.utils.CustomHtml;
 import org.telegram.messenger.utils.DebugRecordingCanvas;
 import org.telegram.tgnet.ConnectionsManager;
@@ -4268,6 +4269,62 @@ public class AndroidUtilities {
         }
     }
 
+    private static final String APK_MIME_TYPE = "application/vnd.android.package-archive";
+
+    // ZaStoGram: the Xiaomi (MIUI/HyperOS) installer fails with "package parse error" on an APK
+    // handed over from our FileProvider, while the same file installs from Downloads. Copy it
+    // there first and let the installer open the MediaStore entry instead.
+    private static boolean openApkThroughDownloads(File f, String fileName, Activity activity) {
+        if (Build.VERSION.SDK_INT < 29 || activity == null || !"xiaomi".equalsIgnoreCase(Build.MANUFACTURER)) {
+            return false;
+        }
+        final String name = fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".apk") ? fileName : f.getName();
+        Utilities.globalQueue.postRunnable(() -> {
+            final ContentResolver resolver = ApplicationLoader.applicationContext.getContentResolver();
+            Uri saved = null;
+            try {
+                final android.content.ContentValues values = new android.content.ContentValues();
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + File.separator + "ZaStoGram" + File.separator);
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE, APK_MIME_TYPE);
+                saved = resolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
+                if (saved != null) {
+                    try (InputStream in = new FileInputStream(f); OutputStream out = resolver.openOutputStream(saved)) {
+                        if (out == null) {
+                            throw new java.io.IOException("no output stream for " + saved);
+                        }
+                        final byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = in.read(buffer)) > 0) {
+                            out.write(buffer, 0, read);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+                if (saved != null) {
+                    try {
+                        resolver.delete(saved, null, null);
+                    } catch (Exception ignore) {
+                    }
+                }
+                saved = null;
+            }
+            final Uri uri = saved;
+            runOnUIThread(() -> {
+                final Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                intent.setDataAndType(uri != null ? uri : FileProvider.getUriForFile(activity, ApplicationLoader.getApplicationId() + ".provider", f), APK_MIME_TYPE);
+                try {
+                    activity.startActivityForResult(intent, 500);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            });
+        });
+        return true;
+    }
+
     public static boolean openForView(File f, String fileName, String mimeType, final Activity activity, Theme.ResourcesProvider resourcesProvider, boolean restrict) {
         if (f != null && f.exists()) {
             // ZaStoGram: a .plugin opened in-app (e.g. tapped in a chat) -> review-and-install dialog,
@@ -4299,6 +4356,9 @@ public class AndroidUtilities {
                 if (restrict) return true;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ApplicationLoader.applicationContext.getPackageManager().canRequestPackageInstalls()) {
                     AlertsCreator.createApkRestrictedDialog(activity, resourcesProvider).show();
+                    return true;
+                }
+                if (openApkThroughDownloads(f, fileName, activity)) {
                     return true;
                 }
             }
@@ -4606,7 +4666,7 @@ public class AndroidUtilities {
             ProxyLinkHelper.ProxyLink link = data != null ? ProxyLinkHelper.parse(data.toString()) : null;
             if (link != null) {
                 if (invoked) {
-                    showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret);
+                    showProxyAlert(activity, link.toSettings());
                 }
                 return true;
             }
@@ -4627,7 +4687,7 @@ public class AndroidUtilities {
             return false;
         }
         lastClipboardProxyAlertKey = key;
-        showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret);
+        showProxyAlert(activity, link.toSettings());
         return true;
     }
 
@@ -4658,7 +4718,17 @@ public class AndroidUtilities {
         return true;
     }
 
-    public static void showProxyAlert(Activity activity, final String address, final String port, final String user, final String password, final String secret) {
+    public static void showProxyAlert(Activity activity, final ProxySettings settings) {
+        if (settings == null || !settings.isValid()) {
+            return;
+        }
+
+        final String address = settings.getAddress();
+        final int port = settings.getPort();
+        final String user = settings.getUser();
+        final String password = settings.getPassword();
+        final String secret = settings.getSecret();
+
         final BottomSheet.Builder builder = new BottomSheet.Builder(activity);
         builder.setApplyTopPadding(false);
         builder.setApplyBottomPadding(false);
@@ -4678,8 +4748,8 @@ public class AndroidUtilities {
         if (!TextUtils.isEmpty(address)) {
             tableView.addRow(getString(R.string.UseProxyAddress), address);
         }
-        if (!TextUtils.isEmpty(port)) {
-            tableView.addRow(getString(R.string.UseProxyPort), port);
+        if (port != 0) {
+            tableView.addRow(getString(R.string.UseProxyPort), Integer.toString(port));
         }
         if (!TextUtils.isEmpty(secret)) {
             tableView.addRow(getString(R.string.UseProxySecret), secret);
@@ -4712,7 +4782,7 @@ public class AndroidUtilities {
             statusTextView[0].setText(getString(R.string.ProxyBottomSheetChecking) + "...");
             statusTextView[0].clear();
             try {
-                SharedConfig.ProxyInfo proxyInfo = new SharedConfig.ProxyInfo(address, Integer.parseInt(port), user, password, secret);
+                SharedConfig.ProxyInfo proxyInfo = new SharedConfig.ProxyInfo(settings);
                 boolean started = ProxyCheckScheduler.enqueueNow(UserConfig.selectedAccount, proxyInfo, proxyCheckOwner, new ProxyCheckScheduler.Callback() {
                     @Override
                     public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
@@ -4758,36 +4828,14 @@ public class AndroidUtilities {
         final Runnable doConnect = () -> {
             SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
             editor.putBoolean("proxy_enabled", true);
-            editor.putString("proxy_ip", address);
-            int p = Utilities.parseInt(port);
-            editor.putInt("proxy_port", p);
-
-            SharedConfig.ProxyInfo info;
-            if (TextUtils.isEmpty(secret)) {
-                editor.remove("proxy_secret");
-                if (TextUtils.isEmpty(password)) {
-                    editor.remove("proxy_pass");
-                } else {
-                    editor.putString("proxy_pass", password);
-                }
-                if (TextUtils.isEmpty(user)) {
-                    editor.remove("proxy_user");
-                } else {
-                    editor.putString("proxy_user", user);
-                }
-                info = new SharedConfig.ProxyInfo(address, p, user, password, "");
-            } else {
-                editor.remove("proxy_pass");
-                editor.remove("proxy_user");
-                editor.putString("proxy_secret", secret);
-                info = new SharedConfig.ProxyInfo(address, p, "", "", secret);
-            }
+            settings.toSharedPreferences(editor);
             editor.commit();
 
+            final SharedConfig.ProxyInfo info = new SharedConfig.ProxyInfo(settings);
             SharedConfig.currentProxy = SharedConfig.addProxy(info);
 
             ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy, ProxyConnectionEvent.Origin.USER_SELECT);
-            ConnectionsManager.setProxySettings(true, address, p, user, password, secret, ProxyConnectionEvent.Origin.USER_SELECT);
+            ConnectionsManager.setProxySettings(true, settings, ProxyConnectionEvent.Origin.USER_SELECT);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
             if (activity instanceof LaunchActivity) {
                 INavigationLayout layout = ((LaunchActivity) activity).getActionBarLayout();
@@ -4829,7 +4877,7 @@ public class AndroidUtilities {
             ProxyCheckScheduler.cancelOwner(proxyCheckOwner);
         });
         // ZaStoGram: сразу автоматически проверяем прокси реальным подключением — «работает/не работает» видно до нажатия Connect.
-        if (!TextUtils.isEmpty(address) && !TextUtils.isEmpty(port)) {
+        if (settings.isValid()) {
             check.run();
         }
     }

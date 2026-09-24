@@ -225,7 +225,7 @@ public class ProxyCheckDiagnostics {
     }
 
     private static boolean isMtProxy(SharedConfig.ProxyInfo proxyInfo) {
-        return proxyInfo != null && !TextUtils.isEmpty(proxyInfo.secret);
+        return proxyInfo != null && !TextUtils.isEmpty(proxyInfo.settings.getSecret());
     }
 
     private static boolean hasFreshSuccessfulProxyCheck(SharedConfig.ProxyInfo proxyInfo) {

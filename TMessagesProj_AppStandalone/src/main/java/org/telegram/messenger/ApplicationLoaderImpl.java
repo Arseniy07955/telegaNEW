@@ -124,7 +124,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
             SharedConfig.ProxyInfo existing = null;
             for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
-                if (server.equalsIgnoreCase(info.address) && port == info.port) {
+                if (server.equalsIgnoreCase(info.settings.getAddress()) && port == info.settings.getPort()) {
                     existing = info;
                     break;
                 }
@@ -139,8 +139,9 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             }
 
             if (existing != null) {
-                if (!secret.equals(existing.secret)) {
-                    existing.secret = secret;
+                if (!secret.equals(existing.settings.getSecret())) {
+                    // ProxySettings неизменяемый: запись собирается заново.
+                    existing.settings = new SharedConfig.ProxyInfo(server, port, "", "", secret).settings;
                     listChanged = true;
                 }
                 if (isActive) activeToSet = existing;
@@ -165,15 +166,11 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             SharedConfig.currentProxy = activeToSet;
             // Выбор надо записать в настройки, иначе после перезапуска клиент
             // поднимется со старым прокси из prefs.
-            MessagesController.getGlobalMainSettings().edit()
-                    .putString("proxy_ip", activeToSet.address)
-                    .putString("proxy_user", "")
-                    .putString("proxy_pass", "")
-                    .putString("proxy_secret", activeToSet.secret)
-                    .putInt("proxy_port", activeToSet.port)
-                    .putBoolean("proxy_enabled", true)
-                    .apply();
-            ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, "", "", activeToSet.secret);
+            android.content.SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
+            editor.putBoolean("proxy_enabled", true);
+            activeToSet.settings.toSharedPreferences(editor);
+            editor.apply();
+            ConnectionsManager.setProxySettings(true, activeToSet.settings);
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         }
     }
@@ -355,7 +352,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                         new AlertDialog.Builder(LaunchActivity.instance)
                                 .setTitle(LocaleController.getString(R.string.SmsNoSimTitle))
                                 .setMessage(AndroidUtilities.replaceTags(LocaleController.getString(R.string.SmsNoSimMessage)))
-                                .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                                .setPositiveButton(LocaleController.getString(org.telegram.messenger.R.string.OK), null)
                                 .show();
                         return;
                     }
@@ -367,7 +364,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                             new AlertDialog.Builder(LaunchActivity.instance)
                                     .setTitle(LocaleController.getString(R.string.SmsNoSimTitle))
                                     .setMessage(AndroidUtilities.replaceTags(LocaleController.getString(R.string.SmsNoSimMessage)))
-                                    .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                                    .setPositiveButton(LocaleController.getString(org.telegram.messenger.R.string.OK), null)
                                     .show();
                             return;
                         }
@@ -375,7 +372,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                             if (err != null) {
                                 BulletinFactory.showError(err);
                             } else if (res instanceof TLRPC.TL_boolFalse) {
-                                BulletinFactory.global().createErrorBulletin(LocaleController.getString(R.string.UnknownError)).show();
+                                BulletinFactory.global().createErrorBulletin(LocaleController.getString(org.telegram.messenger.R.string.UnknownError)).show();
                             } else {
                                 controller.setState(SMSJobController.STATE_JOINED);
                                 controller.loadStatus(true);

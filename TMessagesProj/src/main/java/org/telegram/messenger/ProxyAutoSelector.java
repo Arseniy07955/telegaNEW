@@ -217,7 +217,7 @@ public final class ProxyAutoSelector implements NotificationCenter.NotificationC
     }
 
     private static String endpoint(SharedConfig.ProxyInfo proxyInfo) {
-        return proxyInfo == null ? "null" : proxyInfo.address + ":" + proxyInfo.port;
+        return proxyInfo == null ? "null" : proxyInfo.settings.getAddress() + ":" + proxyInfo.settings.getPort();
     }
 
     private static void log(String message) {

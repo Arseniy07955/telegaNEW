@@ -293,7 +293,7 @@ final class ProxyVisibleStateStore {
     }
 
     private static boolean isMtProxy(SharedConfig.ProxyInfo proxyInfo) {
-        return proxyInfo != null && proxyInfo.secret != null && proxyInfo.secret.length() > 0;
+        return proxyInfo != null && proxyInfo.settings.getSecret() != null && proxyInfo.settings.getSecret().length() > 0;
     }
 
     private static boolean isConnectedCurrentProxy(int account, SharedConfig.ProxyInfo proxyInfo) {

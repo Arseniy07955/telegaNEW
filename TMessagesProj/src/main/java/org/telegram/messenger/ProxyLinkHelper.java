@@ -11,6 +11,9 @@ package org.telegram.messenger;
 import android.content.Context;
 import android.text.TextUtils;
 
+import org.telegram.proxy.ProxySettings;
+import org.telegram.proxy.WebProxyTransport;
+
 import java.io.UnsupportedEncodingException;
 import java.net.IDN;
 import java.net.URLDecoder;
@@ -20,6 +23,7 @@ public final class ProxyLinkHelper {
 
     public static final int TYPE_SOCKS5 = 0;
     public static final int TYPE_MTPROTO = 1;
+    public static final int TYPE_WEB = 2;
 
     private static final LinkPrefix[] LINK_PREFIXES = new LinkPrefix[] {
             new LinkPrefix(TYPE_SOCKS5, "t.me/socks?"),
@@ -36,9 +40,37 @@ public final class ProxyLinkHelper {
             new LinkPrefix(TYPE_MTPROTO, "tg://proxy/?"),
             new LinkPrefix(TYPE_MTPROTO, "tg:proxy?"),
             new LinkPrefix(TYPE_MTPROTO, "tg:proxy/?"),
+            new LinkPrefix(TYPE_WEB, "t.me/webproxy?"),
+            new LinkPrefix(TYPE_WEB, "telegram.me/webproxy?"),
+            new LinkPrefix(TYPE_WEB, "telegram.dog/webproxy?"),
+            new LinkPrefix(TYPE_WEB, "tg://webproxy?"),
+            new LinkPrefix(TYPE_WEB, "tg://webproxy/?"),
+            new LinkPrefix(TYPE_WEB, "tg:webproxy?"),
+            new LinkPrefix(TYPE_WEB, "tg:webproxy/?"),
     };
 
     private ProxyLinkHelper() {
+    }
+
+    public static ProxySettings.Type toSettingsType(int type) {
+        switch (type) {
+            case TYPE_MTPROTO:
+                return ProxySettings.Type.MTPROTO;
+            case TYPE_WEB:
+                return ProxySettings.Type.WEB;
+            case TYPE_SOCKS5:
+            default:
+                return ProxySettings.Type.SOCKS5;
+        }
+    }
+
+    public static int fromSettingsType(ProxySettings.Type type) {
+        if (type == ProxySettings.Type.MTPROTO) {
+            return TYPE_MTPROTO;
+        } else if (type == ProxySettings.Type.WEB) {
+            return TYPE_WEB;
+        }
+        return TYPE_SOCKS5;
     }
 
     public static ProxyLink parse(String text) {
@@ -125,6 +157,11 @@ public final class ProxyLinkHelper {
                 case "server":
                     address = normalizeAddress(value);
                     break;
+                case "host":
+                    if (type == TYPE_WEB && TextUtils.isEmpty(address)) {
+                        address = normalizeAddress(value);
+                    }
+                    break;
                 case "port":
                     portString = value;
                     break;
@@ -139,11 +176,20 @@ public final class ProxyLinkHelper {
                     }
                     break;
                 case "secret":
-                    if (type == TYPE_MTPROTO) {
+                    if (type == TYPE_MTPROTO || type == TYPE_WEB) {
                         secret = value;
                     }
                     break;
             }
+        }
+        if (type == TYPE_WEB) {
+            // WEB proxy: an HTTPS hostname plus a plain 16-byte (or dd) MTProxy
+            // secret; the link carries no port.
+            address = WebProxyTransport.normalizeHost(address);
+            if (TextUtils.isEmpty(address) || !WebProxyTransport.isValidSecret(secret)) {
+                return null;
+            }
+            return new ProxyLink(type, address, 0, "", "", secret);
         }
         int port = Utilities.parseInt(portString);
         if (TextUtils.isEmpty(address) || port <= 0 || port > 65535) {
@@ -211,6 +257,17 @@ public final class ProxyLinkHelper {
             this.username = username != null ? username : "";
             this.password = password != null ? password : "";
             this.secret = secret != null ? secret : "";
+        }
+
+        public ProxySettings toSettings() {
+            return ProxySettings.builder()
+                    .setType(toSettingsType(type))
+                    .setAddress(address)
+                    .setPort(port)
+                    .setUser(username)
+                    .setPassword(password)
+                    .setSecret(secret)
+                    .build();
         }
     }
 }

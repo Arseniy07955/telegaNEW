@@ -44,6 +44,12 @@ public:
     bool isCurrentMtProxyConnection();
     bool isCurrentDirectConnection() const;
     bool hasMtProxyOverride() const;
+    // True while this socket dials the WEB proxy's loopback bridge
+    // (MtProxyOptions::webBridge). MTProxy pacing never applies to it.
+    bool isCurrentWebProxyBridge() const;
+    // Class of this connection's stream on the WEB carrier, one of
+    // WEB_PROXY_STREAM_CLASS_*; set by Connection before every connect.
+    void setWebProxyStreamClass(int32_t streamClass);
     void dropConnection();
     void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
@@ -180,6 +186,7 @@ private:
     bool canReceiveRawSocketBytes();
     void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
+    bool isCurrentWssTunnel();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
     bool flushWssStream(std::string *diagnostic);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);
@@ -232,6 +239,9 @@ private:
     bool mtProxyStartupCoverActive();
     int32_t effectiveMtProxyRecordSizingMode();
     int32_t effectiveMtProxyTimingMode();
+    void announceWebProxyStream();
+    bool deferWebProxyReceiveTimeout(int64_t now);
+    int32_t webProxyStreamClass = 0;
 
     friend class EventObject;
     friend class ConnectionsManager;

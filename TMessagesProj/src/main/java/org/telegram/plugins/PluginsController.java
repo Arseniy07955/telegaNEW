@@ -149,6 +149,7 @@ public class PluginsController {
             loader = Python.getInstance().getModule("_plugin_loader");
             loader.callAttr("configure", new File(appContext.getFilesDir(), "plugin_libs").getAbsolutePath());
             pythonStarted = true;
+            PluginCrashGuard.install();
         } catch (Throwable t) {
             FileLog.e("zasto plugins: failed to start python", t);
         }

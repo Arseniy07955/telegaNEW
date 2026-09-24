@@ -483,7 +483,7 @@ def main() -> int:
     require(
         "SharedConfig.currentProxy = info" in proxy_list
         and "ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy, ProxyConnectionEvent.Origin.USER_SELECT)" in proxy_list
-        and "ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.USER_SELECT)" in proxy_list,
+        and "ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.settings, ProxyConnectionEvent.Origin.USER_SELECT)" in proxy_list,
         "ProxyListActivity saved-proxy tap must select the proxy with USER_SELECT generation/origin",
         failures,
     )

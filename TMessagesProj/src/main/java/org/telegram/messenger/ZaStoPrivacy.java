@@ -23,6 +23,7 @@ public final class ZaStoPrivacy {
     public static final String KEY_MUTE_SCREENSHOT_PING = "MUTE_SCREENSHOT_PING";
     public static final String KEY_DISABLE_ADS = "DISABLE_ADS";
     public static final String KEY_HIDE_ALL_CHATS = "HIDE_ALL_CHATS";
+    public static final String KEY_SHOW_ZASTOGRAM_PROMO = "SHOW_ZASTOGRAM_PROMO";
 
     /** Keep messages that the remote side deletes (anti-delete), marked instead of removed. */
     public static boolean KEEP_DELETED = true;
@@ -44,6 +45,12 @@ public final class ZaStoPrivacy {
 
     /** Disable Telegram/client sponsored messages, sponsored peers, video ads, and promo dialogs. */
     public static boolean DISABLE_ADS = true;
+
+    /**
+     * Keep the ZaStoGram channel pinned as a card on top of the chat list. When off, the
+     * channel is an ordinary dialog again and can be archived, muted or left like any other.
+     */
+    public static boolean SHOW_ZASTOGRAM_PROMO = true;
 
     /** Hide the built-in "All Chats" tab when at least one custom chat folder exists. */
     public static boolean HIDE_ALL_CHATS = false;
@@ -68,6 +75,7 @@ public final class ZaStoPrivacy {
             MUTE_SCREENSHOT_PING = p.getBoolean(KEY_MUTE_SCREENSHOT_PING, true);
             DISABLE_ADS = p.getBoolean(KEY_DISABLE_ADS, true);
             HIDE_ALL_CHATS = p.getBoolean(KEY_HIDE_ALL_CHATS, false);
+            SHOW_ZASTOGRAM_PROMO = p.getBoolean(KEY_SHOW_ZASTOGRAM_PROMO, true);
         } catch (Exception ignore) {
         }
     }
@@ -82,6 +90,7 @@ public final class ZaStoPrivacy {
             case KEY_MUTE_SCREENSHOT_PING: return MUTE_SCREENSHOT_PING;
             case KEY_DISABLE_ADS: return DISABLE_ADS;
             case KEY_HIDE_ALL_CHATS: return HIDE_ALL_CHATS;
+            case KEY_SHOW_ZASTOGRAM_PROMO: return SHOW_ZASTOGRAM_PROMO;
         }
         return false;
     }
@@ -96,6 +105,7 @@ public final class ZaStoPrivacy {
             case KEY_MUTE_SCREENSHOT_PING: MUTE_SCREENSHOT_PING = value; break;
             case KEY_DISABLE_ADS: DISABLE_ADS = value; break;
             case KEY_HIDE_ALL_CHATS: HIDE_ALL_CHATS = value; break;
+            case KEY_SHOW_ZASTOGRAM_PROMO: SHOW_ZASTOGRAM_PROMO = value; break;
             default: return;
         }
         try {

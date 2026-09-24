@@ -43,9 +43,9 @@ def main() -> None:
             "WSS must not masquerade as a proxy type")
     require("SharedConfig.currentProxy == info" in proxy_list,
             "normal proxy rows must still select currentProxy")
-    require("SharedConfig.setWssTransportEnabled(false)" in proxy_list
-            and "hasSelectedProxy && SharedConfig.wssTransportEnabled" in connections,
-            "activating a normal proxy must turn the WSS checkbox off")
+    require("applyWssTransport(hasSelectedProxy)" in connections
+            and "SharedConfig.setWssTransportEnabled(false)" not in connections,
+            "activating a normal proxy must suspend WSS without clearing its preference")
     require("buildSocks5" not in wss_cpp and "upstreamSocks" not in wss_h,
             "the WSS socket must contain no SOCKS proxy handshake")
     require(not MINI_BRIDGE.exists(),

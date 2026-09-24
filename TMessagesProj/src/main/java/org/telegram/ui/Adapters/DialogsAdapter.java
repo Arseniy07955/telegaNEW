@@ -250,6 +250,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             return false;
         }
         return SharedConfig.showZapretVpnSponsor &&
+                ZaStoPrivacy.SHOW_ZASTOGRAM_PROMO &&
                 folderId == 0 &&
                 dialogsType == DialogsActivity.DIALOGS_TYPE_DEFAULT &&
                 !isOnlySelect &&

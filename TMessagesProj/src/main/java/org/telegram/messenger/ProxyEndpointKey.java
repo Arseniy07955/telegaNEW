@@ -2,6 +2,8 @@ package org.telegram.messenger;
 
 import android.util.Base64;
 
+import org.telegram.proxy.WebProxyTransport;
+
 import java.net.IDN;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -16,11 +18,11 @@ public final class ProxyEndpointKey {
             return null;
         }
         StringBuilder builder = new StringBuilder();
-        appendKeyPart(builder, normalizeKeyPart(proxyInfo.address, true));
-        appendKeyPart(builder, String.valueOf(proxyInfo.port));
-        appendKeyPart(builder, normalizeKeyPart(proxyInfo.username, false));
-        appendKeyPart(builder, normalizeKeyPart(proxyInfo.password, false));
-        appendKeyPart(builder, normalizeKeyPart(proxyInfo.secret, false));
+        appendKeyPart(builder, normalizeKeyPart(proxyInfo.settings.getAddress(), true));
+        appendKeyPart(builder, String.valueOf(proxyInfo.settings.getPort()));
+        appendKeyPart(builder, normalizeKeyPart(proxyInfo.settings.getUser(), false));
+        appendKeyPart(builder, normalizeKeyPart(proxyInfo.settings.getPassword(), false));
+        appendKeyPart(builder, normalizeKeyPart(proxyInfo.settings.getSecret(), false));
         return builder.toString();
     }
 
@@ -29,8 +31,8 @@ public final class ProxyEndpointKey {
             return null;
         }
         StringBuilder builder = new StringBuilder();
-        appendKeyPart(builder, normalizeKeyPart(proxyInfo.address, true));
-        appendKeyPart(builder, String.valueOf(proxyInfo.port));
+        appendKeyPart(builder, normalizeKeyPart(proxyInfo.settings.getAddress(), true));
+        appendKeyPart(builder, String.valueOf(proxyInfo.settings.getPort()));
         return builder.toString();
     }
 
@@ -72,13 +74,13 @@ public final class ProxyEndpointKey {
         if (proxyInfo == null) {
             return "";
         }
-        byte[] secret = decodedSecretForLiveStage(proxyInfo.secret);
+        byte[] secret = decodedSecretForLiveStage(proxyInfo.settings.getSecret());
         String kind = secretKindForLiveStage(secret);
         if ("none".equals(kind)) {
             return networkLiveStage(proxyInfo);
         }
         StringBuilder builder = new StringBuilder();
-        builder.append(normalizeKeyPart(proxyInfo.address, false)).append(":").append(proxyInfo.port).append(":").append(kind);
+        builder.append(normalizeKeyPart(nativeAddress(proxyInfo), false)).append(":").append(nativePort(proxyInfo)).append(":").append(kind);
         if ("ee".equals(kind)) {
             String domain = secretDomainForLiveStage(secret);
             if (domain.length() > 0) {
@@ -97,7 +99,20 @@ public final class ProxyEndpointKey {
         if (proxyInfo == null) {
             return "";
         }
-        return normalizeKeyPart(proxyInfo.address, true) + ":" + proxyInfo.port;
+        return normalizeKeyPart(nativeAddress(proxyInfo), true) + ":" + nativePort(proxyInfo);
+    }
+
+    // Native stage events name the socket endpoint tgnet actually dials. A WEB
+    // proxy is dialled as the local browser bridge on loopback, not as its host.
+    private static String nativeAddress(SharedConfig.ProxyInfo proxyInfo) {
+        return proxyInfo.isWebProxy() ? "127.0.0.1" : proxyInfo.settings.getAddress();
+    }
+
+    private static int nativePort(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo.isWebProxy()) {
+            return WebProxyTransport.getActiveLocalPort(proxyInfo.settings.getAddress(), proxyInfo.settings.getSecret());
+        }
+        return proxyInfo.settings.getPort();
     }
 
     public static String networkFromLiveStage(String endpointKey) {
@@ -115,7 +130,7 @@ public final class ProxyEndpointKey {
         if (proxyInfo == null) {
             return "null";
         }
-        return proxyInfo.address + ":" + proxyInfo.port;
+        return proxyInfo.settings.getAddress() + ":" + proxyInfo.settings.getPort();
     }
 
     static byte[] decodedSecretForLiveStage(String secret) {

@@ -53,6 +53,8 @@ import org.telegram.messenger.ProxyRotationController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.StatsController;
+import org.telegram.proxy.ProxySettings;
+import org.telegram.proxy.ProxyWssFallback;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
@@ -238,7 +240,9 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
 
         public void setProxy(SharedConfig.ProxyInfo proxyInfo) {
-            textView.setText(proxyInfo.address + ":" + proxyInfo.port);
+            textView.setText(proxyInfo.settings.getType() == ProxySettings.Type.WEB
+                    ? proxyInfo.settings.getAddress() + " (WEB)"
+                    : proxyInfo.settings.getAddress() + ":" + proxyInfo.settings.getPort());
             currentInfo = proxyInfo;
         }
 
@@ -535,13 +539,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                         SharedConfig.currentProxy = proxyList.get(0);
 
                         if (!useProxySettings) {
-                            SharedPreferences preferences = MessagesController.getGlobalMainSettings();
                             SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
-                            editor.putString("proxy_ip", SharedConfig.currentProxy.address);
-                            editor.putString("proxy_pass", SharedConfig.currentProxy.password);
-                            editor.putString("proxy_user", SharedConfig.currentProxy.username);
-                            editor.putInt("proxy_port", SharedConfig.currentProxy.port);
-                            editor.putString("proxy_secret", SharedConfig.currentProxy.secret);
+                            SharedConfig.currentProxy.settings.toSharedPreferences(editor);
                             editor.commit();
                         }
                     } else {
@@ -550,10 +549,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     }
                 }
                 useProxySettings = !useProxySettings;
-                if (useProxySettings && SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 updateRows(true);
 
                 SharedPreferences preferences = MessagesController.getGlobalMainSettings();
@@ -576,7 +571,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 if (useProxySettings) {
                     ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
                 }
-                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.settings, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
                 NotificationCenter.getGlobalInstance().removeObserver(ProxyListActivity.this, NotificationCenter.proxySettingsChanged);
                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
                 NotificationCenter.getGlobalInstance().addObserver(ProxyListActivity.this, NotificationCenter.proxySettingsChanged);
@@ -608,7 +603,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 SharedConfig.saveConfig();
                 reapplyCurrentProxySettings();
             } else if (position == wssTransportRow) {
-                boolean enabled = !SharedConfig.wssTransportEnabled;
+                boolean enabled = !isWssTransportSelected();
                 if (enabled) {
                     disableLegacyProxyForWss();
                 }
@@ -623,10 +618,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 ((TextCheckCell) view).setChecked(enabled);
             } else if (position == callsRow) {
                 useProxyForCalls = !useProxyForCalls;
-                if (useProxyForCalls && SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 TextCheckCell textCheckCell = (TextCheckCell) view;
                 textCheckCell.setChecked(useProxyForCalls);
                 SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
@@ -638,19 +629,11 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     return;
                 }
                 SharedConfig.ProxyInfo info = proxyList.get(position - proxyStartRow);
-                if (SharedConfig.wssTransportEnabled) {
-                    SharedConfig.setWssTransportEnabled(false);
-                    ConnectionsManager.setWssTransportEnabled();
-                }
                 useProxySettings = true;
                 SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
-                editor.putString("proxy_ip", info.address);
-                editor.putString("proxy_pass", info.password);
-                editor.putString("proxy_user", info.username);
-                editor.putInt("proxy_port", info.port);
-                editor.putString("proxy_secret", info.secret);
+                info.settings.toSharedPreferences(editor);
                 editor.putBoolean("proxy_enabled", useProxySettings);
-                if (!info.secret.isEmpty()) {
+                if (!info.settings.getSecret().isEmpty()) {
                     useProxyForCalls = false;
                     editor.putBoolean("proxy_enabled_calls", false);
                 }
@@ -671,7 +654,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     TextCheckCell textCheckCell = (TextCheckCell) holder.itemView;
                     textCheckCell.setChecked(true);
                 }
-                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.USER_SELECT);
+                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.settings, ProxyConnectionEvent.Origin.USER_SELECT);
             } else if (position == proxyAddRow) {
                 presentFragment(new ProxySettingsActivity());
             } else if (position == deleteAllRow) {
@@ -773,7 +756,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                             if (links.length() > 0) {
                                 links.append("\n\n");
                             }
-                            links.append(info.getLink());
+                            links.append(info.settings.getLink());
                         }
 
                         Intent shareIntent = new Intent(Intent.ACTION_SEND);
@@ -817,7 +800,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         if (useProxySettings && SharedConfig.currentProxy != null) {
             ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
             updateCurrentProxyStatusCell();
-            ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+            ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.settings, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
         }
     }
 
@@ -831,11 +814,11 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         editor.putBoolean("proxy_enabled", false);
         editor.putBoolean("proxy_enabled_calls", false);
         editor.apply();
-        ConnectionsManager.setProxySettings(false, "", 1080, "", "", "", ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+        ConnectionsManager.setProxySettings(false, null, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
     }
 
     private boolean isWssTransportSelected() {
-        return SharedConfig.wssTransportEnabled;
+        return SharedConfig.wssTransportEnabled && !useProxySettings;
     }
 
     private boolean isProxySelectedForCurrentMode(SharedConfig.ProxyInfo info) {
@@ -929,12 +912,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
 
     private void updateRows(boolean notify) {
         rowCount = 0;
-        boolean wssTransportSelected = isWssTransportSelected();
-        if (wssTransportSelected && (useProxySettings || useProxyForCalls)) {
-            disableLegacyProxyForWss();
-        }
         useProxyRow = rowCount++;
-        if (useProxySettings && SharedConfig.currentProxy != null && SharedConfig.proxyList.size() > 1 && IS_PROXY_ROTATION_AVAILABLE) {
+        if (useProxySettings && SharedConfig.currentProxy != null && SharedConfig.currentProxy.settings.getType() != ProxySettings.Type.WEB && SharedConfig.proxyList.size() > 1 && IS_PROXY_ROTATION_AVAILABLE) {
             rotationRow = rowCount++;
             if (SharedConfig.proxyRotationEnabled) {
                 rotationTimeoutRow = rowCount++;
@@ -948,7 +927,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             rotationTimeoutRow = -1;
             rotationTimeoutInfoRow = -1;
         }
-        if (useProxySettings && SharedConfig.currentProxy != null && !SharedConfig.currentProxy.secret.isEmpty()) {
+        if (useProxySettings && SharedConfig.currentProxy != null && SharedConfig.currentProxy.settings.getType() == ProxySettings.Type.MTPROTO) {
             tlsProfileRow = rowCount++;
             tlsProfileInfoRow = rowCount++;
             clientHelloFragmentationRow = rowCount++;
@@ -1008,7 +987,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             proxyEndRow = -1;
         }
         proxyShadowRow = rowCount++;
-        if (SharedConfig.currentProxy == null || SharedConfig.currentProxy.secret.isEmpty()) {
+        if (SharedConfig.currentProxy == null || SharedConfig.currentProxy.settings.getSecret().isEmpty()) {
             boolean change = callsRow == -1;
             callsRow = rowCount++;
             callsDetailRow = rowCount++;
@@ -1042,6 +1021,10 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
         if (isWssTransportSelected()) {
             actionBar.setSubtitle(getString(R.string.WssTransportHeader) + ": " + getString(R.string.WssTransportOfficial));
+            return;
+        }
+        if (useProxySettings && ProxyWssFallback.isEngaged()) {
+            actionBar.setSubtitle(getString(R.string.WssTransportFallbackActive));
             return;
         }
         actionBar.setSubtitle(ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, useProxySettings, currentConnectionState));
@@ -1170,12 +1153,12 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
 
     // Looks up the proxy's country + network owner from the offline GeoIP table (once per proxy).
     private void ensureProxyGeoResolved(SharedConfig.ProxyInfo info) {
-        if (info == null || info.geoResolved || TextUtils.isEmpty(info.address)) {
+        if (info == null || info.geoResolved || TextUtils.isEmpty(info.settings.getAddress())) {
             return;
         }
         info.geoResolved = true;
         final SharedConfig.ProxyInfo target = info;
-        ProxyGeoIp.resolveAsync(info.address, result -> {
+        ProxyGeoIp.resolveAsync(info.settings.getAddress(), result -> {
             if (result == null) {
                 return;
             }
@@ -1422,7 +1405,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     } else if (position == mtProxySoftMuxRow) {
                         checkCell.setTextAndCheck(getString(R.string.MtProxySoftMux), SharedConfig.mtProxySoftMux, true);
                     } else if (position == wssTransportRow) {
-                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), SharedConfig.wssTransportEnabled, true);
+                        checkCell.setTextAndCheck(getString(R.string.UseWssTransport), isWssTransportSelected(), true);
                     } else if (position == callRelayTcpTlsRow) {
                         checkCell.setTextAndCheck(getString(R.string.CallRelayTcpTls), SharedConfig.callRelayTcpTlsEnabled, false);
                     }
@@ -1564,7 +1547,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 } else if (position == rotationRow) {
                     checkCell.setChecked(SharedConfig.proxyRotationEnabled);
                 } else if (position == wssTransportRow) {
-                    checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                    checkCell.setChecked(isWssTransportSelected());
                 } else if (position == callRelayTcpTlsRow) {
                     checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }
@@ -1590,7 +1573,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 } else if (position == mtProxySoftMuxRow) {
                     checkCell.setChecked(SharedConfig.mtProxySoftMux);
                 } else if (position == wssTransportRow) {
-                    checkCell.setChecked(SharedConfig.wssTransportEnabled);
+                    checkCell.setChecked(isWssTransportSelected());
                 } else if (position == callRelayTcpTlsRow) {
                     checkCell.setChecked(SharedConfig.callRelayTcpTlsEnabled);
                 }

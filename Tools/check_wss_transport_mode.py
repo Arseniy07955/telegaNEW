@@ -87,8 +87,10 @@ def main() -> None:
     require("disableLegacyProxyForWss" in proxy_list
             and "ConnectionsManager.setProxySettings(false" in proxy_list,
             "enabling WSS must disable the legacy proxy")
-    require("SharedConfig.setWssTransportEnabled(false)" in proxy_list,
-            "selecting a normal proxy must disable WSS")
+    require("SharedConfig.setWssTransportEnabled(false)" not in proxy_list,
+            "selecting a proxy must only suspend WSS, not clear the user's WSS preference")
+    require("SharedConfig.wssTransportEnabled && !useProxySettings" in proxy_list,
+            "the WSS checkbox must show WSS as off while a proxy is in use")
     for forbidden in ("TYPE_WSS", "createWssGateway", "WSS_TRANSPORT_OPTIONS", "wssCustomGatewayRow"):
         require(forbidden not in proxy_settings + proxy_list,
                 f"proxy screens must not retain {forbidden}")

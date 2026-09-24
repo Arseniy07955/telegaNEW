@@ -1078,7 +1078,16 @@ void ConnectionsManager::onConnectionDataReceived(Connection *connection, Native
                 if (delegate != nullptr) {
                     delegate->onProxyError(instanceNum);
                 }
+            } else if (code == -404 && (datacenter->isCdnDatacenter || PFS_ENABLED)
+                    && connection->isCurrentWebProxyBridge()
+                    && ++connection->webProxyKeyNotFoundStrikes < WEB_PROXY_KEY_NOT_FOUND_STRIKES) {
+                // A WEB proxy stream reset by its relay hop looks exactly like
+                // a lost temporary key; recreating the key is expensive, so
+                // the first -404 only reconnects the stream.
+                if (LOGS_ENABLED) DEBUG_W("connection(%p, account%u, dc%u, type %d) web_proxy_key_not_found strike=%u/%d action=reconnect_keep_key", connection, instanceNum, datacenter->getDatacenterId(), connection->getConnectionType(), connection->webProxyKeyNotFoundStrikes, WEB_PROXY_KEY_NOT_FOUND_STRIKES);
+                connection->reconnect();
             } else if (code == -404 && (datacenter->isCdnDatacenter || PFS_ENABLED)) {
+                connection->webProxyKeyNotFoundStrikes = 0;
                 if (!datacenter->isHandshaking(connection->isMediaConnection) || datacenter->isCdnDatacenter) {
                     datacenter->clearAuthKey(connection->isMediaConnection ? HandshakeTypeMediaTemp : HandshakeTypeTemp);
                     datacenter->beginHandshake(connection->isMediaConnection ? HandshakeTypeMediaTemp : HandshakeTypeTemp, true);
@@ -1171,6 +1180,9 @@ void ConnectionsManager::onConnectionDataReceived(Connection *connection, Native
             connection->reconnect();
             return;
         }
+        // The server knows our key: a later -404 on this stream is judged
+        // afresh (WEB_PROXY_KEY_NOT_FOUND_STRIKES).
+        connection->webProxyKeyNotFoundStrikes = 0;
         data->position(mark + 24);
 
         int64_t messageServerSalt = data->readInt64(&error);

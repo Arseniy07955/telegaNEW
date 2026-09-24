@@ -12,6 +12,8 @@
 #include <time.h>
 #include <cerrno>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 #include <memory.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -153,6 +155,7 @@
 #define currentWssTransport stateMachine.wss.transport
 #define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
 #define wssFirstFrameSentTime stateMachine.wss.firstFrameSentTime
+#define wssOpenTime stateMachine.wss.openTime
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -193,7 +196,54 @@ static constexpr int64_t TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS = 5500;
 static constexpr int64_t MT_PROXY_PLAIN_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t MT_PROXY_TLS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
 static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_NO_RESPONSE_TIMEOUT_MS;
+// На медиа-соединении первым уходит запрос куска файла, а не рукопожатие: для
+// «холодного» файла сервер честно думает дольше 5,5 с. Короткий сторож здесь
+// ложно объявлял живой kwsN-1 чёрной дырой и уводил медиа в обход.
+static constexpr int64_t WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS = 20000;
+// Зависшее TLS-рукопожатие иначе держит загрузку файла до её 25–40 с таймаута.
+static constexpr int64_t WSS_HANDSHAKE_TIMEOUT_MS = 8000;
+// Провайдер глотает SYN целого потока, повторы по нему бесполезны: новый сокет проходит.
+static constexpr int64_t WSS_TCP_CONNECT_TIMEOUT_MS = 2500;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
+
+// WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
+// cross JNI and must stay in sync with the Java constants.
+static const char *const kWebProxyReceiveReasonNames[] = {
+        "unknown",
+        "stream_closed",
+        "carrier_down",
+        "max_wait",
+        "carrier_stalled",
+        "request_queued",
+        "reply_queued",
+        "reply_pending",
+        "reply_missing",
+        "reply_timeout",
+};
+// A carrier verdict never parks a connection for longer than this before
+// asking again, whatever it suggested.
+static constexpr int64_t WEB_PROXY_MAX_RECHECK_MS = 8000;
+
+static const char *webProxyReceiveReasonName(int32_t reason) {
+    const int32_t count = (int32_t) (sizeof(kWebProxyReceiveReasonNames) / sizeof(kWebProxyReceiveReasonNames[0]));
+    return reason > 0 && reason < count ? kWebProxyReceiveReasonNames[reason] : kWebProxyReceiveReasonNames[0];
+}
+
+static const char *webProxyStreamClassName(int32_t streamClass) {
+    switch (streamClass) {
+        case WEB_PROXY_STREAM_CLASS_DOWNLOAD:
+            return "download";
+        case WEB_PROXY_STREAM_CLASS_UPLOAD:
+            return "upload";
+        default:
+            return "interactive";
+    }
+}
+
+static int socketUnsentBytes(int fd) {
+    int value = 0;
+    return (fd >= 0 && ioctl(fd, SIOCOUTQ, &value) == 0) ? value : 0;
+}
 
 static bool transportAppDataUnanswered(int64_t now, bool firstDataSent, bool noReplyYet, int64_t firstDataSentTime, int64_t timeoutMs) {
     return firstDataSent && noReplyYet && firstDataSentTime > 0 && now - firstDataSentTime > timeoutMs;
@@ -1406,7 +1456,7 @@ ConnectionSocket::~ConnectionSocket() {
 }
 
 bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode) {
-    if (proxyAuthState < 10 || socketFd < 0) {
+    if (proxyAuthState < 10 || socketFd < 0 || isCurrentWebProxyBridge()) {
         return false;
     }
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
@@ -1728,6 +1778,12 @@ bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6) 
     if (!isCurrentMtProxyConnection() || (currentMtProxyEndpointKey.empty() && currentMtProxyNetworkEndpointKey.empty())) {
         return false;
     }
+    if (isCurrentWebProxyBridge()) {
+        // The WEB bridge is a loopback socket into the WebView carrier: no
+        // remote relay to spare and no DPI to hide from, so an endpoint
+        // cooldown would only delay recovery of the carrier's streams.
+        return false;
+    }
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
     if (proxyEndpointBackoffReady) {
         setProxyEndpointBackoffReady(false, "endpoint_backoff_ready_consumed");
@@ -1825,6 +1881,11 @@ bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) 
     if (!isCurrentMtProxyConnection() || currentMtProxyNetworkEndpointKey.empty()) {
         return false;
     }
+    if (isCurrentWebProxyBridge()) {
+        // Loopback bridge connects are cheap logical streams on one browser
+        // carrier; serializing them per endpoint only slows connection setup.
+        return false;
+    }
     if (proxyEndpointTcpConnectActive) {
         return false;
     }
@@ -1871,7 +1932,7 @@ void ConnectionSocket::releaseMtProxyEndpointTcpConnect(const char *reason) {
 }
 
 bool ConnectionSocket::scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6) {
-    if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty()) {
+    if (!isCurrentMtProxyConnection() || currentMtProxyDnsCacheKey.empty() || isCurrentWebProxyBridge()) {
         return false;
     }
     if (proxyEndpointDnsCoalesceReady) {
@@ -3255,6 +3316,7 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
     currentTransportWss = false;
     currentWssRoute = tgnet::wss::Route();
     wssFirstFrameSentTime = 0;
+    wssOpenTime = 0;
     setWaitingForHostResolve("", "openConnection_reset_cleanup");
     setAdjustWriteOpAfterResolve(false, "openConnection_reset_cleanup");
     setAdjustWriteOpAfterPreTcpGate(false, "openConnection_reset_cleanup");
@@ -3395,6 +3457,12 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
         proxyOptions = ConnectionsManager::getInstance(instanceNum).proxyMtProxyOptions;
     }
+    stateMachine.endpointGate.webProxyBridge = proxyOptions.webBridge && !proxyAddress->empty() && !proxySecret->empty();
+    stateMachine.endpointGate.webProxyBridgePort = stateMachine.endpointGate.webProxyBridge ? proxyPort : 0;
+    stateMachine.endpointGate.webProxyLocalPort = 0;
+    stateMachine.endpointGate.webProxyWaitAnchor = 0;
+    stateMachine.endpointGate.webProxyRecheckAt = 0;
+    stateMachine.endpointGate.webProxyWaitReason = 0;
 
     bool shouldUseWss = overrideProxyAddress.empty()
             && manager.wssEnabled
@@ -3404,6 +3472,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             datacenterId,
             mediaConnection,
             manager.testBackend,
+            address,
             &selectedWssRoute);
 
     if (shouldUseWss && manager.getIpStratagy() == USE_IPV6_ONLY
@@ -3811,6 +3880,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         }
         setEpollRegistered(true, "wss_epoll_ctl_add");
         setTransportState(TransportState::EpollRegistered, "wss_epoll_ctl_add");
+        wssOpenTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         proxyCheckDiagnostic = "wss_tls_handshake";
         adjustWriteOp();
         return;
@@ -3880,6 +3950,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         } else {
             setEpollRegistered(true, "epoll_ctl_add");
             setTransportState(TransportState::EpollRegistered, "epoll_ctl_add");
+            announceWebProxyStream();
         }
     }
     if (epollRegistered && (adjustWriteOpAfterResolve || adjustWriteOpAfterPreTcpGate)) {
@@ -3912,6 +3983,10 @@ bool ConnectionSocket::isCurrentTransportWss() {
     return currentTransportWss && currentWssTransport != nullptr;
 }
 
+bool ConnectionSocket::isCurrentWssTunnel() {
+    return isCurrentTransportWss() && currentWssRoute.tunnel;
+}
+
 bool ConnectionSocket::isCurrentMtProxyConnection() {
     return currentSecretKind != nullptr
            && strcmp(currentSecretKind, "none") != 0
@@ -3921,6 +3996,97 @@ bool ConnectionSocket::isCurrentMtProxyConnection() {
 
 bool ConnectionSocket::isCurrentDirectConnection() const {
     return stateMachine.diagnostics.transportMode == TransportMode::Direct;
+}
+
+bool ConnectionSocket::isCurrentWebProxyBridge() const {
+    return stateMachine.endpointGate.webProxyBridge;
+}
+
+void ConnectionSocket::setWebProxyStreamClass(int32_t streamClass) {
+    webProxyStreamClass = streamClass;
+}
+
+// Tells the WEB bridge which class of stream this socket carries, keyed by the
+// socket's local port (the remote port of the socket the bridge accepts), so
+// its uplink scheduler can put chat requests ahead of file transfers. The
+// port is bound by connect() already, before any byte reaches the bridge.
+void ConnectionSocket::announceWebProxyStream() {
+    auto &gate = stateMachine.endpointGate;
+    gate.webProxyLocalPort = 0;
+    // Proxy checks dial the bridge with an override and keep plain tgnet
+    // timing: they measure the proxy, they do not share its load.
+    if (!isCurrentWebProxyBridge() || hasMtProxyOverride() || socketFd < 0 || gate.webProxyBridgePort == 0) {
+        return;
+    }
+    sockaddr_storage local;
+    socklen_t length = sizeof(local);
+    memset(&local, 0, sizeof(local));
+    if (getsockname(socketFd, (sockaddr *) &local, &length) != 0) {
+        if (LOGS_ENABLED) DEBUG_E("connection(%p) web_proxy_stream_open getsockname failed errno=%d", this, errno);
+        return;
+    }
+    uint16_t localPort = 0;
+    if (local.ss_family == AF_INET) {
+        localPort = ntohs(((sockaddr_in *) &local)->sin_port);
+    } else if (local.ss_family == AF_INET6) {
+        localPort = ntohs(((sockaddr_in6 *) &local)->sin6_port);
+    }
+    if (localPort == 0) {
+        return;
+    }
+    gate.webProxyLocalPort = localPort;
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    if (manager.delegate != nullptr) {
+        manager.delegate->onWebProxyStreamOpened(gate.webProxyBridgePort, localPort, webProxyStreamClass, instanceNum);
+    }
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) web_proxy_stream_open class=%s", this, webProxyStreamClassName(webProxyStreamClass));
+}
+
+// Asked when a WEB bridge connection saw no data for its receive timeout.
+// Every such connection is one stream of a single shared carrier, so silence
+// alone cannot tell a reply still queued behind a download from a dead
+// stream: the carrier can (WebProxyFlow.decideReceiveWait). Returns true to
+// keep waiting. A stalled carrier is recovered by the bridge once for all of
+// its streams instead of by N independent timeouts.
+bool ConnectionSocket::deferWebProxyReceiveTimeout(int64_t now) {
+    auto &gate = stateMachine.endpointGate;
+    if (!isCurrentWebProxyBridge() || gate.webProxyLocalPort == 0 || !onConnectedSent) {
+        return false;
+    }
+    ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
+    if (manager.delegate == nullptr) {
+        return false;
+    }
+    if (gate.webProxyWaitAnchor != lastEventTime) {
+        // Data arrived (or a new request started the timer) since the
+        // carrier was last asked: this is a new silence.
+        gate.webProxyWaitAnchor = lastEventTime;
+        gate.webProxyRecheckAt = 0;
+        gate.webProxyWaitReason = 0;
+    }
+    if (gate.webProxyRecheckAt > now) {
+        return true;
+    }
+    const int64_t verdict = manager.delegate->webProxyReceiveWait(gate.webProxyBridgePort, gate.webProxyLocalPort, gate.webProxyWaitAnchor, instanceNum);
+    if (verdict > 0) {
+        int64_t waitMs = verdict >> 4;
+        const int32_t reason = (int32_t) (verdict & 0xf);
+        if (waitMs < 1) {
+            waitMs = 1;
+        } else if (waitMs > WEB_PROXY_MAX_RECHECK_MS) {
+            waitMs = WEB_PROXY_MAX_RECHECK_MS;
+        }
+        gate.webProxyRecheckAt = now + waitMs;
+        if (LOGS_ENABLED && reason != gate.webProxyWaitReason) {
+            DEBUG_D("connection(%p) web_proxy_receive_wait verdict=wait reason=%s class=%s silence_ms=%lld recheck_ms=%lld", this, webProxyReceiveReasonName(reason), webProxyStreamClassName(webProxyStreamClass), (long long) (now - gate.webProxyWaitAnchor), (long long) waitMs);
+        }
+        gate.webProxyWaitReason = reason;
+        return true;
+    }
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) web_proxy_receive_wait verdict=fail reason=%s class=%s silence_ms=%lld", this, webProxyReceiveReasonName((int32_t) -verdict), webProxyStreamClassName(webProxyStreamClass), (long long) (now - gate.webProxyWaitAnchor));
+    gate.webProxyRecheckAt = 0;
+    gate.webProxyWaitReason = 0;
+    return false;
 }
 
 bool ConnectionSocket::hasMtProxyOverride() const {
@@ -4049,7 +4215,9 @@ void ConnectionSocket::publishProxyConnectionStage(const char *diagnostic) {
     // consumeSuggestedReconnectHoldMs (retrying earlier is denied pre-TCP
     // anyway) and (b) the Java layer receives THE hold with the event and
     // never re-derives it from its own clock.
-    if (MtProxyEndpointPolicy::failureNeedsCooldown(diagnostic)) {
+    // The WEB loopback bridge has no endpoint cooldown, so it never carries a
+    // cooldown-derived reconnect hold either.
+    if (!isCurrentWebProxyBridge() && MtProxyEndpointPolicy::failureNeedsCooldown(diagnostic)) {
         int64_t cooldownHoldMs = MtProxyEndpointPolicy::cooldownMs(
                 diagnostic,
                 normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode),
@@ -4478,6 +4646,7 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     currentWssRoute = tgnet::wss::Route();
     outgoingWssPacketSizes.clear();
     wssFirstFrameSentTime = 0;
+    wssOpenTime = 0;
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -5143,10 +5312,34 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
         return false;
     }
     if (isCurrentTransportWss()
+        && !currentWssTransport->isReady()
+        && wssOpenTime > 0) {
+        const bool tcpPending = currentWssTransport->handshakePhase() == tgnet::transport::HandshakePhase::None;
+        if (now - wssOpenTime > (tcpPending ? WSS_TCP_CONNECT_TIMEOUT_MS : WSS_HANDSHAKE_TIMEOUT_MS)) {
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_handshake_timeout elapsed=%lld tcp_pending=%d phase=%s", this, (long long) (now - wssOpenTime), tcpPending ? 1 : 0, proxyCheckDiagnostic.c_str());
+            currentWssTransport->timedOut();
+            closeSocket(2, 0);
+            return true;
+        }
+    }
+    if (isCurrentTransportWss()
+        && currentWssTransport->isReady()
+        && wssFirstFrameSentTime > 0
+        && (webProxyStreamClass == WEB_PROXY_STREAM_CLASS_UPLOAD
+            || outgoingByteStream->hasData()
+            || currentWssTransport->queuedOutputBytes() > 0
+            || socketUnsentBytes(currentWssTransport->fd()) > 0)) {
+        // WHY: кусок файла в 512 КБ на медленной отдаче или за VPN, который сам
+        // подтверждает TCP, уходит дольше сторожа, и отправка перезапускалась
+        // с нуля каждые 5,5 с, так и не завершившись; её держит таймаут соединения.
+        wssFirstFrameSentTime = now;
+    }
+    if (isCurrentTransportWss()
         && currentWssTransport->isReady()
         && transportAppDataUnanswered(now, wssFirstFrameSentTime > 0,
                 currentWssTransport->handshakePhase() != tgnet::transport::HandshakePhase::FirstDataReceived,
-                wssFirstFrameSentTime, WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
+                wssFirstFrameSentTime,
+                currentMediaConnection ? WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS : WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS)) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_appdata_no_response_timeout elapsed=%lld", this, (long long) (now - wssFirstFrameSentTime));
         currentWssTransport->noteAppDataTimeout();
         proxyCheckDiagnostic = "wss_appdata_no_response_timeout";
@@ -5167,8 +5360,12 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
         closeSocket(2, 0);
         return true;
     }
+    // The WEB bridge is loopback into a shared carrier: a first reply queued
+    // behind other streams is not a DPI blackhole, so it is judged by the
+    // carrier in the receive timeout below instead of this 5.5 s probe.
     if (isCurrentMtProxyConnection()
         && !currentSecretIsFakeTls
+        && !isCurrentWebProxyBridge()
         && proxyCheckDiagnostic == "mtproxy_packet_sent_no_response"
         && transportAppDataUnanswered(now, mtproxyFirstPlainDataSentLogged,
                 !mtproxyFirstPlainDataReceivedLogged,
@@ -5203,6 +5400,9 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
         if (!onConnectedSent || hasPendingRequests()) {
+            if (isCurrentWebProxyBridge() && deferWebProxyReceiveTimeout(now)) {
+                return false;
+            }
             if (isCurrentTransportWss() && currentWssTransport != nullptr) {
                 currentWssTransport->timedOut();
             }

@@ -36,14 +36,10 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
     private void switchToProxy(SharedConfig.ProxyInfo info, String reason) {
         engine.recordSwitch(info);
         SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
-        editor.putString("proxy_ip", info.address);
-        editor.putString("proxy_pass", info.password);
-        editor.putString("proxy_user", info.username);
-        editor.putInt("proxy_port", info.port);
-        editor.putString("proxy_secret", info.secret);
         editor.putBoolean("proxy_enabled", true);
+        info.settings.toSharedPreferences(editor);
 
-        if (!info.secret.isEmpty()) {
+        if (!info.settings.getSecret().isEmpty()) {
             editor.putBoolean("proxy_enabled_calls", false);
         }
         editor.apply();
@@ -52,7 +48,7 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
         ProxyRuntimeStateStore.markConnectionStarting(info, ProxyConnectionEvent.Origin.ROTATION_CANDIDATE);
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyChangedByRotation);
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged, ROTATION_SETTINGS_CHANGE);
-        ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, ProxyConnectionEvent.Origin.ROTATION_CANDIDATE);
+        ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.settings, ProxyConnectionEvent.Origin.ROTATION_CANDIDATE);
         if ("fallback".equals(reason)) {
             log("switch fallback endpoint=" + endpoint(info) + " ping=" + info.ping);
         } else {
@@ -231,6 +227,6 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
         if (proxyInfo == null) {
             return "null";
         }
-        return proxyInfo.address + ":" + proxyInfo.port;
+        return proxyInfo.settings.getAddress() + ":" + proxyInfo.settings.getPort();
     }
 }

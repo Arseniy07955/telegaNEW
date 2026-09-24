@@ -34,14 +34,24 @@ import java.util.concurrent.CountDownLatch;
 @Keep
 public class PushListenerController {
     public static final int PUSH_TYPE_FIREBASE = 2,
+        PUSH_TYPE_SIMPLE = 4,
         PUSH_TYPE_HUAWEI = 13;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef({
             PUSH_TYPE_FIREBASE,
+            PUSH_TYPE_SIMPLE,
             PUSH_TYPE_HUAWEI
     })
     public @interface PushType {}
+
+    public static String pushTypeTag(int pushType) {
+        switch (pushType) {
+            case PUSH_TYPE_FIREBASE: return "fcm";
+            case PUSH_TYPE_SIMPLE: return "up";
+            default: return "hcm";
+        }
+    }
 
     public static final int NOTIFICATION_ID = 1;
     private static CountDownLatch countDownLatch = new CountDownLatch(1);
@@ -66,7 +76,7 @@ public class PushListenerController {
                 if (userConfig.getClientUserId() != 0) {
                     final int currentAccount = a;
                     if (sendStat) {
-                        String tag = pushType == PUSH_TYPE_FIREBASE ? "fcm" : "hcm";
+                        String tag = pushTypeTag(pushType);
                         TLRPC.TL_help_saveAppLog req = new TLRPC.TL_help_saveAppLog();
                         TLRPC.TL_inputAppEvent event = new TLRPC.TL_inputAppEvent();
                         event.time = SharedConfig.pushStringGetTimeStart;
@@ -94,7 +104,7 @@ public class PushListenerController {
     }
 
     public static void processRemoteMessage(@PushType int pushType, String data, long time) {
-        String tag = pushType == PUSH_TYPE_FIREBASE ? "FCM" : "HCM";
+        String tag = pushTypeTag(pushType).toUpperCase(Locale.ROOT);
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d(tag + " PRE START PROCESSING");
         }
@@ -1660,6 +1670,38 @@ public class PushListenerController {
         void onRequestPushToken();
         @PushType
         int getPushType();
+    }
+
+    public final static class UnifiedPushListenerServiceProvider implements IPushListenerServiceProvider {
+        public final static UnifiedPushListenerServiceProvider INSTANCE = new UnifiedPushListenerServiceProvider();
+
+        private UnifiedPushListenerServiceProvider() {}
+
+        @Override
+        public String getLogTitle() {
+            return "UnifiedPush";
+        }
+
+        @Override
+        public int getPushType() {
+            return PUSH_TYPE_SIMPLE;
+        }
+
+        @Override
+        public void onRequestPushToken() {
+            final String endpoint = UnifiedPushController.savedEndpoint();
+            if (!TextUtils.isEmpty(endpoint)) {
+                PushListenerController.sendRegistrationToServer(getPushType(), endpoint);
+            }
+            // The distributor answers a repeated registration with the same endpoint,
+            // or with a new one if it moved.
+            UnifiedPushController.register();
+        }
+
+        @Override
+        public boolean hasServices() {
+            return UnifiedPushController.findDistributor() != null;
+        }
     }
 
     public final static class GooglePushListenerServiceProvider implements IPushListenerServiceProvider {

@@ -12,6 +12,7 @@ STORE = MESSENGER / "ProxyRuntimeStateStore.java"
 DIAGNOSTICS = MESSENGER / "ProxyCheckDiagnostics.java"
 POLICY = MESSENGER / "ProxyPhasePolicy.java"
 SHARED_CONFIG = MESSENGER / "SharedConfig.java"
+PROXY_SETTINGS = ROOT / "TMessagesProj/src/main/java/org/telegram/proxy/ProxySettings.java"
 PHASE_CONTRACT = ROOT / "Tools/mtproxy_phase_contract.py"
 CHECK_ALL = ROOT / "Tools/check_mtproxy_all.py"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
@@ -128,9 +129,9 @@ def main() -> int:
         failures,
     )
     require_text(SHARED_CONFIG, "private static int clampProxyRotationTimeout", "SharedConfig must own timeout index clamping", failures)
-    require_text(SHARED_CONFIG, "proxySecret.equals(info.secret)", "currentProxy restore must match secret as part of identity", failures)
+    require_text(PROXY_SETTINGS, "Objects.equals(secret, that.secret)", "currentProxy restore must match secret as part of identity", failures)
     load_proxy_list = method_body(shared_config, "public static void loadProxyList")
-    current_matches = load_proxy_list.count("sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)")
+    current_matches = load_proxy_list.count("Objects.equals(proxySettings, info.settings)")
     require(
         current_matches >= 2,
         f"{SHARED_CONFIG.relative_to(ROOT)}: V2/V3 and legacy proxy-list load branches must restore currentProxy by exact identity including secret",

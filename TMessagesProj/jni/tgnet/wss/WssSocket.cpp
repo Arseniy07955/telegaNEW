@@ -32,6 +32,8 @@ namespace wss {
 namespace {
 
 constexpr const char *kOfficialPath = "/apiws";
+constexpr const char *kTunnelHost = "edge.amberwick.workers.dev";
+constexpr int32_t kTunnelOnlyDcId = 203;
 // Size of the MTProto obfuscation header. Measured against the official relays:
 // a first binary frame of 63 bytes never gets a reply, 64 always does.
 constexpr size_t kObfuscationHeaderSize = 64;
@@ -88,6 +90,7 @@ bool preferFallback(const Route &route) {
 // обычным путём. Счётчик сбрасывается только реально полученными данными.
 constexpr uint32_t kRouteFailuresBeforeSuppress = 3;
 constexpr int64_t kRouteSuppressTtlMs = 10 * 60 * 1000;
+constexpr int64_t kMediaRouteSuppressTtlMs = 30 * 60 * 1000;
 
 struct RouteHealth {
     uint32_t consecutiveFailures = 0;
@@ -116,8 +119,13 @@ void recordRouteUnreachable(const Route &route) {
     if (health.suppressedUntil > monotonicMillis()) {
         return;
     }
-    if (++health.consecutiveFailures >= kRouteFailuresBeforeSuppress) {
-        health.suppressedUntil = monotonicMillis() + kRouteSuppressTtlMs;
+    // Медиа-релеи kwsN-1 провайдеры режут целиком, пока основной kwsN жив:
+    // ждать три таймаута по 8 с значит полминуты без медиа, поэтому медиа
+    // уходит в туннель после первой же неудачи и остаётся там дольше.
+    const bool media = route.domain.find("-1.web.telegram.org") != std::string::npos;
+    const uint32_t threshold = media ? 1 : kRouteFailuresBeforeSuppress;
+    if (++health.consecutiveFailures >= threshold) {
+        health.suppressedUntil = monotonicMillis() + (media ? kMediaRouteSuppressTtlMs : kRouteSuppressTtlMs);
     }
 }
 
@@ -247,7 +255,30 @@ const char *officialRelayIpForDc(int32_t dcId) {
 
 } // namespace
 
-bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *route) {
+static bool TunnelRoute(const std::string &dcAddress, Route *route) {
+    struct in_addr parsed;
+    if (inet_pton(AF_INET, dcAddress.c_str(), &parsed) != 1) {
+        return false;
+    }
+    Route result;
+    result.relayHost = kTunnelHost;
+    result.connectHost = kTunnelHost;
+    result.relayPort = 443;
+    result.domain = kTunnelHost;
+    result.path = std::string(kOfficialPath) + "?dst=" + dcAddress;
+    result.tunnel = true;
+    if (routeSuppressed(result.domain)) {
+        return false;
+    }
+    *route = std::move(result);
+    return true;
+}
+
+bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route) {
+    if (route != nullptr && !testBackend && dcId == kTunnelOnlyDcId) {
+        // DC203 отдаёт медиа аккаунтам без Premium и своего kws-релея не имеет.
+        return TunnelRoute(dcAddress, route);
+    }
     const char *relayIp = officialRelayIpForDc(dcId);
     if (route == nullptr || testBackend || dcId < 1 || dcId > 5 || relayIp == nullptr) {
         return false;
@@ -262,8 +293,9 @@ bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *
     result.viaFallback = preferFallback(result);
     result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
     if (routeSuppressed(result.domain)) {
-        // Релей этого датацентра недоступен; пусть соединение идёт напрямую.
-        return false;
+        // Релей этого датацентра недоступен: сначала туннель через Worker,
+        // а если недоступен и он, соединение идёт напрямую.
+        return TunnelRoute(dcAddress, route);
     }
     *route = std::move(result);
     return true;

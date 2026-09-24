@@ -24,11 +24,15 @@ import android.util.Base64;
 import android.webkit.WebView;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.core.content.pm.ShortcutManagerCompat;
 
 import org.json.JSONObject;
+import org.telegram.proxy.ProxySettings;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.InputSerializedData;
+import org.telegram.tgnet.OutputSerializedData;
 import org.telegram.tgnet.SerializedData;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
@@ -38,10 +42,8 @@ import org.telegram.ui.LaunchActivity;
 
 import java.io.File;
 import java.io.RandomAccessFile;
-import java.io.UnsupportedEncodingException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -49,17 +51,22 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 public class SharedConfig {
     /**
      * V2: Ping and check time serialized
      * V3: WSS transport metadata serialized separately from SOCKS5/MTProto fields
      * V4: Proxy rows contain proxies only; WSS is a global transport toggle
+     * V5: V4 plus the proxy type (SOCKS5/MTProto/WEB) from upstream ProxySettings.
+     *     Upstream Telegram uses V3 for the same field, but ZaStoGram's V3 already
+     *     means the obsolete WSS row metadata, so the type gets its own version.
      */
     private final static int PROXY_SCHEMA_V2 = 2;
     private final static int PROXY_SCHEMA_V3 = 3;
     private final static int PROXY_SCHEMA_V4 = 4;
-    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V4;
+    private final static int PROXY_SCHEMA_V5 = 5;
+    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V5;
 
     private static final int TRANSPORT_LEGACY_PROXY = 0;
 
@@ -424,7 +431,7 @@ public class SharedConfig {
     public static boolean isPriorityProxy(ProxyInfo info) {
         return info != null
                 && !proxyPriorityKeys.isEmpty()
-                && proxyPriorityKeys.contains(proxyPriorityKey(info.address, info.port));
+                && proxyPriorityKeys.contains(proxyPriorityKey(info.settings.getAddress(), info.settings.getPort()));
     }
 
     public static void setProxyPriorityKeys(Collection<String> keys) {
@@ -445,13 +452,7 @@ public class SharedConfig {
     }
 
     public static class ProxyInfo {
-
-        public String address;
-        public int port;
-        public String username;
-        public String password;
-        public String secret;
-
+        public @NonNull ProxySettings settings;
         public long proxyCheckPingId;
         public long ping;
         public boolean checking;
@@ -470,41 +471,80 @@ public class SharedConfig {
         public String geoOwner;          // network owner / ASN org (e.g. "LLC VK"); null/empty = unknown
         public boolean geoResolved;      // GeoIP lookup already attempted (success or miss)
 
+        public ProxyInfo(@NonNull ProxySettings proxySettings) {
+            settings = proxySettings;
+        }
+
+        // SOCKS5/MTProto row from separate fields: an empty secret means SOCKS5.
         public ProxyInfo(String address, int port, String username, String password, String secret) {
-            this.address = address;
-            this.port = port;
-            this.username = username;
-            this.password = password;
-            this.secret = secret;
-            if (this.address == null) {
-                this.address = "";
-            }
-            if (this.password == null) {
-                this.password = "";
-            }
-            if (this.username == null) {
-                this.username = "";
-            }
-            if (this.secret == null) {
-                this.secret = "";
-            }
+            this(ProxySettings.builder()
+                    .setType(TextUtils.isEmpty(secret) ? ProxySettings.Type.SOCKS5 : ProxySettings.Type.MTPROTO)
+                    .setAddress(address)
+                    .setPort(port)
+                    .setUser(username)
+                    .setPassword(password)
+                    .setSecret(secret)
+                    .build());
+        }
+
+        public boolean isWebProxy() {
+            return settings.getType() == ProxySettings.Type.WEB;
         }
 
         public String getLink() {
-            StringBuilder url = new StringBuilder(!TextUtils.isEmpty(secret) ? "https://t.me/proxy?" : "https://t.me/socks?");
-            try {
-                url.append("server=").append(URLEncoder.encode(address, "UTF-8")).append("&").append("port=").append(port);
-                if (!TextUtils.isEmpty(username)) {
-                    url.append("&user=").append(URLEncoder.encode(username, "UTF-8"));
-                }
-                if (!TextUtils.isEmpty(password)) {
-                    url.append("&pass=").append(URLEncoder.encode(password, "UTF-8"));
-                }
-                if (!TextUtils.isEmpty(secret)) {
-                    url.append("&secret=").append(URLEncoder.encode(secret, "UTF-8"));
-                }
-            } catch (UnsupportedEncodingException ignored) {}
-            return url.toString();
+            return settings.getLink();
+        }
+
+        private static ProxyInfo fromSerializedData(int version, InputSerializedData data) {
+            ProxySettings.Builder builder = ProxySettings.builder()
+                    .setAddress(data.readString(false))
+                    .setPort(data.readInt32(false))
+                    .setUser(data.readString(false))
+                    .setPassword(data.readString(false));
+
+            final String secret = data.readString(false);
+            builder.setSecret(secret);
+
+            final long ping, availableCheckTime;
+            if (version >= PROXY_SCHEMA_V2) {
+                ping = data.readInt64(false);
+                availableCheckTime = data.readInt64(false);
+            } else {
+                ping = availableCheckTime = 0;
+            }
+
+            if (version == PROXY_SCHEMA_V3) {
+                // ZaStoGram V3: Consume obsolete per-row WSS metadata. V4 keeps
+                // the proxy list independent from transport mode.
+                data.readInt32(false);
+                data.readString(false);
+                data.readInt32(false);
+                data.readString(false);
+                data.readBool(false);
+            }
+
+            if (version >= PROXY_SCHEMA_V5) {
+                builder.setType(ProxySettings.intToType(data.readInt32(false)));
+            } else {
+                builder.setType(TextUtils.isEmpty(secret) ? ProxySettings.Type.SOCKS5 : ProxySettings.Type.MTPROTO);
+            }
+
+            final ProxyInfo info = new ProxyInfo(builder.build());
+            info.availableCheckTime = availableCheckTime;
+            info.ping = ping;
+
+            return info;
+        }
+
+        private void toSerializedData(OutputSerializedData data) {
+            data.writeString(settings.getAddress());
+            data.writeInt32(settings.getPort());
+            data.writeString(settings.getUser());
+            data.writeString(settings.getPassword());
+            data.writeString(settings.getSecret());
+            data.writeInt64(ping);
+            data.writeInt64(availableCheckTime);
+            data.writeInt32(ProxySettings.typeToInt(settings.getType()));
         }
 
     }
@@ -662,6 +702,15 @@ public class SharedConfig {
                         .remove("wssPath")
                         .remove("wssUseForMiniApps")
                         .remove("wss_default_applied")
+                        .apply();
+            }
+            // Selecting a proxy used to clear this toggle silently; now a proxy only
+            // suspends WSS, so give those users their WSS fallback back once.
+            if (!preferences.getBoolean("wssProxyDecoupled", false)) {
+                wssTransportEnabled = true;
+                preferences.edit()
+                        .putBoolean("wssTransportEnabled", true)
+                        .putBoolean("wssProxyDecoupled", true)
                         .apply();
             }
             // Экспериментально и потому выключено по умолчанию: TURN-серверы звонка
@@ -1561,26 +1610,13 @@ public class SharedConfig {
         LocaleController.resetImperialSystemType();
     }
 
-    private static boolean sameProxyIdentity(ProxyInfo info, String address, int port, String username, String password, String proxySecret) {
-        return info != null
-                && !TextUtils.isEmpty(address)
-                && address.equals(info.address)
-                && port == info.port
-                && username.equals(info.username)
-                && password.equals(info.password)
-                && proxySecret.equals(info.secret);
-    }
-
     public static void loadProxyList() {
         if (proxyListLoaded) {
             return;
         }
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-        String proxyAddress = preferences.getString("proxy_ip", "");
-        String proxyUsername = preferences.getString("proxy_user", "");
-        String proxyPassword = preferences.getString("proxy_pass", "");
-        String proxySecret = preferences.getString("proxy_secret", "");
-        int proxyPort = preferences.getInt("proxy_port", 1080);
+        final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
+        final ProxySettings proxySettings = ProxySettings.fromSharedPreferences(preferences);
+
         proxyListLoaded = true;
         proxyList.clear();
         currentProxy = null;
@@ -1592,32 +1628,16 @@ public class SharedConfig {
             if (count == -1) { // V2 or newer
                 int version = data.readByte(false);
 
-                if (version == PROXY_SCHEMA_V2 || version == PROXY_SCHEMA_V3 || version == PROXY_SCHEMA_V4) {
+                if (version == PROXY_SCHEMA_V2 || version == PROXY_SCHEMA_V3 || version == PROXY_SCHEMA_V4 || version == PROXY_SCHEMA_V5) {
                     count = data.readInt32(false);
 
                     for (int i = 0; i < count; i++) {
-                        ProxyInfo info = new ProxyInfo(
-                                data.readString(false),
-                                data.readInt32(false),
-                                data.readString(false),
-                                data.readString(false),
-                                data.readString(false));
-
-                        info.ping = data.readInt64(false);
-                        info.availableCheckTime = data.readInt64(false);
-                        if (version == PROXY_SCHEMA_V3) {
-                            // Consume obsolete per-row WSS metadata. V4 keeps
-                            // the proxy list independent from transport mode.
-                            data.readInt32(false);
-                            data.readString(false);
-                            data.readInt32(false);
-                            data.readString(false);
-                            data.readBool(false);
-                        }
-
+                        final ProxyInfo info = ProxyInfo.fromSerializedData(version, data);
                         proxyList.add(0, info);
-                        if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
-                            currentProxy = info;
+                        if (currentProxy == null && proxySettings.isValid()) {
+                            if (Objects.equals(proxySettings, info.settings)) {
+                                currentProxy = info;
+                            }
                         }
                     }
                 } else {
@@ -1625,22 +1645,19 @@ public class SharedConfig {
                 }
             } else {
                 for (int a = 0; a < count; a++) {
-                    ProxyInfo info = new ProxyInfo(
-                            data.readString(false),
-                            data.readInt32(false),
-                            data.readString(false),
-                            data.readString(false),
-                            data.readString(false));
+                    final ProxyInfo info = ProxyInfo.fromSerializedData(0, data);
                     proxyList.add(0, info);
-                    if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
-                        currentProxy = info;
+                    if (currentProxy == null && proxySettings.isValid()) {
+                        if (Objects.equals(proxySettings, info.settings)) {
+                            currentProxy = info;
+                        }
                     }
                 }
             }
             data.cleanup();
         }
-        if (currentProxy == null && !TextUtils.isEmpty(proxyAddress)) {
-            ProxyInfo info = currentProxy = new ProxyInfo(proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+        if (currentProxy == null && proxySettings.isValid()) {
+            ProxyInfo info = currentProxy = new ProxyInfo(proxySettings);
             proxyList.add(0, info);
         }
         removeGeneratedLocalProxy(preferences);
@@ -1665,8 +1682,8 @@ public class SharedConfig {
         boolean removedActiveProxy = false;
         for (Iterator<ProxyInfo> iterator = proxyList.iterator(); iterator.hasNext();) {
             ProxyInfo existing = iterator.next();
-            if (existing != null && "127.0.0.1".equals(existing.address)
-                    && existing.port == 1353 && TextUtils.isEmpty(existing.secret)) {
+            if (existing != null && "127.0.0.1".equals(existing.settings.getAddress())
+                    && existing.settings.getPort() == 1353 && TextUtils.isEmpty(existing.settings.getSecret())) {
                 if (currentProxy == existing) {
                     currentProxy = null;
                     removedActiveProxy = true;
@@ -1700,14 +1717,7 @@ public class SharedConfig {
         serializedData.writeInt32(count);
         for (int a = count - 1; a >= 0; a--) {
             ProxyInfo info = infoToSerialize.get(a);
-            serializedData.writeString(info.address != null ? info.address : "");
-            serializedData.writeInt32(info.port);
-            serializedData.writeString(info.username != null ? info.username : "");
-            serializedData.writeString(info.password != null ? info.password : "");
-            serializedData.writeString(info.secret != null ? info.secret : "");
-
-            serializedData.writeInt64(info.ping);
-            serializedData.writeInt64(info.availableCheckTime);
+            info.toSerializedData(serializedData);
         }
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         preferences.edit().putString("proxy_list", Base64.encodeToString(serializedData.toByteArray(), Base64.NO_WRAP)).apply();
@@ -1719,7 +1729,7 @@ public class SharedConfig {
         int count = proxyList.size();
         for (int a = 0; a < count; a++) {
             ProxyInfo info = proxyList.get(a);
-            if (proxyInfo.address.equals(info.address) && proxyInfo.port == info.port && proxyInfo.username.equals(info.username) && proxyInfo.password.equals(info.password) && proxyInfo.secret.equals(info.secret)) {
+            if (Objects.equals(proxyInfo.settings, info.settings)) {
                 return info;
             }
         }
@@ -1742,12 +1752,13 @@ public class SharedConfig {
             editor.putString("proxy_pass", "");
             editor.putString("proxy_user", "");
             editor.putString("proxy_secret", "");
+            editor.putInt("proxy_type", 0);
             editor.putInt("proxy_port", 1080);
             editor.putBoolean("proxy_enabled", false);
             editor.putBoolean("proxy_enabled_calls", false);
             editor.apply();
             if (enabled) {
-                ConnectionsManager.setProxySettings(false, "", 0, "", "", "", ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
+                ConnectionsManager.setProxySettings(false, null, ProxyConnectionEvent.Origin.SETTINGS_CHANGE);
             }
         }
         proxyList.remove(proxyInfo);

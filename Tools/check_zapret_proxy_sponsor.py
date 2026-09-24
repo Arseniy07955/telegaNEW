@@ -13,6 +13,7 @@ DIALOG_CELL = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Cells/DialogCe
 SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
 FREE_PROXY_SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/FreeProxySettingsActivity.java"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
+ZASTO_PRIVACY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ZaStoPrivacy.java"
 
 
 EXPECTED_STRINGS = {
@@ -70,9 +71,18 @@ def main() -> int:
     should_show_start = dialogs_adapter.find("private boolean shouldShowZastogramPromo()")
     should_show_end = dialogs_adapter.find("public boolean isZastogramPromoDialog", should_show_start)
     should_show_body = dialogs_adapter[should_show_start:should_show_end]
+    # The only allowed dependency is the user's own "pin the ZaStoGram channel"
+    # choice (on by default); proxy and ad state must never hide the row.
+    other_privacy_flags = should_show_body.replace("ZaStoPrivacy.SHOW_ZASTOGRAM_PROMO", "")
     require(
-        "SharedConfig" not in should_show_body and "ZaStoPrivacy" not in should_show_body,
-        "ZaStoGram promo must not depend on proxy, ad, or user-toggle state",
+        "SharedConfig" not in should_show_body and "ZaStoPrivacy" not in other_privacy_flags,
+        "ZaStoGram promo must not depend on proxy or ad state (only on SHOW_ZASTOGRAM_PROMO)",
+    )
+    zasto_privacy = ZASTO_PRIVACY.read_text(encoding="utf-8")
+    require(
+        "SHOW_ZASTOGRAM_PROMO = true;" in zasto_privacy
+        and "getBoolean(KEY_SHOW_ZASTOGRAM_PROMO, true)" in zasto_privacy,
+        "The ZaStoGram channel must stay pinned by default",
     )
     require(
         'ZASTOGRAM_PROMO_USERNAME = "zastogram"' in dialogs_adapter,

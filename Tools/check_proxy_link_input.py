@@ -120,7 +120,7 @@ def main() -> int:
         "ProxyLinkHelper.firstFromClipboard(activity)",
         "lastClipboardProxyAlertKey",
         "ProxyLinkHelper.dedupeKey(link)",
-        "showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret)",
+        "showProxyAlert(activity, link.toSettings())",
     ):
         if needle not in android_utilities:
             fail(f"AndroidUtilities clipboard prompt missing {needle}")

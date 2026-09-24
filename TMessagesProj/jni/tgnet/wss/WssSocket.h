@@ -25,11 +25,16 @@ struct Route {
     std::string domain;
     std::string path = "/apiws";
     bool viaFallback = false;
+    // The Worker tunnel reaches the DC over plain TCP, where bytes 60..61 of
+    // the obfuscation header must name the DC and traffic class.
+    bool tunnel = false;
 };
 
 // Telegram's public web relays cover production DC1-DC5. Media connections
 // use the corresponding -1 relay, matching Telegram Web's transport catalog.
-bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, Route *route);
+// While a DC's relay is suppressed as unreachable, the route switches to the
+// ZaStoGram Cloudflare Worker, which opens dcAddress (IPv4) over TCP itself.
+bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route);
 
 class Socket final : public transport::Socket {
 public:

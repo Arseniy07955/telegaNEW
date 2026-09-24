@@ -116,6 +116,11 @@ public class ApplicationLoader extends Application {
     }
 
     protected PushListenerController.IPushListenerServiceProvider onCreatePushProvider() {
+        // ZaStoGram: FCM never reaches a fork's package, so an installed UnifiedPush
+        // distributor (ntfy and others) takes over push delivery.
+        if (PushListenerController.UnifiedPushListenerServiceProvider.INSTANCE.hasServices()) {
+            return PushListenerController.UnifiedPushListenerServiceProvider.INSTANCE;
+        }
         return PushListenerController.GooglePushListenerServiceProvider.INSTANCE;
     }
 
