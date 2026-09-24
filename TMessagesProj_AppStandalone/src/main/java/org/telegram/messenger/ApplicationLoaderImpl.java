@@ -71,6 +71,28 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         return versionCode > 100000 ? versionCode / 10 : versionCode;
     }
 
+    // BetaUpdate.higherThan сравнивает версии через Integer.parseInt по частям
+    // между точками. Имя «12.10.3 (#75)» роняло приложение при повторной
+    // проверке, поэтому от каждой части оставляем только ведущие цифры.
+    static String numericVersionName(String versionName) {
+        if (versionName == null) {
+            return "0";
+        }
+        String[] parts = versionName.trim().split("\\.");
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            int end = 0;
+            while (end < part.length() && Character.isDigit(part.charAt(end))) {
+                end++;
+            }
+            if (result.length() > 0) {
+                result.append('.');
+            }
+            result.append(end > 0 ? part.substring(0, end) : "0");
+        }
+        return result.length() > 0 ? result.toString() : "0";
+    }
+
     @Override
     public boolean isCustomUpdate() {
         return true;
@@ -87,7 +109,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     int latest = comparableVersionCode(json.getInt("version_code"));
                     int current = comparableVersionCode(installedVersionCode());
                     if (latest > current) {
-                        pendingUpdate = new BetaUpdate(json.getString("version_name"), latest, json.optString("changelog", ""));
+                        pendingUpdate = new BetaUpdate(numericVersionName(json.getString("version_name")), latest, json.optString("changelog", ""));
                     } else {
                         pendingUpdate = null;
                     }

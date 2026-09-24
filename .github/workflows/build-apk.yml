@@ -287,7 +287,9 @@ jobs:
           # (versionCode * 100000 + номер сборки * 10), только без цифры ABI:
           # клиент отбрасывает её с обеих сторон при сравнении.
           data['version_code'] = app_code * 100000 + run_number * 10
-          data['version_name'] = f"{app_name} (#{run_number})"
+          # Только числа через точки: клиент сравнивает версии, превращая каждую
+          # часть в число, и на «12.10.3 (#75)» падал с NumberFormatException.
+          data['version_name'] = f"{app_name}.{run_number}"
 
           with open('dist-release/update.json', 'w', encoding='utf-8') as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
