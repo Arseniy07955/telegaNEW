@@ -3455,6 +3455,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             datacenterId,
             mediaConnection,
             manager.testBackend,
+            address,
             &selectedWssRoute);
 
     if (shouldUseWss && manager.getIpStratagy() == USE_IPV6_ONLY
