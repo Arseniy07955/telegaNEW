@@ -4269,6 +4269,62 @@ public class AndroidUtilities {
         }
     }
 
+    private static final String APK_MIME_TYPE = "application/vnd.android.package-archive";
+
+    // ZaStoGram: the Xiaomi (MIUI/HyperOS) installer fails with "package parse error" on an APK
+    // handed over from our FileProvider, while the same file installs from Downloads. Copy it
+    // there first and let the installer open the MediaStore entry instead.
+    private static boolean openApkThroughDownloads(File f, String fileName, Activity activity) {
+        if (Build.VERSION.SDK_INT < 29 || activity == null || !"xiaomi".equalsIgnoreCase(Build.MANUFACTURER)) {
+            return false;
+        }
+        final String name = fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".apk") ? fileName : f.getName();
+        Utilities.globalQueue.postRunnable(() -> {
+            final ContentResolver resolver = ApplicationLoader.applicationContext.getContentResolver();
+            Uri saved = null;
+            try {
+                final android.content.ContentValues values = new android.content.ContentValues();
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + File.separator + "ZaStoGram" + File.separator);
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE, APK_MIME_TYPE);
+                saved = resolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
+                if (saved != null) {
+                    try (InputStream in = new FileInputStream(f); OutputStream out = resolver.openOutputStream(saved)) {
+                        if (out == null) {
+                            throw new java.io.IOException("no output stream for " + saved);
+                        }
+                        final byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = in.read(buffer)) > 0) {
+                            out.write(buffer, 0, read);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+                if (saved != null) {
+                    try {
+                        resolver.delete(saved, null, null);
+                    } catch (Exception ignore) {
+                    }
+                }
+                saved = null;
+            }
+            final Uri uri = saved;
+            runOnUIThread(() -> {
+                final Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                intent.setDataAndType(uri != null ? uri : FileProvider.getUriForFile(activity, ApplicationLoader.getApplicationId() + ".provider", f), APK_MIME_TYPE);
+                try {
+                    activity.startActivityForResult(intent, 500);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            });
+        });
+        return true;
+    }
+
     public static boolean openForView(File f, String fileName, String mimeType, final Activity activity, Theme.ResourcesProvider resourcesProvider, boolean restrict) {
         if (f != null && f.exists()) {
             // ZaStoGram: a .plugin opened in-app (e.g. tapped in a chat) -> review-and-install dialog,
@@ -4300,6 +4356,9 @@ public class AndroidUtilities {
                 if (restrict) return true;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ApplicationLoader.applicationContext.getPackageManager().canRequestPackageInstalls()) {
                     AlertsCreator.createApkRestrictedDialog(activity, resourcesProvider).show();
+                    return true;
+                }
+                if (openApkThroughDownloads(f, fileName, activity)) {
                     return true;
                 }
             }
