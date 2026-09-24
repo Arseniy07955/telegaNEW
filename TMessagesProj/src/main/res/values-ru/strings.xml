@@ -277,7 +277,7 @@
     <string name="NotificationsBackgroundNetworkAlwaysOn">Не усыплять сеть в фоне</string>
     <string name="NotificationsBackgroundNetworkAlwaysOnInfo">Не останавливает сетевые таймеры Telegram и подключения к прокси, когда приложение свернуто.</string>
     <string name="NotificationsBackgroundConnectionChannel">Фоновое подключение</string>
-    <string name="NotificationsBackgroundConnectionChannelInfo">Поддерживает подключение ZaStoGram, когда приложение свернуто.</string>
+    <string name="NotificationsBackgroundConnectionChannelInfo">Поддерживает подключение telegaNEW, когда приложение свернуто.</string>
     <string name="NotificationsBackgroundConnectionActive">Фоновое подключение активно</string>
     <string name="ProxyStatusConnectingSlow">Подключаемся, это может занять время</string>
     <string name="ProxyStatusCheckingConnection">Проверяем подключение...</string>
@@ -430,8 +430,8 @@
     <string name="EditableForwardCaptionHint">Подпись</string>
     <string name="EditableForwardUnsupported">Это сообщение нельзя отправить редактируемой копией</string>
     <string name="LoginCodeRequestTimeout">Telegram не ответил на запрос кода. Проверьте подключение прокси и попробуйте ещё раз.</string>
-    <string name="LoginApiCredentialsError">Telegram отклонил API ID этой сборки (API_ID_PUBLISHED_FLOOD). Установите последний официальный релиз ZaStoGram и повторите вход. Если он уже установлен, API-данные релиза нужно заменить.</string>
-    <string name="ZaStoGramVersion">ZaStoGram %1$s (сборка %2$d)</string>
+    <string name="LoginApiCredentialsError">Telegram отклонил API ID этой сборки (API_ID_PUBLISHED_FLOOD). Установите последний официальный релиз telegaNEW и повторите вход. Если он уже установлен, API-данные релиза нужно заменить.</string>
+    <string name="ZaStoGramVersion">telegaNEW %1$s (сборка %2$d)</string>
     <string name="DoubleTapSetting">Быстрые реакции</string>
     <string name="DoubleTapPreviewRational">Дважды нажмите на сообщение, чтобы поставить быструю реакцию.</string>
     <string name="EnableDoubleTapReactions">Быстрые реакции по двойному нажатию</string>
