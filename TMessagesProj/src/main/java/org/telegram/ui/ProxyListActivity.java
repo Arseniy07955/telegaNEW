@@ -54,6 +54,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.StatsController;
 import org.telegram.proxy.ProxySettings;
+import org.telegram.proxy.ProxyWssFallback;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
@@ -1020,6 +1021,10 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
         if (isWssTransportSelected()) {
             actionBar.setSubtitle(getString(R.string.WssTransportHeader) + ": " + getString(R.string.WssTransportOfficial));
+            return;
+        }
+        if (useProxySettings && ProxyWssFallback.isEngaged()) {
+            actionBar.setSubtitle(getString(R.string.WssTransportFallbackActive));
             return;
         }
         actionBar.setSubtitle(ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, useProxySettings, currentConnectionState));

@@ -671,6 +671,15 @@ public class SharedConfig {
                         .remove("wss_default_applied")
                         .apply();
             }
+            // Selecting a proxy used to clear this toggle silently; now a proxy only
+            // suspends WSS, so give those users their WSS fallback back once.
+            if (!preferences.getBoolean("wssProxyDecoupled", false)) {
+                wssTransportEnabled = true;
+                preferences.edit()
+                        .putBoolean("wssTransportEnabled", true)
+                        .putBoolean("wssProxyDecoupled", true)
+                        .apply();
+            }
             // Экспериментально и потому выключено по умолчанию: TURN-серверы звонка
             // сервер отдаёт как UDP, а дублирование их в TCP и TLS помогает только
             // там, где UDP режут, и ощутимо стоит в качестве связи.

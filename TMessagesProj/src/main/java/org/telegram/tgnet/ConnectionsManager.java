@@ -48,6 +48,7 @@ import org.telegram.proxy.WebProxyConnectionTester;
 import org.telegram.proxy.WebProxyFlow;
 import org.telegram.proxy.WebProxyTransport;
 import org.telegram.proxy.ProxySettings;
+import org.telegram.proxy.ProxyWssFallback;
 import org.telegram.ui.Components.VideoPlayer;
 
 import java.io.ByteArrayOutputStream;
@@ -1228,6 +1229,7 @@ public class ConnectionsManager extends BaseController {
     public static void onConnectionStateChanged(final int state, final int currentAccount) {
         AndroidUtilities.runOnUIThread(() -> {
             getInstance(currentAccount).connectionState = state;
+            ProxyWssFallback.onConnectionState(currentAccount, state);
             AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.didUpdateConnectionState);
         });
     }
@@ -1582,6 +1584,7 @@ public class ConnectionsManager extends BaseController {
         String password = "";
         String secret = "";
         boolean webProxy = false;
+        ProxyWssFallback.onProxySettingsApplied();
 
         if (enabled && settings != null && settings.isValid()) {
             address = settings.getAddress();
@@ -1629,7 +1632,17 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setWssTransportEnabled() {
-        applyWssTransport(SharedConfig.isProxyEnabled());
+        applyWssTransport(SharedConfig.isProxyEnabled() && !ProxyWssFallback.isEngaged());
+    }
+
+    // The proxy stays selected in settings; only the native route drops it while
+    // ProxyWssFallback probes it in the background.
+    public static void applyWssFallbackRoute() {
+        WebProxyTransport.stop();
+        applyWssTransport(false);
+        for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+            native_setProxySettings(a, "", 1080, "", "", "", MtProxyOptions.disabled(), 0, ProxyConnectionEvent.Origin.SETTINGS_CHANGE.wireName);
+        }
     }
 
     private static void applyWssTransport(boolean proxyActive) {
@@ -1643,7 +1656,7 @@ public class ConnectionsManager extends BaseController {
 
     public static boolean isWssTransportActive() {
         return SharedConfig.wssTransportEnabled
-                && !SharedConfig.isProxyEnabled()
+                && (!SharedConfig.isProxyEnabled() || ProxyWssFallback.isEngaged())
                 && !ApplicationLoader.isVpnActive();
     }
 
