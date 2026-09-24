@@ -200,6 +200,8 @@ static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_
 static constexpr int64_t WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS = 20000;
 // Зависшее TLS-рукопожатие иначе держит загрузку файла до её 25–40 с таймаута.
 static constexpr int64_t WSS_HANDSHAKE_TIMEOUT_MS = 8000;
+// Провайдер глотает SYN целого потока, повторы по нему бесполезны: новый сокет проходит.
+static constexpr int64_t WSS_TCP_CONNECT_TIMEOUT_MS = 2500;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 
 // WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
@@ -5304,11 +5306,14 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (isCurrentTransportWss()
         && !currentWssTransport->isReady()
-        && wssOpenTime > 0
-        && now - wssOpenTime > WSS_HANDSHAKE_TIMEOUT_MS) {
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_handshake_timeout elapsed=%lld phase=%s", this, (long long) (now - wssOpenTime), proxyCheckDiagnostic.c_str());
-        closeSocket(2, 0);
-        return true;
+        && wssOpenTime > 0) {
+        const bool tcpPending = currentWssTransport->handshakePhase() == tgnet::transport::HandshakePhase::None;
+        if (now - wssOpenTime > (tcpPending ? WSS_TCP_CONNECT_TIMEOUT_MS : WSS_HANDSHAKE_TIMEOUT_MS)) {
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_handshake_timeout elapsed=%lld tcp_pending=%d phase=%s", this, (long long) (now - wssOpenTime), tcpPending ? 1 : 0, proxyCheckDiagnostic.c_str());
+            currentWssTransport->timedOut();
+            closeSocket(2, 0);
+            return true;
+        }
     }
     if (isCurrentTransportWss()
         && currentWssTransport->isReady()
