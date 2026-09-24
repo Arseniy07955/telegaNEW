@@ -157,6 +157,7 @@ public:
         // Сторож «данные отправлены — ответа нет»: время первой порции
         // MTProto-байт, реально выпущенной в транспорт на этом соединении.
         int64_t firstFrameSentTime = 0;
+        int64_t openTime = 0;
     };
 
     struct AdmissionSubstate {

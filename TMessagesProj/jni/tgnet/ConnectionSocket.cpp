@@ -153,6 +153,7 @@
 #define currentWssTransport stateMachine.wss.transport
 #define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
 #define wssFirstFrameSentTime stateMachine.wss.firstFrameSentTime
+#define wssOpenTime stateMachine.wss.openTime
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -197,6 +198,8 @@ static constexpr int64_t WSS_APPDATA_NO_RESPONSE_TIMEOUT_MS = TRANSPORT_APPDATA_
 // «холодного» файла сервер честно думает дольше 5,5 с. Короткий сторож здесь
 // ложно объявлял живой kwsN-1 чёрной дырой и уводил медиа в обход.
 static constexpr int64_t WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS = 20000;
+// Зависшее TLS-рукопожатие иначе держит загрузку файла до её 25–40 с таймаута.
+static constexpr int64_t WSS_HANDSHAKE_TIMEOUT_MS = 8000;
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 
 // WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
@@ -3304,6 +3307,7 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
     currentTransportWss = false;
     currentWssRoute = tgnet::wss::Route();
     wssFirstFrameSentTime = 0;
+    wssOpenTime = 0;
     setWaitingForHostResolve("", "openConnection_reset_cleanup");
     setAdjustWriteOpAfterResolve(false, "openConnection_reset_cleanup");
     setAdjustWriteOpAfterPreTcpGate(false, "openConnection_reset_cleanup");
@@ -3867,6 +3871,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         }
         setEpollRegistered(true, "wss_epoll_ctl_add");
         setTransportState(TransportState::EpollRegistered, "wss_epoll_ctl_add");
+        wssOpenTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         proxyCheckDiagnostic = "wss_tls_handshake";
         adjustWriteOp();
         return;
@@ -4632,6 +4637,7 @@ void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t erro
     currentWssRoute = tgnet::wss::Route();
     outgoingWssPacketSizes.clear();
     wssFirstFrameSentTime = 0;
+    wssOpenTime = 0;
     currentSocksUsername.clear();
     currentSocksPassword.clear();
     setProxyAuthState(0, "closeSocket_cleanup");
@@ -5295,6 +5301,21 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
             if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, no requests", this);
         }
         return false;
+    }
+    if (isCurrentTransportWss()
+        && !currentWssTransport->isReady()
+        && wssOpenTime > 0
+        && now - wssOpenTime > WSS_HANDSHAKE_TIMEOUT_MS) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup wss_handshake_timeout elapsed=%lld phase=%s", this, (long long) (now - wssOpenTime), proxyCheckDiagnostic.c_str());
+        closeSocket(2, 0);
+        return true;
+    }
+    if (isCurrentTransportWss()
+        && currentWssTransport->isReady()
+        && wssFirstFrameSentTime > 0
+        && (outgoingByteStream->hasData() || currentWssTransport->queuedOutputBytes() > 0)) {
+        // Кусок файла в 512 КБ на медленной отдаче уходит дольше сторожа.
+        wssFirstFrameSentTime = now;
     }
     if (isCurrentTransportWss()
         && currentWssTransport->isReady()
