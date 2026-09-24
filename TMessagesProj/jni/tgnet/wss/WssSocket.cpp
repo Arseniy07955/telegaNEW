@@ -90,6 +90,7 @@ bool preferFallback(const Route &route) {
 // обычным путём. Счётчик сбрасывается только реально полученными данными.
 constexpr uint32_t kRouteFailuresBeforeSuppress = 3;
 constexpr int64_t kRouteSuppressTtlMs = 10 * 60 * 1000;
+constexpr int64_t kMediaRouteSuppressTtlMs = 30 * 60 * 1000;
 
 struct RouteHealth {
     uint32_t consecutiveFailures = 0;
@@ -118,8 +119,13 @@ void recordRouteUnreachable(const Route &route) {
     if (health.suppressedUntil > monotonicMillis()) {
         return;
     }
-    if (++health.consecutiveFailures >= kRouteFailuresBeforeSuppress) {
-        health.suppressedUntil = monotonicMillis() + kRouteSuppressTtlMs;
+    // Медиа-релеи kwsN-1 провайдеры режут целиком, пока основной kwsN жив:
+    // ждать три таймаута по 8 с значит полминуты без медиа, поэтому медиа
+    // уходит в туннель после первой же неудачи и остаётся там дольше.
+    const bool media = route.domain.find("-1.web.telegram.org") != std::string::npos;
+    const uint32_t threshold = media ? 1 : kRouteFailuresBeforeSuppress;
+    if (++health.consecutiveFailures >= threshold) {
+        health.suppressedUntil = monotonicMillis() + (media ? kMediaRouteSuppressTtlMs : kRouteSuppressTtlMs);
     }
 }
 
