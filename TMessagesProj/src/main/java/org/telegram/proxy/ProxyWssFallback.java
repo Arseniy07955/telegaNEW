@@ -5,6 +5,7 @@ import android.os.SystemClock;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.ProxyCheckScheduler;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.ConnectionsManager;
@@ -37,6 +38,7 @@ public final class ProxyWssFallback {
 
     private static final Runnable engageRunnable = ProxyWssFallback::engage;
     private static final Runnable probeRunnable = ProxyWssFallback::probe;
+    private static final Object PROBE_OWNER = new Object();
 
     private ProxyWssFallback() {
     }
@@ -75,6 +77,7 @@ public final class ProxyWssFallback {
         armed = false;
         AndroidUtilities.cancelRunOnUIThread(engageRunnable);
         AndroidUtilities.cancelRunOnUIThread(probeRunnable);
+        ProxyCheckScheduler.cancelOwner(PROBE_OWNER);
         probeGeneration++;
         probing = false;
         probeIntervalMs = PROBE_INTERVAL_MIN_MS;
@@ -122,11 +125,22 @@ public final class ProxyWssFallback {
             reset();
             return;
         }
-        probing = true;
         final int generation = probeGeneration;
-        final ProxySettings settings = SharedConfig.currentProxy.settings;
-        ConnectionsManager.getInstance(UserConfig.selectedAccount).checkProxy(settings, (time, diagnostic) ->
-                AndroidUtilities.runOnUIThread(() -> onProbeResult(generation, settings, time)));
+        final SharedConfig.ProxyInfo info = SharedConfig.currentProxy;
+        final ProxySettings settings = info.settings;
+        probing = ProxyCheckScheduler.enqueueNow(UserConfig.selectedAccount, info, PROBE_OWNER, new ProxyCheckScheduler.Callback() {
+            @Override
+            public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
+                AndroidUtilities.runOnUIThread(() -> onProbeResult(generation, settings, time));
+            }
+
+            @Override
+            public void onProxyCheckQueueFinished() {
+            }
+        });
+        if (!probing) {
+            AndroidUtilities.runOnUIThread(probeRunnable, probeIntervalMs);
+        }
     }
 
     private static void onProbeResult(int generation, ProxySettings settings, long time) {
