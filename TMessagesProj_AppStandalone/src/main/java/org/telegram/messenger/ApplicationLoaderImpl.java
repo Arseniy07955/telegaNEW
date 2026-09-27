@@ -15,6 +15,7 @@ import androidx.core.content.FileProvider;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.telegram.proxy.ProxySettings;
 import org.telegram.messenger.web.R;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TL_smsjobs;
@@ -115,8 +116,8 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     }
                     if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check latest=" + latest + " current=" + current);
 
-                    if (json.has("proxies")) {
-                        applyProxies(json.getJSONArray("proxies"));
+                    if (json.has("proxies") || json.has("web_proxies")) {
+                        applyProxies(json.optJSONArray("proxies"), json.optJSONArray("web_proxies"));
                     }
                 } catch (Exception e) {
                     FileLog.e("telegaNEW: failed to parse update.json", e);
@@ -128,25 +129,53 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         }).setHeader("User-Agent", "telegaNEW/" + installedVersionName()).execute(UPDATE_JSON_URL);
     }
 
-    private void applyProxies(JSONArray proxies) throws Exception {
+    // Веб-прокси лежат в отдельном массиве web_proxies: у них нет порта, и
+    // старые клиенты, читающие proxies через getInt("port"), оборвали бы разбор
+    // всего списка на такой записи.
+    private void applyProxies(JSONArray proxies, JSONArray webProxies) {
         boolean listChanged = false;
         SharedConfig.ProxyInfo activeToSet = null;
         java.util.HashSet<String> priorityKeys = new java.util.HashSet<>();
 
-        for (int i = 0; i < proxies.length(); i++) {
-            JSONObject p = proxies.getJSONObject(i);
-            String server = p.getString("server");
-            int port = p.getInt("port");
-            String secret = p.getString("secret");
+        int total = (proxies != null ? proxies.length() : 0) + (webProxies != null ? webProxies.length() : 0);
+        for (int i = 0; i < total; i++) {
+            boolean web = proxies == null || i >= proxies.length();
+            SharedConfig.ProxyInfo candidate;
+            JSONObject p;
+            try {
+                p = web ? webProxies.getJSONObject(i - (proxies != null ? proxies.length() : 0)) : proxies.getJSONObject(i);
+                String server = p.getString("server");
+                String secret = p.getString("secret");
+                if (web) {
+                    ProxySettings settings = ProxySettings.webProxy(server, secret);
+                    if (settings == null) {
+                        FileLog.e("telegaNEW: invalid web proxy in update.json: " + server);
+                        continue;
+                    }
+                    candidate = new SharedConfig.ProxyInfo(settings);
+                } else {
+                    candidate = new SharedConfig.ProxyInfo(server, p.getInt("port"), "", "", secret);
+                }
+            } catch (Exception e) {
+                FileLog.e("telegaNEW: bad proxy entry in update.json", e);
+                continue;
+            }
+            ProxySettings settings = candidate.settings;
             boolean isActive = p.optBoolean("active", false);
             boolean isDelete = p.optBoolean("delete", false);
             if (!isDelete && p.optBoolean("priority", false)) {
-                priorityKeys.add(SharedConfig.proxyPriorityKey(server, port));
+                priorityKeys.add(SharedConfig.proxyPriorityKey(settings.getAddress(), settings.getPort()));
             }
 
             SharedConfig.ProxyInfo existing = null;
             for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
-                if (server.equalsIgnoreCase(info.settings.getAddress()) && port == info.settings.getPort()) {
+                if (info.settings.getType() == ProxySettings.Type.WEB) {
+                    if (web && settings.getAddress().equalsIgnoreCase(info.settings.getAddress())) {
+                        existing = info;
+                        break;
+                    }
+                } else if (!web && settings.getAddress().equalsIgnoreCase(info.settings.getAddress())
+                        && settings.getPort() == info.settings.getPort()) {
                     existing = info;
                     break;
                 }
@@ -161,16 +190,15 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             }
 
             if (existing != null) {
-                if (!secret.equals(existing.settings.getSecret())) {
+                if (!settings.getSecret().equals(existing.settings.getSecret())) {
                     // ProxySettings неизменяемый: запись собирается заново.
-                    existing.settings = new SharedConfig.ProxyInfo(server, port, "", "", secret).settings;
+                    existing.settings = settings;
                     listChanged = true;
                 }
                 if (isActive) activeToSet = existing;
             } else {
-                SharedConfig.ProxyInfo newProxy = new SharedConfig.ProxyInfo(server, port, "", "", secret);
-                SharedConfig.proxyList.add(0, newProxy);
-                if (isActive) activeToSet = newProxy;
+                SharedConfig.proxyList.add(0, candidate);
+                if (isActive) activeToSet = candidate;
                 listChanged = true;
             }
         }

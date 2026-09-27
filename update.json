@@ -71,5 +71,15 @@
       "secret": "ee6a0333c1db3f8eaba5c76731a44203b6617669746f2e7275",
       "delete": true
     }
+  ],
+  "web_proxies": [
+    {
+      "server": "web2.zainet.tech",
+      "secret": "9ed08be15ce91986b2ddb754d84bfd76"
+    },
+    {
+      "server": "one.nxrweb.shop",
+      "secret": "dd7287be476993a67190dbcbe946167b3c"
+    }
   ]
 }
