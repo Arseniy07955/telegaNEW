@@ -2821,8 +2821,6 @@
     <string name="UseProxyTelegramInfo2">This proxy may display a sponsored channel in your chat list. This doesn\'t reveal any of your Telegram traffic.</string>
     <string name="UseProxyTelegramInfoStealth">FakeTLS secrets that start with ee use the browser-like TLS profile. Short dd/legacy secrets work as ordinary MTProxy and do not use the new TLS disguise.</string>
     <string name="UseProxyWebInfo">WEB proxy uses an HTTPS page inside a private WebView. Enter a hostname without a scheme or path and a 16-byte MTProxy secret. This proof of concept requires a current Android System WebView and is intended for foreground testing.</string>
-    <string name="UseProxyForCalls">Use proxy for calls</string>
-    <string name="UseProxyForCallsInfo">Proxy servers may degrade the quality of your calls.</string>
     <string name="ConnectingToProxyEnable">Enable</string>
     <string name="LowDiskSpaceTitle">Attention</string>
     <string name="LowDiskSpaceMessage">Your device is almost out of disk space. To free some space, you can set up Telegram to cache only recent media.</string>
@@ -6424,6 +6422,9 @@
     <string name="LiteSmoothTransitionsInfo">You can disable animated transitions between different sections of the apps.</string>
     <string name="LiteProfileAvatarBlur">Blur Behind Profile Photo</string>
     <string name="LiteProfileAvatarBlurInfo">Blurred backdrop under the profile photo and its action buttons. Keep it off on older devices: expanding a profile photo becomes much smoother.</string>
+    <string name="ZaStoVideoSpeed">Speed</string>
+    <string name="ZaStoVideoBrightness">Brightness</string>
+    <string name="ZaStoVideoVolume">Volume</string>
     <string name="DynamicPackOrder">Dynamic Pack Order</string>
     <string name="DynamicPackOrderInfo">Automatically place recently used sticker packs at the front of the panel.</string>
     <string name="DynamicPackOrderOff">Dynamic Order Off</string>
@@ -11411,4 +11412,7 @@
     <string name="UnsupportedMessageTitle">Unsupported Message</string>
     <string name="UnsupportedMessageMessage">Update Telegram to view this message</string>
     <string name="UnsupportedUpdate">Update</string>
+    <!-- exteraGram ABI: read by DEX plugins (re:extera) via R.string -->
+    <string name="RestartRequired">Restart the app to apply changes</string>
+    <string name="MainMenuHiddenItems">Hidden items</string>
 </resources>

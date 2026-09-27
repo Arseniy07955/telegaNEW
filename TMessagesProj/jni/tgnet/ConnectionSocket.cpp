@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <utility>
 #include <vector>
 #include <openssl/bn.h>
@@ -156,6 +157,7 @@
 #define outgoingWssPacketSizes stateMachine.wss.outgoingPacketSizes
 #define wssFirstFrameSentTime stateMachine.wss.firstFrameSentTime
 #define wssOpenTime stateMachine.wss.openTime
+#define wssTunnelRotating stateMachine.wss.tunnelRotating
 #define proxyAuthState stateMachine.socks.proxyAuthState
 #define proxyHandshakeAdmissionTimer stateMachine.admission.timer
 #define proxyHandshakeAdmissionQueued stateMachine.admission.queued
@@ -204,6 +206,39 @@ static constexpr int64_t WSS_MEDIA_APPDATA_NO_RESPONSE_TIMEOUT_MS = 20000;
 static constexpr int64_t WSS_HANDSHAKE_TIMEOUT_MS = 8000;
 // Провайдер глотает SYN целого потока, повторы по нему бесполезны: новый сокет проходит.
 static constexpr int64_t WSS_TCP_CONNECT_TIMEOUT_MS = 2500;
+// A throttled network freezes each TCP connection to Cloudflare after about
+// 16 KB downstream. A tunnel connection is replaced once it has received this
+// much, so that one more answer (downloads over the tunnel ask for 8 KB parts)
+// still fits under the freeze.
+static constexpr uint64_t WSS_TUNNEL_ROTATE_BYTES = 6 * 1024;
+
+// Every tunnel connection lives for one part, so a line per rotation would
+// flood the log; they are summed up and reported every 32 or once a minute.
+static void noteWssTunnelRotated(uint64_t received) {
+    static std::mutex mutex;
+    static uint32_t count = 0;
+    static uint64_t bytes = 0;
+    static int64_t since = 0;
+    uint32_t reportCount;
+    uint64_t reportBytes;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        const int64_t now = ConnectionsManager::getInstance(0).getCurrentTimeMonotonicMillis();
+        if (count == 0) {
+            since = now;
+        }
+        count++;
+        bytes += received;
+        if (count < 32 && now - since < 60 * 1000) {
+            return;
+        }
+        reportCount = count;
+        reportBytes = bytes;
+        count = 0;
+        bytes = 0;
+    }
+    if (LOGS_ENABLED) DEBUG_D("wss_tunnel_rotated sockets=%u rx=%llu", reportCount, (unsigned long long) reportBytes);
+}
 static constexpr int64_t MT_PROXY_EARLY_APPDATA_DROP_MS = 2 * 60 * 1000;
 
 // WEB proxy receive-wait reasons by WebProxyFlow.REASON_* value; the numbers
@@ -2305,6 +2340,12 @@ bool ConnectionSocket::isProxyCloseDiagnosticSuppressed() {
     return proxyCloseDiagnosticSuppressed;
 }
 
+bool ConnectionSocket::consumeWssFrontFastFailure() {
+    const bool fast = wssFrontFastFailure;
+    wssFrontFastFailure = false;
+    return fast;
+}
+
 uint32_t ConnectionSocket::consumeSuggestedReconnectHoldMs() {
     uint32_t hold = proxySuggestedReconnectHoldMs;
     proxySuggestedReconnectHoldMs = 0;
@@ -3464,6 +3505,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     stateMachine.endpointGate.webProxyRecheckAt = 0;
     stateMachine.endpointGate.webProxyWaitReason = 0;
 
+    manager.transportConnectionOpened = true;
     bool shouldUseWss = overrideProxyAddress.empty()
             && manager.wssEnabled
             && proxyAddress->empty();
@@ -3475,6 +3517,9 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             address,
             &selectedWssRoute);
 
+    if (!shouldUseWss && manager.wssEnabled && overrideProxyAddress.empty() && proxyAddress->empty() && LOGS_ENABLED) {
+        DEBUG_D("connection(%p) wss_startup direct dc%d media=%d target=%s:%u reason=no_usable_wss_route", this, (int) datacenterId, mediaConnection ? 1 : 0, address.c_str(), (unsigned int) port);
+    }
     if (shouldUseWss && manager.getIpStratagy() == USE_IPV6_ONLY
             && !selectedWssRoute.relayHostFallback.empty()) {
         // У устройства нет IPv4 вообще, а зашитые адреса релеев — только IPv4.
@@ -3853,7 +3898,18 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
                 ? reinterpret_cast<const sockaddr *>(&socketAddress6)
                 : reinterpret_cast<const sockaddr *>(&socketAddress);
         const socklen_t addressLength = ipv6 ? sizeof(socketAddress6) : sizeof(socketAddress);
-        if (!currentWssTransport->open(address, addressLength, &diagnostic)) {
+        // A spare from the pool has already done TCP, TLS and the upgrade; its
+        // first EPOLLOUT below goes straight to on_connected.
+        std::unique_ptr<tgnet::wss::Socket> pooled = ipv6
+                ? nullptr
+                : ConnectionsManager::getInstance(instanceNum).takePooledWssSocket(currentWssRoute);
+        if (pooled != nullptr) {
+            // A Cloudflare front spare may sit on another front than the one
+            // asked for; the connection reports and marks the one it uses.
+            currentWssRoute = pooled->route();
+            currentWssTransport = std::move(pooled);
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup pool_hit domain=%s", this, currentWssRoute.domain.c_str());
+        } else if (!currentWssTransport->open(address, addressLength, &diagnostic)) {
             proxyCheckDiagnostic = diagnostic.empty() ? "wss_tcp_connect_failed" : diagnostic;
             if (LOGS_ENABLED) DEBUG_E("connection(%p) wss_startup open failed diagnostic=%s", this, proxyCheckDiagnostic.c_str());
             closeSocket(1, -1);
@@ -3985,6 +4041,10 @@ bool ConnectionSocket::isCurrentTransportWss() {
 
 bool ConnectionSocket::isCurrentWssTunnel() {
     return isCurrentTransportWss() && currentWssRoute.tunnel;
+}
+
+bool ConnectionSocket::isCurrentWssCdn() {
+    return isCurrentTransportWss() && currentWssRoute.cdnSlot >= 0;
 }
 
 bool ConnectionSocket::isCurrentMtProxyConnection() {
@@ -4562,8 +4622,21 @@ void ConnectionSocket::closeStepLogDisconnect(int32_t reason, int32_t error, con
         return;
     }
     if (currentTransportWss) {
+        if (wssTunnelRotating) {
+            wssTunnelRotating = false;
+            noteWssTunnelRotated(currentWssTransport != nullptr ? currentWssTransport->receivedBytes() : 0);
+            return;
+        }
         if (LOGS_ENABLED) {
-            DEBUG_D("connection(%p) wss_disconnect reason=%d reason_text=%s error=%d error_text=%s phase=%s transport_state=%s epoll_registered=%d", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), proxyCheckDiagnostic.c_str(), transportStateName(currentTransportState), epollRegistered ? 1 : 0);
+            const std::string session = currentWssTransport != nullptr ? currentWssTransport->takeSessionSummary() : std::string();
+            // The diagnostic says "wss_tls_handshake" from the moment the socket
+            // is opened; a socket that never got TCP up was read as a TLS block
+            // (logs (1) (5): every relay "stuck in TLS" had no tcp_connected).
+            const char *phaseText = proxyCheckDiagnostic.c_str();
+            if (proxyCheckDiagnostic == "wss_tls_handshake" && (currentWssTransport == nullptr || currentWssTransport->handshakePhase() == tgnet::transport::HandshakePhase::None)) {
+                phaseText = "wss_tcp_connect";
+            }
+            DEBUG_D("connection(%p) wss_disconnect account%d dc%d media=%d reason=%d reason_text=%s error=%d error_text=%s phase=%s transport_state=%s epoll_registered=%d %s", this, (int) instanceNum, (int) currentDatacenterId, currentMediaConnection ? 1 : 0, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), phaseText, transportStateName(currentTransportState), epollRegistered ? 1 : 0, session.c_str());
         }
         return;
     }
@@ -4636,6 +4709,11 @@ void ConnectionSocket::closeStepOsTeardown() {
 // onDisconnected must stay the LAST statement: it reads the resolved
 // diagnostic and consumeSuggestedReconnectHoldMs() from this object.
 void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t error) {
+    // Each front failure already moves to another front, so the 1 s pause
+    // before reconnecting only adds to the ~1.1 s the next dial takes.
+    wssFrontFastFailure = currentTransportWss && currentWssRoute.cdnSlot >= 0 && !onConnectedSent
+            && wssOpenTime > 0
+            && ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis() - wssOpenTime < 4000;
     setWaitingForHostResolve("", "closeSocket_cleanup");
     setMtProxyTcpConnectAttemptStarted(false, "closeSocket_cleanup");
     setMtProxyDnsResolveAttemptStarted(false, "closeSocket_cleanup");
@@ -4682,6 +4760,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
             setTransportState(TransportState::MtprotoReady, "wss_ready");
             if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup on_connected", this);
             if (!canNotifyConnected("wss_ready")) {
+                // EPOLLOUT stays armed until on_connected (adjustWriteOp);
+                // returning here would spin the network thread.
+                closeSocket(1, -1);
                 return;
             }
             onConnected();
@@ -4692,6 +4773,17 @@ void ConnectionSocket::onEvent(uint32_t events) {
         // and MTProto needs it to recover (e.g. regenerate an auth key on -404)
         // instead of blindly reconnecting with the same state.
         if (!dispatchWssPayloads(payloads)) {
+            return;
+        }
+        // Only between packets: cutting a larger answer in the middle would
+        // resend it and cut it again forever. A part too big for the tunnel
+        // freezes instead, and the file loader then asks for smaller parts.
+        if (transportAlive
+                && currentWssRoute.tunnel
+                && currentWssTransport->receivedBytes() >= WSS_TUNNEL_ROTATE_BYTES
+                && !hasPartialIncomingPacket()) {
+            wssTunnelRotating = true;
+            closeSocket(0, 0);
             return;
         }
         if (!transportAlive) {
@@ -5268,7 +5360,12 @@ void ConnectionSocket::adjustWriteOp() {
         const bool hasPendingWssWrite = currentWssTransport->wantsWrite();
         const bool canWriteQueuedApplicationData = outgoingByteStream->hasData()
                 && currentWssTransport->canWriteApplicationData();
-        if (hasPendingWssWrite || canWriteQueuedApplicationData) {
+        // A pooled socket is ready before the connection has anything to send,
+        // and on_connected only fires from an epoll event: a download
+        // connection, which queues its request after on_connected, waited out
+        // its timeout on every pool hit (logs (23): 19 hits, none connected).
+        const bool readyButNotAnnounced = currentWssTransport->isReady() && !onConnectedSent;
+        if (hasPendingWssWrite || canWriteQueuedApplicationData || readyButNotAnnounced) {
             eventMask.events |= EPOLLOUT;
         }
     } else if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
@@ -5403,8 +5500,12 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
             if (isCurrentWebProxyBridge() && deferWebProxyReceiveTimeout(now)) {
                 return false;
             }
-            if (isCurrentTransportWss() && currentWssTransport != nullptr) {
-                currentWssTransport->timedOut();
+            // A tunnel stuck in the middle of an answer larger than it can
+            // carry is not a broken tunnel: the file loader switches to small
+            // parts, and counting it would send the DC to direct TCP instead.
+            if (isCurrentTransportWss() && currentWssTransport != nullptr
+                    && !(currentWssRoute.tunnel && hasPartialIncomingPacket())) {
+                currentWssTransport->timedOutMidPacket(hasPartialIncomingPacket());
             }
             classifyMtProxyPreTcpTimeoutDiagnostic("checkTimeout");
             closeSocket(2, 0);

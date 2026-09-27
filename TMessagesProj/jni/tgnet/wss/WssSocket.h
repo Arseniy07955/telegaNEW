@@ -28,13 +28,45 @@ struct Route {
     // The Worker tunnel reaches the DC over plain TCP, where bytes 60..61 of
     // the obfuscation header must name the DC and traffic class.
     bool tunnel = false;
+    // Position in the Cloudflare front catalog (kwsN.<front domain>), or -1.
+    // The front forwards the WebSocket to Telegram Web itself, so unlike the
+    // tunnel it needs no destination address and carries the byte stream as is.
+    int32_t cdnSlot = -1;
+    int32_t cdnDcId = 0;
+    // Which of the front's two Cloudflare addresses this route dials.
+    int32_t cdnAddress = -1;
+    // Key for failure counting and suppression when it must not follow the
+    // domain: every front domain of a DC shares one health record.
+    std::string healthDomain;
+    // Network the route was chosen on (see SetNetworkType): its failures count
+    // against that network only, even when reported after a switch.
+    int32_t network = 0;
 };
+
+// Wi-Fi and mobile data reach Telegram through different providers, so relay
+// health, suppression and the IP/DNS preference are kept per network type.
+void SetNetworkType(int32_t networkType);
 
 // Telegram's public web relays cover production DC1-DC5. Media connections
 // use the corresponding -1 relay, matching Telegram Web's transport catalog.
 // While a DC's relay is suppressed as unreachable, the route switches to the
-// ZaStoGram Cloudflare Worker, which opens dcAddress (IPv4) over TCP itself.
+// Cloudflare front domains of tg-ws-proxy, then to the ZaStoGram Cloudflare
+// Worker, which opens dcAddress (IPv4) over TCP itself.
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route);
+
+// Whether OfficialRoute would still hand out this exact route: same network,
+// not suppressed and not switched to the relay's DNS name.
+bool RouteUsable(const Route &route);
+
+// The Cloudflare front route that replaced a stale one after a failure moved
+// the catalog position on; false if the route is not a front route.
+bool FollowCdnRoute(const Route &stale, Route *fresh);
+
+// Whether OfficialRoute would carry this DC through the Cloudflare tunnel now.
+bool DatacenterTunneled(int32_t dcId, bool mediaConnection, bool testBackend);
+
+// Keeps relay suppression across launches in this file (read once).
+void SetRouteHealthPath(const std::string &path);
 
 class Socket final : public transport::Socket {
 public:
@@ -53,10 +85,17 @@ public:
     transport::HandshakePhase handshakePhase() const override;
     const char *transportName() const override;
     void timedOut() override;
+    void timedOutMidPacket(bool midPacket) override;
     void noteAppDataTimeout() override;
+    std::string takeSessionSummary() override;
+    uint64_t receivedBytes() const override;
     void close() override;
 
     const Route &route() const;
+
+    // A pool spare nobody is waiting for: its failures say too little about
+    // the relay to move real connections to another address or the tunnel.
+    void setSpeculative(bool value);
 
 private:
     enum class State : uint8_t {
@@ -84,11 +123,15 @@ private:
     bool parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::string *diagnostic);
     bool queueFrame(uint8_t opcode, const uint8_t *data, uint32_t size, std::string *diagnostic);
     void setIoWait(IoWait wait, const char *operation);
+    bool writesWaitForRead() const;
     void noteAttemptFailed();
     void noteUpgradeSucceeded();
+    bool outputDrained() const;
     const char *stateName() const;
     const char *ioWaitName() const;
     Route routeConfig;
+    // Numeric address this socket dialled, to tell a dropped flow from a dead relay.
+    std::string peerAddress;
     SSL *ssl = nullptr;
     int socketFd = -1;
     State state = State::Closed;
@@ -111,6 +154,25 @@ private:
     bool openingFrameSent = false;
     bool fragmentedMessage = false;
     bool failureRecorded = false;
+    // Upgrades answered 503 on this TLS connection (Cloudflare front only).
+    uint32_t upgradeRetries = 0;
+    bool provenRecorded = false;
+    bool speculative = false;
+    bool fromPool = false;
+    // For the wss_session summary logged on close.
+    int64_t openedAtMs = 0;
+    int64_t readyAtMs = 0;
+    int64_t firstDataAtMs = 0;
+    // With first_data_ms it gives throughput: rx / (last - first).
+    int64_t lastDataAtMs = 0;
+    // Set for the duration of timedOutMidPacket(true).
+    bool timeoutMidPacket = false;
+    uint64_t bytesOut = 0;
+    uint64_t bytesIn = 0;
+    bool summaryTaken = false;
+    bool reachableRecorded = false;
+    // SSL_write returned WANT_READ: the record can only continue after input.
+    bool writeBlockedOnRead = false;
 };
 
 std::unique_ptr<transport::Socket> CreateSocket(Route route);

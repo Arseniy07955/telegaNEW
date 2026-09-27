@@ -89,6 +89,7 @@ python3 Tools/check_splash_icon.py
 python3 Tools/check_settings_durov_links.py
 python3 Tools/check_zapret_proxy_sponsor.py
 python3 Tools/check_plugin_client_utils_contract.py
+python3 Tools/check_plugin_alert_contract.py
 python3 Tools/check_plugin_python_deps.py
 python3 Tools/check_plugin_utils_javadoc.py
 python3 Tools/check_build_apk_workflow.py

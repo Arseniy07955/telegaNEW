@@ -47,6 +47,7 @@ jmethodID jclass_ConnectionsManager_onConnectionStateChanged;
 jmethodID jclass_ConnectionsManager_onInternalPushReceived;
 jmethodID jclass_ConnectionsManager_onUpdateConfig;
 jmethodID jclass_ConnectionsManager_onBytesSent;
+jmethodID jclass_ConnectionsManager_onDatacenterTunneled;
 jmethodID jclass_ConnectionsManager_onBytesReceived;
 jmethodID jclass_ConnectionsManager_onRequestNewServerIpAndPort;
 jmethodID jclass_ConnectionsManager_onProxyError;
@@ -345,6 +346,10 @@ void setProxyActivationContext(JNIEnv *env, jclass c, jint instanceNum, jint act
     }
 }
 
+jboolean isDatacenterTunneled(JNIEnv *env, jclass c, jint instanceNum, jint datacenterId, jboolean media) {
+    return ConnectionsManager::getInstance(instanceNum).isDatacenterTunneled((uint32_t) datacenterId, media != 0) ? JNI_TRUE : JNI_FALSE;
+}
+
 void setWssTransportEnabled(JNIEnv *env, jclass c, jint instanceNum, jboolean enabled) {
     ConnectionsManager::getInstance(instanceNum).setWssTransportEnabled(enabled != 0);
 }
@@ -528,6 +533,10 @@ class Delegate : public ConnectiosManagerDelegate {
 
     void onBytesSent(int32_t amount, int32_t networkType, int32_t instanceNum) {
         jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onBytesSent, amount, networkType, instanceNum);
+    }
+
+    void onDatacenterTunneled(int32_t datacenterId, int32_t instanceNum) {
+        jniEnv[instanceNum]->CallStaticVoidMethod(jclass_ConnectionsManager, jclass_ConnectionsManager_onDatacenterTunneled, datacenterId, instanceNum);
     }
 
     void onRequestNewServerIpAndPort(int32_t second, int32_t instanceNum) {
@@ -719,6 +728,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_applyDatacenterAddress", "(IILjava/lang/String;I)V", (void *) applyDatacenterAddress},
         {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/MtProxyOptions;ILjava/lang/String;)V", (void *) setProxySettings},
         {"native_setWssTransportEnabled", "(IZ)V", (void *) setWssTransportEnabled},
+        {"native_isDatacenterTunneled", "(IIZ)Z", (void *) isDatacenterTunneled},
         {"native_getConnectionState", "(I)I", (void *) getConnectionState},
         {"native_setUserId", "(IJ)V", (void *) setUserId},
         {"native_init", "(IIIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJZZZII)V", (void *) init},
@@ -882,6 +892,10 @@ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
     }
     jclass_ConnectionsManager_onBytesSent = env->GetStaticMethodID(jclass_ConnectionsManager, "onBytesSent", "(III)V");
     if (jclass_ConnectionsManager_onBytesSent == 0) {
+        return JNI_FALSE;
+    }
+    jclass_ConnectionsManager_onDatacenterTunneled = env->GetStaticMethodID(jclass_ConnectionsManager, "onDatacenterTunneled", "(II)V");
+    if (jclass_ConnectionsManager_onDatacenterTunneled == 0) {
         return JNI_FALSE;
     }
     jclass_ConnectionsManager_onBytesReceived = env->GetStaticMethodID(jclass_ConnectionsManager, "onBytesReceived", "(III)V");

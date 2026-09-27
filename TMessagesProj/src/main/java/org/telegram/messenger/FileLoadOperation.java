@@ -150,6 +150,13 @@ public class FileLoadOperation {
     private final static int stateCanceled = 4;
     private final static int stateCancelling = 5;
 
+    private static final int TUNNEL_DOWNLOAD_CHUNK_SIZE = 1024 * 8;
+    // Each tunnel connection carries one 8 KB part and is then replaced
+    // before the network freezes it, so speed comes only from parallel
+    // connections: parts go round-robin over the DC's download connections.
+    private static final int TUNNEL_PARALLEL_REQUESTS = 8;
+    private static final java.util.concurrent.atomic.AtomicInteger tunnelConnectionSlot = new java.util.concurrent.atomic.AtomicInteger();
+    private boolean tunnelParts;
     private int downloadChunkSize = 1024 * 32;
     private int downloadChunkSizeBig = 1024 * 128;
     private int cdnChunkCheckSize = 1024 * 128;
@@ -912,6 +919,28 @@ public class FileLoadOperation {
         notLoadedBytesRangesCopy = new ArrayList<>(notLoadedBytesRanges);
     }
 
+    public void onDatacenterTunneled(int dc) {
+        Utilities.stageQueue.postRunnable(() -> {
+            if (state != stateDownloading || isCdn || isPreloadVideoOperation || datacenterId != dc
+                    || currentDownloadChunkSize <= TUNNEL_DOWNLOAD_CHUNK_SIZE) {
+                return;
+            }
+            // Parts already requested are larger than a tunnel connection can
+            // carry and would never arrive: drop them and continue from what
+            // is already downloaded in 8 KB parts.
+            if (!requestInfos.isEmpty() || !delayedRequestInfos.isEmpty()) {
+                clearOperation(null, false, false);
+            }
+            currentDownloadChunkSize = TUNNEL_DOWNLOAD_CHUNK_SIZE;
+            currentMaxDownloadRequests = TUNNEL_PARALLEL_REQUESTS;
+            tunnelParts = true;
+            if (BuildVars.LOGS_ENABLED) {
+                FileLog.d("debug_loading: " + fileName + " dc=" + dc + " switched to tunnel, 8 KB parts from " + downloadedBytes);
+            }
+            startDownloadRequest(-1);
+        });
+    }
+
     public void pause() {
         if (state != stateDownloading) {
             return;
@@ -955,6 +984,19 @@ public class FileLoadOperation {
                 boolean bigChunk = totalBytesCount >= bigFileSizeFrom;
                 currentDownloadChunkSize = bigChunk ? downloadChunkSizeBig : downloadChunkSize;
                 currentMaxDownloadRequests = bigChunk ? maxDownloadRequestsBig : maxDownloadRequests;
+            }
+            // ZaStoGram: when this DC's relay is blocked and its media goes
+            // through the Cloudflare tunnel, a throttled network freezes each
+            // TCP connection after ~16 KB. Ask for 8 KB parts over parallel
+            // connections; the native layer replaces each tunnel connection
+            // after one part, before the limit.
+            if (!isCdn && datacenterId > 0 && ConnectionsManager.native_isDatacenterTunneled(currentAccount, datacenterId, true)) {
+                currentDownloadChunkSize = TUNNEL_DOWNLOAD_CHUNK_SIZE;
+                currentMaxDownloadRequests = TUNNEL_PARALLEL_REQUESTS;
+                tunnelParts = true;
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("debug_loading: " + fileName + " dc=" + datacenterId + " via tunnel, 8 KB parts");
+                }
             }
         }
         final boolean alreadyStarted = state != stateIdle;
@@ -2519,7 +2561,10 @@ public class FileLoadOperation {
             boolean isLast = totalBytesCount <= 0 || a == count - 1 || totalBytesCount > 0 && downloadOffset + currentDownloadChunkSize >= totalBytesCount;
             final TLObject request;
             int connectionType;
-            if (useConnectionType == -1) {
+            if (useConnectionType == -1 && tunnelParts && !isCdn && currentDownloadChunkSize == TUNNEL_DOWNLOAD_CHUNK_SIZE) {
+                int slot = (tunnelConnectionSlot.getAndIncrement() & 0x7fffffff) % TUNNEL_PARALLEL_REQUESTS;
+                connectionType = ConnectionsManager.ConnectionTypeDownload | (slot << 16);
+            } else if (useConnectionType == -1) {
                 connectionType = ConnectionsManager.getMtProxySoftMuxDownloadConnectionType(requestsCount);
                 //globalRequestPointer++;
             } else {

@@ -41,10 +41,19 @@ public:
     virtual HandshakePhase handshakePhase() const = 0;
     virtual const char *transportName() const = 0;
     virtual void timedOut() = 0;
+    // The same timeout, told whether it struck in the middle of an incoming
+    // MTProto packet: a stream frozen mid-transfer, not an idle connection.
+    virtual void timedOutMidPacket(bool midPacket) { (void) midPacket; timedOut(); }
     // The handshake completed, application data was sent, and no reply came
     // back within the shared watchdog timeout. Transports use this to penalize
     // routes that look healthy but silently swallow traffic.
     virtual void noteAppDataTimeout() {}
+    // One-line account of this socket's life for the disconnect log line
+    // (route, bytes each way, handshake and first-data times). Taking it
+    // tells the transport not to log the same summary again on close.
+    virtual std::string takeSessionSummary() { return std::string(); }
+    // Application bytes received since open; the WSS tunnel rotates on it.
+    virtual uint64_t receivedBytes() const { return 0; }
     virtual void close() = 0;
 };
 

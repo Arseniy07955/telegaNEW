@@ -26,7 +26,9 @@
 #define DC_UPDATE_TIME 60 * 60
 #define TEMP_AUTH_KEY_EXPIRE_TIME 24 * 60 * 60
 #define PROXY_CONNECTIONS_COUNT 4
-#define DOWNLOAD_CONNECTIONS_COUNT 2
+// ZaStoGram: 8 so that a DC behind the throttled tunnel can fetch parts over
+// parallel short-lived connections (FileLoadOperation TUNNEL_PARALLEL_REQUESTS).
+#define DOWNLOAD_CONNECTIONS_COUNT 8
 #define UPLOAD_CONNECTIONS_COUNT 4
 
 // Stream classes of the WEB proxy carrier; must match WebProxyFlow.CLASS_*.
@@ -108,7 +110,8 @@ enum EventObjectType {
     EventObjectTypeConnection,
     EventObjectTypeTimer,
     EventObjectTypePipe,
-    EventObjectTypeEvent
+    EventObjectTypeEvent,
+    EventObjectTypeWssPool
 };
 
 enum FileLoadState {
@@ -162,6 +165,8 @@ typedef struct ConnectiosManagerDelegate {
     virtual void onUpdateConfig(TL_config *config, int32_t instanceNum) = 0;
     virtual void onInternalPushReceived(int32_t instanceNum) = 0;
     virtual void onBytesSent(int32_t amount, int32_t networkType, int32_t instanceNum) = 0;
+    // A media DC switched to the Cloudflare tunnel; file loads should use small parts.
+    virtual void onDatacenterTunneled(int32_t datacenterId, int32_t instanceNum) {}
     virtual void onBytesReceived(int32_t amount, int32_t networkType, int32_t instanceNum) = 0;
     virtual void onRequestNewServerIpAndPort(int32_t second, int32_t instanceNum) = 0;
     virtual void onProxyError(int32_t instanceNum) = 0;

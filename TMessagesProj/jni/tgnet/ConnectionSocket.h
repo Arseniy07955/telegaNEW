@@ -63,6 +63,9 @@ public:
     // so the reconnect timer waits out the coordinator's clock instead of a
     // shorter re-derived backoff. Returns 0 when no hold was suggested.
     uint32_t consumeSuggestedReconnectHoldMs();
+    // The last socket was a Cloudflare front that failed fast, before it
+    // connected: a 503 or a reset, not a slow path worth pacing.
+    bool consumeWssFrontFastFailure();
 
 protected:
     int32_t instanceNum;
@@ -79,6 +82,8 @@ protected:
     virtual void onDisconnected(int32_t reason, int32_t error) = 0;
     virtual void onConnected() = 0;
     virtual bool hasPendingRequests() = 0;
+    // An incoming MTProto packet is only partly received.
+    virtual bool hasPartialIncomingPacket() { return false; }
 
     std::string overrideProxyUser = "";
     std::string overrideProxyPassword = "";
@@ -98,6 +103,7 @@ private:
     uint32_t proxyActivationGeneration = 0;
     uint32_t proxyConfigGeneration = 0;
     uint32_t proxySuggestedReconnectHoldMs = 0;
+    bool wssFrontFastFailure = false;
     std::string proxyActivationOrigin = "active_socket";
 
     int32_t checkSocketError(int32_t *error);
@@ -187,6 +193,7 @@ private:
     void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
     bool isCurrentWssTunnel();
+    bool isCurrentWssCdn();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
     bool flushWssStream(std::string *diagnostic);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);
