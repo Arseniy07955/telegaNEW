@@ -170,7 +170,10 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
             SharedConfig.ProxyInfo existing = null;
             for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
                 if (info.settings.getType() == ProxySettings.Type.WEB) {
-                    if (web && settings.getAddress().equalsIgnoreCase(info.settings.getAddress())) {
+                    // Один веб-сервер может раздаваться с разными ключами (например,
+                    // с dd и без), поэтому веб-записи различаются и по ключу.
+                    if (web && settings.getAddress().equalsIgnoreCase(info.settings.getAddress())
+                            && settings.getSecret().equalsIgnoreCase(info.settings.getSecret())) {
                         existing = info;
                         break;
                     }
