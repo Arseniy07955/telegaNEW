@@ -41,6 +41,9 @@ public:
     virtual HandshakePhase handshakePhase() const = 0;
     virtual const char *transportName() const = 0;
     virtual void timedOut() = 0;
+    // The same timeout, told whether it struck in the middle of an incoming
+    // MTProto packet: a stream frozen mid-transfer, not an idle connection.
+    virtual void timedOutMidPacket(bool midPacket) { (void) midPacket; timedOut(); }
     // The handshake completed, application data was sent, and no reply came
     // back within the shared watchdog timeout. Transports use this to penalize
     // routes that look healthy but silently swallow traffic.

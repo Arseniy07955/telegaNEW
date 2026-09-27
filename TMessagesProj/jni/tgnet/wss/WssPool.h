@@ -65,12 +65,21 @@ private:
     void open(const std::string &key, Demand &demand, int64_t now);
     void retire(Entry *entry, bool backoff, const char *reason);
     void updateInterest(Entry *entry);
-    size_t countFor(const std::string &key) const;
+    size_t countFor(const std::string &key, const Route &route) const;
+    size_t sparesWanted(const Route &route, int64_t now) const;
 
     int epollFd = -1;
     std::function<int64_t()> clock;
     std::vector<std::unique_ptr<Entry>> entries;
     std::map<std::string, Demand> demands;
+    // Per front target (network, DC): when a connection last asked, and
+    // until when a burst of asks keeps a second spare warm.
+    struct CdnTake {
+        int64_t at = 0;
+        bool hit = false;
+    };
+    std::map<std::string, CdnTake> lastCdnTake;
+    std::map<std::string, int64_t> cdnBurstUntil;
     std::vector<EventObject *> graveyard;
 };
 

@@ -2340,6 +2340,12 @@ bool ConnectionSocket::isProxyCloseDiagnosticSuppressed() {
     return proxyCloseDiagnosticSuppressed;
 }
 
+bool ConnectionSocket::consumeWssFrontFastFailure() {
+    const bool fast = wssFrontFastFailure;
+    wssFrontFastFailure = false;
+    return fast;
+}
+
 uint32_t ConnectionSocket::consumeSuggestedReconnectHoldMs() {
     uint32_t hold = proxySuggestedReconnectHoldMs;
     proxySuggestedReconnectHoldMs = 0;
@@ -4703,6 +4709,11 @@ void ConnectionSocket::closeStepOsTeardown() {
 // onDisconnected must stay the LAST statement: it reads the resolved
 // diagnostic and consumeSuggestedReconnectHoldMs() from this object.
 void ConnectionSocket::closeStepResetStateAndNotify(int32_t reason, int32_t error) {
+    // Each front failure already moves to another front, so the 1 s pause
+    // before reconnecting only adds to the ~1.1 s the next dial takes.
+    wssFrontFastFailure = currentTransportWss && currentWssRoute.cdnSlot >= 0 && !onConnectedSent
+            && wssOpenTime > 0
+            && ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis() - wssOpenTime < 4000;
     setWaitingForHostResolve("", "closeSocket_cleanup");
     setMtProxyTcpConnectAttemptStarted(false, "closeSocket_cleanup");
     setMtProxyDnsResolveAttemptStarted(false, "closeSocket_cleanup");
@@ -5494,7 +5505,7 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
             // parts, and counting it would send the DC to direct TCP instead.
             if (isCurrentTransportWss() && currentWssTransport != nullptr
                     && !(currentWssRoute.tunnel && hasPartialIncomingPacket())) {
-                currentWssTransport->timedOut();
+                currentWssTransport->timedOutMidPacket(hasPartialIncomingPacket());
             }
             classifyMtProxyPreTcpTimeoutDiagnostic("checkTimeout");
             closeSocket(2, 0);

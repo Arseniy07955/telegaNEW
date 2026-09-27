@@ -32,6 +32,14 @@ constexpr int64_t kTcpConnectTimeoutMs = 2500;
 constexpr int64_t kHandshakeTimeoutMs = 8000;
 constexpr int64_t kMinBackoffMs = 2000;
 constexpr int64_t kMaxBackoffMs = 60 * 1000;
+// A download opens two connections to a DC at once (Download/Download2 by
+// request parity), so one spare leaves the second waiting for its own dial.
+// Two asks for the same front target this close together are a burst, and
+// the second spare is kept warm for a while after it, not permanently: the
+// fronts are a free third-party service.
+constexpr int64_t kCdnBurstWindowMs = 3000;
+constexpr int64_t kCdnBurstSpareMs = 30 * 1000;
+constexpr size_t kCdnBurstSpares = 2;
 
 std::string keyFor(const Route &route) {
     return route.connectHost + ":" + std::to_string(route.relayPort) + "|" + route.domain + route.path;
@@ -45,6 +53,10 @@ bool sameCdnTarget(const Route &spare, const Route &wanted) {
             && spare.network == wanted.network
             && spare.cdnDcId == wanted.cdnDcId
             && spare.path == wanted.path;
+}
+
+std::string cdnTargetKey(const Route &route) {
+    return std::to_string(route.network) + "/" + std::to_string(route.cdnDcId) + route.path;
 }
 
 bool poolable(const Route &route) {
@@ -86,10 +98,26 @@ void Pool::attach(int fd, std::function<int64_t()> monotonicClock) {
     clock = std::move(monotonicClock);
 }
 
-size_t Pool::countFor(const std::string &key) const {
-    return static_cast<size_t>(std::count_if(entries.begin(), entries.end(), [&key](const std::unique_ptr<Entry> &entry) {
-        return entry->key == key;
+size_t Pool::countFor(const std::string &key, const Route &route) const {
+    // Front spares are interchangeable for a DC (sameCdnTarget), and a spare
+    // left on a front the cursor moved away from still serves it: counting by
+    // key alone kept two to four warm per DC unaccounted.
+    const bool cdn = route.cdnSlot >= 0;
+    // Spares still dialing count per key only: about half of them end in a
+    // 503, and counting them for the whole DC starved the refill.
+    return static_cast<size_t>(std::count_if(entries.begin(), entries.end(), [&](const std::unique_ptr<Entry> &entry) {
+        return entry->key == key
+                || (cdn && entry->readyAt != 0 && entry->socket != nullptr
+                        && sameCdnTarget(entry->socket->route(), route));
     }));
+}
+
+size_t Pool::sparesWanted(const Route &route, int64_t now) const {
+    if (route.cdnSlot < 0) {
+        return kSparePerRoute;
+    }
+    auto it = cdnBurstUntil.find(cdnTargetKey(route));
+    return it != cdnBurstUntil.end() && now < it->second ? kCdnBurstSpares : kSparePerRoute;
 }
 
 std::unique_ptr<Socket> Pool::take(const Route &route, int64_t now) {
@@ -98,13 +126,28 @@ std::unique_ptr<Socket> Pool::take(const Route &route, int64_t now) {
     }
     const std::string key = keyFor(route);
     auto demandIt = demands.find(key);
-    if (demandIt == demands.end()) {
+    const bool newDemand = demandIt == demands.end();
+    if (newDemand) {
         Demand demand;
         demand.route = route;
         demand.nextOpenAt = now + kFirstOpenDelayMs;
         demandIt = demands.emplace(key, std::move(demand)).first;
     }
     demandIt->second.lastWanted = now;
+    // A burst is a second ask right after a hit (Download and Download2 of
+    // one file). Misses do not count: a failing connection reconnecting every
+    // ~1.3 s would otherwise keep two spares warm for the whole outage.
+    const std::string target = route.cdnSlot >= 0 ? cdnTargetKey(route) : std::string();
+    if (!target.empty()) {
+        auto last = lastCdnTake.find(target);
+        if (last != lastCdnTake.end() && last->second.hit && now - last->second.at < kCdnBurstWindowMs) {
+            if (LOGS_ENABLED && cdnBurstUntil[target] <= now) {
+                DEBUG_D("wss_pool burst dc=%d net=%d", route.cdnDcId, route.network);
+            }
+            cdnBurstUntil[target] = now + kCdnBurstSpareMs;
+        }
+        lastCdnTake[target] = {now, false};
+    }
     for (auto &entry : entries) {
         if (entry->readyAt == 0 || !entry->socket->isReady()
                 || (entry->key != key && !sameCdnTarget(entry->socket->route(), route))) {
@@ -121,7 +164,20 @@ std::unique_ptr<Socket> Pool::take(const Route &route, int64_t now) {
                     socket->route().domain.c_str(), socket->route().connectHost.c_str(), (long long) (now - entry->readyAt));
         }
         retire(entry.get(), false, nullptr);
+        if (!target.empty()) {
+            lastCdnTake[target].hit = true;
+        }
         return socket;
+    }
+    // A miss on a front: the connection dials itself now, and a spare opened
+    // at the same time is an independent second chance against the ~50% of
+    // front connections refused with 503 (it serves the next connection of
+    // this DC). Not for a demand seen for the first time, which is the start
+    // burst kFirstOpenDelayMs keeps quiet, and not while backing off.
+    Demand &demand = demandIt->second;
+    if (route.cdnSlot >= 0 && !newDemand && demand.backoffMs == 0
+            && countFor(key, demand.route) < sparesWanted(demand.route, now)) {
+        open(key, demand, now);
     }
     return nullptr;
 }
@@ -178,7 +234,8 @@ void Pool::tick(int64_t now, bool allowed) {
         }
         // A route that is suppressed or switched to its DNS name will not be
         // asked for in this form, so a spare for it would just idle out.
-        if (now >= demand.nextOpenAt && countFor(it->first) < kSparePerRoute && RouteUsable(demand.route)) {
+        if (now >= demand.nextOpenAt && countFor(it->first, demand.route) < sparesWanted(demand.route, now)
+                && RouteUsable(demand.route)) {
             open(it->first, demand, now);
         }
         ++it;

@@ -240,6 +240,20 @@ bool isCdn(const Route &route) {
     return route.cdnSlot >= 0;
 }
 
+// Relay domains share ingress addresses: kws2, kws4, kws2-1 and kws4-1 all
+// dial 149.154.167.220. A TCP timeout does not depend on the SNI, so TCP
+// failures also count per address; when an address is suppressed every
+// domain on it moves to the fronts at once instead of each timing out three
+// times on its own (logs (23): kws1-1 and kws2-1 lost 8-11 s each after kws1
+// and kws2 had already proven their addresses dead).
+std::string relayAddressHealthName(const std::string &address) {
+    return "addr-" + address;
+}
+
+bool isRelay(const Route &route) {
+    return !route.tunnel && !isCdn(route);
+}
+
 // Called with relayPreferencesMutex held.
 void suppressLocked(const Route &route, RouteHealth &health, int64_t now, const char *reason) {
     const int64_t ttl = std::min(kRouteSuppressTtlMs << std::min(health.suppressions, 4u), kRouteSuppressMaxTtlMs);
@@ -327,6 +341,32 @@ void recordRouteUnreachable(const Route &route) {
     }
 }
 
+// The relay's hardcoded address failed and its DNS fallback failed too, so
+// the domain went down: siblings on the same address will fail the same way.
+// Their fallbacks resolve elsewhere, so this only follows a domain that was
+// already given up on, never a single address failure.
+void suppressRelayAddressWithDomain(const Route &route) {
+    if (!isRelay(route) || route.relayHost.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    const int64_t now = monotonicMillis();
+    auto domain = routeHealth.find(networkKey(route.network, route.domain));
+    if (domain == routeHealth.end() || domain->second.suppressedUntil <= now) {
+        return;
+    }
+    Route address = route;
+    address.healthDomain = relayAddressHealthName(route.relayHost);
+    RouteHealth &health = routeHealth[networkKey(route.network, address.healthDomain)];
+    // Only a recent failure of the address itself: a stray SYN loss long ago
+    // must not take a sibling off a working relay (logs (9): kws2 down while
+    // kws4 on the same address kept working).
+    if (health.consecutiveFailures > 0 && health.suppressedUntil <= now
+            && health.lastFailureAt != 0 && now - health.lastFailureAt < 2 * 60 * 1000) {
+        suppressLocked(address, health, now, "domain");
+    }
+}
+
 void recordRouteReachable(const Route &route) {
     std::lock_guard<std::mutex> lock(relayPreferencesMutex);
     RouteHealth &health = routeHealth[networkKey(route.network, healthName(route))];
@@ -342,11 +382,17 @@ void recordRouteReachable(const Route &route) {
     if (LOGS_ENABLED && (health.consecutiveFailures != 0 || health.suppressedUntil != 0)) {
         DEBUG_D("wss_route restored domain=%s net=%s reason=data", route.domain.c_str(), networkName(route.network));
     }
-    const bool persisted = health.suppressions != 0;
-    health.consecutiveFailures = 0;
-    health.suppressedUntil = 0;
-    health.lastFailureAt = 0;
-    health.suppressions = 0;
+    bool persisted = health.suppressions != 0;
+    health = RouteHealth();
+    // Data through the DNS fallback came from another address: the hardcoded
+    // one siblings dial proved nothing.
+    if (isRelay(route) && !route.relayHost.empty() && !route.viaFallback) {
+        auto address = routeHealth.find(networkKey(route.network, relayAddressHealthName(route.relayHost)));
+        if (address != routeHealth.end()) {
+            persisted = persisted || address->second.suppressions != 0;
+            address->second = RouteHealth();
+        }
+    }
     if (persisted) {
         saveRouteHealthLocked();
     }
@@ -413,6 +459,46 @@ std::map<int32_t, int32_t> cdnPreferredAddress;
 std::map<int32_t, uint32_t> cdnPreferredAddressFailures;
 constexpr uint32_t kCdnAddressFailuresBeforeForget = 2;
 
+// Kept across launches next to the route health file: on a network where one
+// Cloudflare range is dead, every launch otherwise lost ~12 s finding the
+// other one again. Only the dial order depends on it, never suppression.
+std::string cdnPreferencePath() {
+    return routeHealthPath.empty() ? std::string() : routeHealthPath + ".front";
+}
+
+// Called with relayPreferencesMutex held.
+void saveCdnPreferenceLocked() {
+    const std::string path = cdnPreferencePath();
+    if (path.empty()) {
+        return;
+    }
+    FILE *file = fopen(path.c_str(), "w");
+    if (file == nullptr) {
+        return;
+    }
+    for (const auto &[network, address] : cdnPreferredAddress) {
+        fprintf(file, "%d %d\n", network, address);
+    }
+    fclose(file);
+}
+
+// Called with relayPreferencesMutex held, once routeHealthPath is set.
+void loadCdnPreferenceLocked() {
+    const std::string path = cdnPreferencePath();
+    FILE *file = path.empty() ? nullptr : fopen(path.c_str(), "r");
+    if (file == nullptr) {
+        return;
+    }
+    int network = 0;
+    int address = 0;
+    while (fscanf(file, "%d %d", &network, &address) == 2) {
+        if ((network == kNetworkMobile || network == kNetworkWifi) && (address == 0 || address == 1)) {
+            cdnPreferredAddress[network] = address;
+        }
+    }
+    fclose(file);
+}
+
 void noteCdnAddress(const Route &route, bool connected) {
     if (route.cdnSlot < 0 || route.cdnAddress < 0) {
         return;
@@ -420,12 +506,16 @@ void noteCdnAddress(const Route &route, bool connected) {
     std::lock_guard<std::mutex> lock(relayPreferencesMutex);
     auto it = cdnPreferredAddress.find(route.network);
     if (connected) {
-        cdnPreferredAddress[route.network] = route.cdnAddress;
         cdnPreferredAddressFailures[route.network] = 0;
+        if (it == cdnPreferredAddress.end() || it->second != route.cdnAddress) {
+            cdnPreferredAddress[route.network] = route.cdnAddress;
+            saveCdnPreferenceLocked();
+        }
     } else if (it != cdnPreferredAddress.end() && it->second == route.cdnAddress
             && ++cdnPreferredAddressFailures[route.network] >= kCdnAddressFailuresBeforeForget) {
         cdnPreferredAddress.erase(it);
         cdnPreferredAddressFailures[route.network] = 0;
+        saveCdnPreferenceLocked();
     }
 }
 
@@ -474,6 +564,7 @@ void loadRouteHealthFrom(const std::string &path) {
         return;
     }
     routeHealthPath = path;
+    loadCdnPreferenceLocked();
     FILE *file = fopen(path.c_str(), "r");
     if (file == nullptr) {
         return;
@@ -753,7 +844,8 @@ bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const s
     result.relayHostFallback = result.domain;
     result.viaFallback = preferFallback(result);
     result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
-    if (routeSuppressed(result.network, result.domain)) {
+    if (routeSuppressed(result.network, result.domain)
+            || routeSuppressed(result.network, relayAddressHealthName(result.relayHost))) {
         // Релей этого датацентра недоступен: сначала фронты Cloudflare, затем
         // туннель через Worker, а если недоступен и он, соединение идёт
         // напрямую. Для медиа пробовали и прямой путь первым (logs (13)):
@@ -796,6 +888,7 @@ bool RouteUsable(const Route &route) {
     // most TCP connects (logs (1) (8)).
     return route.network == currentNetwork.load()
             && (isCdn(route) || !routeSuppressed(route.network, healthName(route)))
+            && (!isRelay(route) || !routeSuppressed(route.network, relayAddressHealthName(route.relayHost)))
             && (!isCdn(route) || cdnSlotCurrent(route))
             && preferFallback(route) == route.viaFallback;
 }
@@ -1426,16 +1519,26 @@ void Socket::timedOut() {
         if (LOGS_ENABLED) {
             DEBUG_D("wss_socket tunnel_silent");
         }
-    } else if (isCdn(routeConfig) && !speculative && bytesIn > 0 && bytesIn < kCdnProofBytes && outputDrained()) {
-        // The front answered and then went quiet with requests pending: the
-        // freeze the tunnel suffers. Counted apart from refusals, and only a
-        // session past kCdnProofBytes clears it.
+    } else if (isCdn(routeConfig) && !speculative && bytesIn > 0 && bytesIn < kCdnProofBytes
+            && timeoutMidPacket && outputDrained()) {
+        // The front stopped in the middle of an answer: the freeze the tunnel
+        // suffers. Silence between packets is not one: the connection timeout
+        // also fires for requests pending on another DC, and it falsely
+        // counted idle DC2/DC4 fronts that had every answer (logs (23)).
+        // Counted apart from refusals; only a session past kCdnProofBytes
+        // clears it.
         if (LOGS_ENABLED) {
             DEBUG_D("wss_socket cdn_stalled domain=%s rx=%llu", routeConfig.domain.c_str(), (unsigned long long) bytesIn);
         }
         advanceCdn(routeConfig);
         recordCdnStalled(routeConfig, bytesIn);
     }
+}
+
+void Socket::timedOutMidPacket(bool midPacket) {
+    timeoutMidPacket = midPacket;
+    timedOut();
+    timeoutMidPacket = false;
 }
 
 bool Socket::outputDrained() const {
@@ -1491,10 +1594,16 @@ void Socket::noteAttemptFailed() {
             // Flowseal-wide outage would never reach the tunnel.
             recordRouteUnreachable(routeConfig);
         } else if (phase == transport::HandshakePhase::None) {
+            if (isRelay(routeConfig) && !routeConfig.viaFallback) {
+                Route address = routeConfig;
+                address.healthDomain = relayAddressHealthName(routeConfig.relayHost);
+                recordRouteUnreachable(address);
+            }
             // Не дошли даже до установленного TCP: адрес релея недоступен, а не
             // протокол сломан. Несколько таких подряд — и датацентр уходит на
             // прямое соединение, вместо того чтобы навсегда остаться без медиа.
             recordRouteUnreachable(routeConfig);
+            suppressRelayAddressWithDomain(routeConfig);
             if (LOGS_ENABLED) {
                 DEBUG_D("wss_socket route_unreachable domain=%s relay=%s",
                         routeConfig.domain.c_str(), routeConfig.connectHost.c_str());

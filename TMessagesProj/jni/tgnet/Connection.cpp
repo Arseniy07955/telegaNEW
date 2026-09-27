@@ -877,6 +877,7 @@ inline void Connection::encryptKeyWithSecret(uint8_t *bytes, uint8_t secretType)
 
 void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
     reconnectTimer->stop();
+    const bool wssFrontFastFailure = consumeWssFrontFastFailure();
     if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) disconnected with reason %d", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, reason);
     bool switchToNextPort = reason == 2 && wasConnected && (!hasSomeDataSinceLastConnect || currentDatacenter->isCustomPort(currentAddressFlags)) || forceNextPort;
     if (connectionType == ConnectionTypeGeneric || connectionType == ConnectionTypeTemp || connectionType == ConnectionTypeGenericMedia) {
@@ -964,7 +965,7 @@ void Connection::onDisconnectedInternal(int32_t reason, int32_t error) {
             waitForReconnectTimer = false;
             if (connectionType == ConnectionTypeGenericMedia && currentDatacenter->isHandshaking(true) || connectionType == ConnectionTypeGeneric && (currentDatacenter->isHandshaking(false) || datacenterId == ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentDatacenterId || datacenterId == ConnectionsManager::getInstance(currentDatacenter->instanceNum).movingToDatacenterId)) {
                 if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) reconnect %s:%hu", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, hostAddress.c_str(), hostPort);
-                reconnectTimer->setTimeout(mtProxyReconnectDelay != 0 ? mtProxyReconnectDelay : 1000, false);
+                reconnectTimer->setTimeout(mtProxyReconnectDelay != 0 ? mtProxyReconnectDelay : (wssFrontFastFailure ? 150 : 1000), false);
                 reconnectTimer->start();
             }
         }

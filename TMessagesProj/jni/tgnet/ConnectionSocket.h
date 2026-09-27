@@ -63,6 +63,9 @@ public:
     // so the reconnect timer waits out the coordinator's clock instead of a
     // shorter re-derived backoff. Returns 0 when no hold was suggested.
     uint32_t consumeSuggestedReconnectHoldMs();
+    // The last socket was a Cloudflare front that failed fast, before it
+    // connected: a 503 or a reset, not a slow path worth pacing.
+    bool consumeWssFrontFastFailure();
 
 protected:
     int32_t instanceNum;
@@ -100,6 +103,7 @@ private:
     uint32_t proxyActivationGeneration = 0;
     uint32_t proxyConfigGeneration = 0;
     uint32_t proxySuggestedReconnectHoldMs = 0;
+    bool wssFrontFastFailure = false;
     std::string proxyActivationOrigin = "active_socket";
 
     int32_t checkSocketError(int32_t *error);

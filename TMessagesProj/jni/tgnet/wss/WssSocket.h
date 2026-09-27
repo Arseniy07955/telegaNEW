@@ -85,6 +85,7 @@ public:
     transport::HandshakePhase handshakePhase() const override;
     const char *transportName() const override;
     void timedOut() override;
+    void timedOutMidPacket(bool midPacket) override;
     void noteAppDataTimeout() override;
     std::string takeSessionSummary() override;
     uint64_t receivedBytes() const override;
@@ -164,6 +165,8 @@ private:
     int64_t firstDataAtMs = 0;
     // With first_data_ms it gives throughput: rx / (last - first).
     int64_t lastDataAtMs = 0;
+    // Set for the duration of timedOutMidPacket(true).
+    bool timeoutMidPacket = false;
     uint64_t bytesOut = 0;
     uint64_t bytesIn = 0;
     bool summaryTaken = false;
