@@ -123,6 +123,7 @@ private:
     bool writesWaitForRead() const;
     void noteAttemptFailed();
     void noteUpgradeSucceeded();
+    bool outputDrained() const;
     const char *stateName() const;
     const char *ioWaitName() const;
     Route routeConfig;

@@ -16,7 +16,9 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
+#include <linux/sockios.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -218,6 +220,12 @@ void saveRouteHealthLocked() {
         if (health.suppressions == 0 || health.suppressedUntil <= now) {
             continue;
         }
+        if (domain.find("/cdn-") != std::string::npos) {
+            // Fronts are checked again on every launch: a restart with the
+            // relay, the fronts and the tunnel all restored as suppressed
+            // left DC2 with no route at all for ten minutes (logs (1) (8)).
+            continue;
+        }
         fprintf(file, "%s %u %lld\n", domain.c_str(), health.suppressions,
                 (long long) (wall + (health.suppressedUntil - now)));
     }
@@ -247,12 +255,21 @@ void suppressLocked(const Route &route, RouteHealth &health, int64_t now, const 
 
 std::map<std::string, int64_t> tcpSuccessByAddress;
 
-void recordTcpConnected(int32_t network, const std::string &address) {
+// Any front reaching TCP recently, whatever its address. Every front attempt
+// rotates to a new address, so the per-address rule never matched and each
+// lost SYN counted towards suppressing all fronts.
+constexpr const char *kAnyCdnAddress = "cdn-any";
+
+void recordTcpConnected(int32_t network, const std::string &address, bool cdn) {
     if (address.empty()) {
         return;
     }
     std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    tcpSuccessByAddress[networkKey(network, address)] = monotonicMillis();
+    const int64_t now = monotonicMillis();
+    tcpSuccessByAddress[networkKey(network, address)] = now;
+    if (cdn) {
+        tcpSuccessByAddress[networkKey(network, kAnyCdnAddress)] = now;
+    }
 }
 
 bool tcpRecentlyConnected(int32_t network, const std::string &address) {
@@ -341,14 +358,15 @@ void recordCdnProven(const Route &route) {
     if (LOGS_ENABLED && (health.stalls != 0 || health.suppressions != 0)) {
         DEBUG_D("wss_route restored domain=%s net=%s reason=proven", healthName(route).c_str(), networkName(route.network));
     }
-    const bool persisted = health.suppressions != 0;
+    // A front carrying DC traffic past the freeze lifts its suppression too:
+    // when everything is suppressed the fronts carry the DC anyway, and a
+    // suppression left in place sent it into the tunnel the moment the
+    // tunnel's own expired (logs (1) (8), 16:54:48).
     health.consecutiveFailures = 0;
     health.lastFailureAt = 0;
     health.stalls = 0;
     health.suppressions = 0;
-    if (persisted) {
-        saveRouteHealthLocked();
-    }
+    health.suppressedUntil = 0;
 }
 
 void recordCdnStalled(const Route &route, uint64_t received) {
@@ -440,8 +458,9 @@ void loadRouteHealthFrom(const std::string &path) {
     long long until = 0;
     while (fscanf(file, "%255s %u %lld", domain, &suppressions, &until) == 3) {
         const int64_t left = std::min<int64_t>(until - wall, kRouteSuppressRestoreMaxMs);
-        // Lines written before the per-network split carry a bare domain.
-        if (left <= 0 || suppressions == 0 || strchr(domain, '/') == nullptr) {
+        // Lines written before the per-network split carry a bare domain;
+        // front suppression written by dev-173 is not restored either.
+        if (left <= 0 || suppressions == 0 || strchr(domain, '/') == nullptr || strstr(domain, "/cdn-") != nullptr) {
             continue;
         }
         RouteHealth &health = routeHealth[domain];
@@ -650,12 +669,12 @@ static bool TunnelRoute(int32_t network, const std::string &dcAddress, Route *ro
     return true;
 }
 
-static bool CdnRoute(int32_t network, int32_t dcId, Route *route) {
+static bool CdnRoute(int32_t network, int32_t dcId, Route *route, bool ignoreSuppression = false) {
     Route result;
     result.network = network;
     const std::string prefix = "kws" + std::to_string(dcId);
     result.healthDomain = "cdn-" + prefix;
-    if (routeSuppressed(network, result.healthDomain)) {
+    if (!ignoreSuppression && routeSuppressed(network, result.healthDomain)) {
         return false;
     }
     uint32_t slot;
@@ -704,7 +723,21 @@ bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const s
         // напрямую. Для медиа пробовали и прямой путь первым (logs (13)):
         // 27 попыток к медиа DC1, ни одного TCP-подключения, тогда как
         // задушенный туннель мелкими частями хоть что-то отдаёт.
-        return CdnRoute(result.network, dcId, route) || TunnelRoute(result.network, dcAddress, route);
+        if (CdnRoute(result.network, dcId, route) || TunnelRoute(result.network, dcAddress, route)) {
+            return true;
+        }
+        // Everything is suppressed. The direct path this used to fall back to
+        // is exactly what these networks block: a tester's DC2 sat in
+        // "connecting" for minutes (logs (1) (8)) while the fronts of DC4
+        // answered in 100 ms. Twenty fronts on forty addresses are the floor.
+        static std::atomic<int64_t> lastAllSuppressedLog{0};
+        const int64_t now = monotonicMillis();
+        if (LOGS_ENABLED && now - lastAllSuppressedLog.load() > 10000) {
+            lastAllSuppressedLog = now;
+            DEBUG_D("wss_route all_suppressed dc=%d media=%d net=%s use=cdn", dcId, mediaConnection ? 1 : 0,
+                    networkName(result.network));
+        }
+        return CdnRoute(result.network, dcId, route, true);
     }
     *route = std::move(result);
     return true;
@@ -718,12 +751,15 @@ bool DatacenterTunneled(int32_t dcId, bool mediaConnection, bool testBackend) {
 
 bool FollowCdnRoute(const Route &stale, Route *fresh) {
     return isCdn(stale) && stale.network == currentNetwork.load()
-            && CdnRoute(stale.network, stale.cdnDcId, fresh) && fresh->cdnSlot != stale.cdnSlot;
+            && CdnRoute(stale.network, stale.cdnDcId, fresh, true) && fresh->cdnSlot != stale.cdnSlot;
 }
 
 bool RouteUsable(const Route &route) {
+    // Front spares stay warm while the fronts are suppressed: with every
+    // route suppressed they carry the DC anyway, and a cold dial there loses
+    // most TCP connects (logs (1) (8)).
     return route.network == currentNetwork.load()
-            && !routeSuppressed(route.network, healthName(route))
+            && (isCdn(route) || !routeSuppressed(route.network, healthName(route)))
             && (!isCdn(route) || cdnSlotCurrent(route))
             && preferFallback(route) == route.viaFallback;
 }
@@ -812,7 +848,7 @@ bool Socket::finishTcpConnect(std::string *diagnostic) {
         return false;
     }
     phase = transport::HandshakePhase::TcpConnected;
-    recordTcpConnected(routeConfig.network, peerAddress);
+    recordTcpConnected(routeConfig.network, peerAddress, isCdn(routeConfig));
     if (LOGS_ENABLED) {
         DEBUG_D("wss_socket tcp_connected domain=%s", routeConfig.domain.c_str());
     }
@@ -1347,7 +1383,7 @@ void Socket::timedOut() {
         if (LOGS_ENABLED) {
             DEBUG_D("wss_socket tunnel_silent");
         }
-    } else if (isCdn(routeConfig) && !speculative && bytesIn > 0 && bytesIn < kCdnProofBytes) {
+    } else if (isCdn(routeConfig) && !speculative && bytesIn > 0 && bytesIn < kCdnProofBytes && outputDrained()) {
         // The front answered and then went quiet with requests pending: the
         // freeze the tunnel suffers. Counted apart from refusals, and only a
         // session past kCdnProofBytes clears it.
@@ -1357,6 +1393,18 @@ void Socket::timedOut() {
         advanceCdn(routeConfig);
         recordCdnStalled(routeConfig, bytesIn);
     }
+}
+
+bool Socket::outputDrained() const {
+    // A photo going out slowly gets no answer until its part is complete, so
+    // silence while bytes are still queued is an upload in progress, not a
+    // frozen front. Only bytes not yet sent count: SIOCOUTQ also counts sent
+    // but unacknowledged ones, and a frozen path drops those ACKs as well.
+    int unsent = 0;
+    if (socketFd >= 0 && ioctl(socketFd, SIOCOUTQNSD, &unsent) != 0) {
+        unsent = 0;
+    }
+    return pendingOutputBytes == 0 && openingFrame.empty() && unsent == 0;
 }
 
 void Socket::setSpeculative(bool value) {
@@ -1375,7 +1423,8 @@ void Socket::noteAttemptFailed() {
         if (speculative) {
             return;
         }
-        if (phase == transport::HandshakePhase::None && tcpRecentlyConnected(routeConfig.network, peerAddress)) {
+        if (phase == transport::HandshakePhase::None && (tcpRecentlyConnected(routeConfig.network, peerAddress)
+                || (isCdn(routeConfig) && tcpRecentlyConnected(routeConfig.network, kAnyCdnAddress)))) {
             // Соседние сокеты к этому адресу только что подключались: провайдер
             // съел SYN одного потока. Новый сокет пройдёт, а переход на запасной
             // адрес или в туннель здесь только навредит.
