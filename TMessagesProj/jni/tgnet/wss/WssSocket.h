@@ -28,6 +28,14 @@ struct Route {
     // The Worker tunnel reaches the DC over plain TCP, where bytes 60..61 of
     // the obfuscation header must name the DC and traffic class.
     bool tunnel = false;
+    // Position in the Cloudflare front catalog (kwsN.<front domain>), or -1.
+    // The front forwards the WebSocket to Telegram Web itself, so unlike the
+    // tunnel it needs no destination address and carries the byte stream as is.
+    int32_t cdnSlot = -1;
+    int32_t cdnDcId = 0;
+    // Key for failure counting and suppression when it must not follow the
+    // domain: every front domain of a DC shares one health record.
+    std::string healthDomain;
     // Network the route was chosen on (see SetNetworkType): its failures count
     // against that network only, even when reported after a switch.
     int32_t network = 0;
@@ -40,12 +48,17 @@ void SetNetworkType(int32_t networkType);
 // Telegram's public web relays cover production DC1-DC5. Media connections
 // use the corresponding -1 relay, matching Telegram Web's transport catalog.
 // While a DC's relay is suppressed as unreachable, the route switches to the
-// ZaStoGram Cloudflare Worker, which opens dcAddress (IPv4) over TCP itself.
+// Cloudflare front domains of tg-ws-proxy, then to the ZaStoGram Cloudflare
+// Worker, which opens dcAddress (IPv4) over TCP itself.
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route);
 
 // Whether OfficialRoute would still hand out this exact route: same network,
 // not suppressed and not switched to the relay's DNS name.
 bool RouteUsable(const Route &route);
+
+// The Cloudflare front route that replaced a stale one after a failure moved
+// the catalog position on; false if the route is not a front route.
+bool FollowCdnRoute(const Route &stale, Route *fresh);
 
 // Whether OfficialRoute would carry this DC through the Cloudflare tunnel now.
 bool DatacenterTunneled(int32_t dcId, bool mediaConnection, bool testBackend);
@@ -137,6 +150,9 @@ private:
     bool openingFrameSent = false;
     bool fragmentedMessage = false;
     bool failureRecorded = false;
+    // Upgrades answered 503 on this TLS connection (Cloudflare front only).
+    uint32_t upgradeRetries = 0;
+    bool provenRecorded = false;
     bool speculative = false;
     bool fromPool = false;
     // For the wss_session summary logged on close.

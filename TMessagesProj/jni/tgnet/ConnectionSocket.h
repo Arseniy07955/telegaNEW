@@ -189,6 +189,7 @@ private:
     void markConnectionDeadForWrites(const char *reason);
     bool isCurrentTransportWss();
     bool isCurrentWssTunnel();
+    bool isCurrentWssCdn();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
     bool flushWssStream(std::string *diagnostic);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);

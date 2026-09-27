@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <openssl/err.h>
+#include <openssl/pem.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
@@ -44,6 +45,55 @@ constexpr size_t kMaxHttpHeader = 32 * 1024;
 constexpr size_t kMaxPendingOutput = 4 * 1024 * 1024;
 constexpr size_t kMaxPendingInput = 4 * 1024 * 1024;
 constexpr int64_t kFallbackPreferenceTtlMs = 30 * 60 * 1000;
+
+// Cloudflare front domains of tg-ws-proxy (github.com/Flowseal/tg-ws-proxy,
+// .github/cfproxy-domains.txt), in the same shifted spelling: each letter of
+// the name moved forward by the number of letters, ".co.uk" written ".com".
+// kwsN.<domain>/apiws forwards the WebSocket to Telegram Web. Mirrly TG Proxy
+// carries MTProto only this way and, unlike our Worker tunnel (frozen after
+// ~16 KB on the user's mobile network), works there for text and media.
+struct CdnFront {
+    const char *encodedDomain;
+    // The zone's own Cloudflare addresses (27.09.2026). Any Cloudflare edge
+    // serves the zone, so these keep working if DNS moves it, and dialling by
+    // address needs no resolve and lets the pool keep a spare ready.
+    const char *address[2];
+};
+constexpr CdnFront kCdnFronts[] = {
+        {"virkgj.com", {"104.21.80.254", "172.67.155.165"}},
+        {"vmmzovy.com", {"104.21.43.90", "172.67.177.105"}},
+        {"mkuosckvso.com", {"104.21.41.25", "172.67.159.17"}},
+        {"zaewayzmplad.com", {"104.21.70.196", "172.67.138.236"}},
+        {"twdmbzcm.com", {"104.21.21.168", "172.67.199.162"}},
+        {"awzwsldi.com", {"104.21.69.145", "172.67.209.89"}},
+        {"clngqrflngqin.com", {"104.21.73.83", "172.67.189.26"}},
+        {"tjacxbqtj.com", {"104.21.39.36", "172.67.142.232"}},
+        {"bxaxtxmrw.com", {"104.21.84.223", "172.67.197.117"}},
+        {"dmohrsgmohcrwb.com", {"104.21.48.178", "172.67.155.85"}},
+        {"vwbmtmoi.com", {"104.21.33.146", "172.67.146.105"}},
+        {"khgrre.com", {"104.21.78.6", "172.67.214.68"}},
+        {"ulihssf.com", {"104.21.7.253", "172.67.156.145"}},
+        {"tmhqsdqmfpmk.com", {"104.21.25.159", "172.67.134.93"}},
+        {"xwuwoqbm.com", {"104.21.44.55", "172.67.195.218"}},
+        {"orgcnunpj.com", {"104.21.64.155", "172.67.152.37"}},
+        {"zhkuldz.com", {"104.21.51.133", "172.67.180.160"}},
+        {"zypoljnslxa.com", {"104.21.37.105", "172.67.207.129"}},
+        {"efabnxaowuzs.com", {"104.21.35.206", "172.67.179.145"}},
+        {"zaftuzsftqdq.com", {"104.21.78.5", "172.67.214.67"}},
+};
+constexpr uint32_t kCdnFrontCount = sizeof(kCdnFronts) / sizeof(kCdnFronts[0]);
+// A front connection is either served at once or answers 503 to every upgrade
+// (host test 27.09: 0-24 refusals before 101, or all 25 refused). Each retry on
+// the same TLS connection costs ~25 ms against a new TCP+TLS dial.
+constexpr uint32_t kCdnUpgradeRetries = 8;
+// About 40% of front connections are refused, so three failures in a row are
+// ordinary (6%); six mean the fronts are really out of reach.
+constexpr uint32_t kCdnFailuresBeforeSuppress = 6;
+// Past the ~16 KB freeze seen on the tunnel: a session that delivered this
+// much proves the front carries real traffic on this network.
+constexpr uint64_t kCdnProofBytes = 32 * 1024;
+// Sessions that answered and then went silent below kCdnProofBytes.
+constexpr uint32_t kCdnStallsBeforeSuppress = 3;
 
 struct RelayPreference {
     bool preferFallback = false;
@@ -135,6 +185,8 @@ struct RouteHealth {
     // every two minutes, and each probe left DC1 without a connection for
     // seconds (desktop log 25.09). Each repeat doubles the suppression.
     uint32_t suppressions = 0;
+    // Cloudflare front sessions that answered and then froze (kCdnProofBytes).
+    uint32_t stalls = 0;
 };
 constexpr int64_t kRouteSuppressMaxTtlMs = 30 * 60 * 1000;
 // Suppression lived only in memory, so every launch probed a blocked relay
@@ -171,6 +223,28 @@ void saveRouteHealthLocked() {
     }
     fclose(file);
 }
+
+const std::string &healthName(const Route &route) {
+    return route.healthDomain.empty() ? route.domain : route.healthDomain;
+}
+
+bool isCdn(const Route &route) {
+    return route.cdnSlot >= 0;
+}
+
+// Called with relayPreferencesMutex held.
+void suppressLocked(const Route &route, RouteHealth &health, int64_t now, const char *reason) {
+    const int64_t ttl = std::min(kRouteSuppressTtlMs << std::min(health.suppressions, 4u), kRouteSuppressMaxTtlMs);
+    ++health.suppressions;
+    health.suppressedUntil = now + ttl;
+    saveRouteHealthLocked();
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_route suppressed domain=%s net=%s for_ms=%lld reason=%s next=%s", healthName(route).c_str(),
+                networkName(route.network), (long long) ttl, reason,
+                route.tunnel ? "direct" : (isCdn(route) ? "tunnel" : "cdn"));
+    }
+}
+
 std::map<std::string, int64_t> tcpSuccessByAddress;
 
 void recordTcpConnected(int32_t network, const std::string &address) {
@@ -199,6 +273,7 @@ bool routeSuppressed(int32_t network, const std::string &domain) {
     if (it->second.suppressedUntil <= monotonicMillis()) {
         it->second.suppressedUntil = 0;
         it->second.consecutiveFailures = 0;
+        it->second.stalls = 0;
         if (LOGS_ENABLED) {
             DEBUG_D("wss_route restored domain=%s net=%s reason=expired", domain.c_str(), networkName(network));
         }
@@ -209,7 +284,7 @@ bool routeSuppressed(int32_t network, const std::string &domain) {
 
 void recordRouteUnreachable(const Route &route) {
     std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    RouteHealth &health = routeHealth[networkKey(route.network, route.domain)];
+    RouteHealth &health = routeHealth[networkKey(route.network, healthName(route))];
     const int64_t now = monotonicMillis();
     if (health.suppressedUntil > now) {
         return;
@@ -225,25 +300,28 @@ void recordRouteUnreachable(const Route &route) {
     // отдали мегабайты. Медиа теперь подчиняется тем же правилам, что и
     // основной релей.
     ++health.consecutiveFailures;
+    const uint32_t limit = isCdn(route) ? kCdnFailuresBeforeSuppress : kRouteFailuresBeforeSuppress;
     if (LOGS_ENABLED) {
-        DEBUG_D("wss_route failure domain=%s net=%s failures=%u/%u", route.domain.c_str(),
-                networkName(route.network), health.consecutiveFailures, kRouteFailuresBeforeSuppress);
+        DEBUG_D("wss_route failure domain=%s net=%s failures=%u/%u", healthName(route).c_str(),
+                networkName(route.network), health.consecutiveFailures, limit);
     }
-    if (health.consecutiveFailures >= kRouteFailuresBeforeSuppress) {
-        const int64_t ttl = std::min(kRouteSuppressTtlMs << std::min(health.suppressions, 4u), kRouteSuppressMaxTtlMs);
-        ++health.suppressions;
-        health.suppressedUntil = now + ttl;
-        saveRouteHealthLocked();
-        if (LOGS_ENABLED) {
-            DEBUG_D("wss_route suppressed domain=%s net=%s for_ms=%lld next=%s", route.domain.c_str(),
-                    networkName(route.network), (long long) ttl, route.tunnel ? "direct" : "tunnel");
-        }
+    if (health.consecutiveFailures >= limit) {
+        suppressLocked(route, health, now, "failures");
     }
 }
 
 void recordRouteReachable(const Route &route) {
     std::lock_guard<std::mutex> lock(relayPreferencesMutex);
-    RouteHealth &health = routeHealth[networkKey(route.network, route.domain)];
+    RouteHealth &health = routeHealth[networkKey(route.network, healthName(route))];
+    if (isCdn(route)) {
+        // The first answer only shows that the front accepts connections. On a
+        // network that freezes Cloudflare after ~16 KB every session answers,
+        // and resetting the backoff here would cycle three frozen sessions and
+        // two minutes of tunnel forever; that is left to recordCdnProven.
+        health.consecutiveFailures = 0;
+        health.lastFailureAt = 0;
+        return;
+    }
     if (LOGS_ENABLED && (health.consecutiveFailures != 0 || health.suppressedUntil != 0)) {
         DEBUG_D("wss_route restored domain=%s net=%s reason=data", route.domain.c_str(), networkName(route.network));
     }
@@ -255,6 +333,94 @@ void recordRouteReachable(const Route &route) {
     if (persisted) {
         saveRouteHealthLocked();
     }
+}
+
+void recordCdnProven(const Route &route) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    RouteHealth &health = routeHealth[networkKey(route.network, healthName(route))];
+    if (LOGS_ENABLED && (health.stalls != 0 || health.suppressions != 0)) {
+        DEBUG_D("wss_route restored domain=%s net=%s reason=proven", healthName(route).c_str(), networkName(route.network));
+    }
+    const bool persisted = health.suppressions != 0;
+    health.consecutiveFailures = 0;
+    health.lastFailureAt = 0;
+    health.stalls = 0;
+    health.suppressions = 0;
+    if (persisted) {
+        saveRouteHealthLocked();
+    }
+}
+
+void recordCdnStalled(const Route &route, uint64_t received) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    RouteHealth &health = routeHealth[networkKey(route.network, healthName(route))];
+    const int64_t now = monotonicMillis();
+    if (health.suppressedUntil > now) {
+        return;
+    }
+    ++health.stalls;
+    if (LOGS_ENABLED) {
+        DEBUG_D("wss_route stall domain=%s net=%s rx=%llu stalls=%u/%u", healthName(route).c_str(),
+                networkName(route.network), (unsigned long long) received, health.stalls, kCdnStallsBeforeSuppress);
+    }
+    if (health.stalls >= kCdnStallsBeforeSuppress) {
+        health.stalls = 0;
+        suppressLocked(route, health, now, "stalls");
+    }
+}
+
+// Every connection starts from this position in kCdnFronts, per network. A
+// failure moves it on, so the next connection tries another front and edge;
+// a working front is kept. Starting at a random front spreads ZaStoGram users
+// over the whole catalog instead of all loading its first domain.
+std::map<int32_t, uint32_t> cdnCursor;
+
+uint32_t cdnCursorLocked(int32_t network) {
+    auto it = cdnCursor.find(network);
+    if (it == cdnCursor.end()) {
+        uint32_t start = 0;
+        RAND_bytes(reinterpret_cast<uint8_t *>(&start), sizeof(start));
+        it = cdnCursor.emplace(network, start % kCdnFrontCount).first;
+    }
+    return it->second;
+}
+
+void advanceCdn(const Route &route) {
+    if (!isCdn(route)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    uint32_t &cursor = cdnCursor[route.network];
+    if (cursor == static_cast<uint32_t>(route.cdnSlot)) {
+        cursor = (cursor + 1) % (kCdnFrontCount * 2);
+    }
+}
+
+bool cdnSlotCurrent(const Route &route) {
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    return cdnCursorLocked(route.network) == static_cast<uint32_t>(route.cdnSlot);
+}
+
+std::string decodeCdnDomain(const char *encoded) {
+    // tg-ws-proxy's decoder: shift each letter back by the letter count.
+    std::string name(encoded);
+    const size_t suffix = name.rfind(".com");
+    if (suffix == std::string::npos || suffix + 4 != name.size()) {
+        return name;
+    }
+    name.resize(suffix);
+    int letters = 0;
+    for (char c : name) {
+        letters += std::isalpha(static_cast<unsigned char>(c)) ? 1 : 0;
+    }
+    for (char &c : name) {
+        if (c >= 'a' && c <= 'z') {
+            c = static_cast<char>('a' + ((c - 'a') - letters % 26 + 26) % 26);
+        } else if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>('A' + ((c - 'A') - letters % 26 + 26) % 26);
+        }
+    }
+    return name + ".co.uk";
 }
 
 void loadRouteHealthFrom(const std::string &path) {
@@ -338,9 +504,55 @@ std::string base64Encode(const uint8_t *data, size_t length) {
     return result;
 }
 
+// ISRG Root X1 (Let's Encrypt), SHA-256 96BCEC06...BDDF08C6. Eleven of the
+// Cloudflare front domains chain to it, and neither the WebRTC root list nor
+// Android before 7.1 carries it.
+constexpr const char *kIsrgRootX1 =
+        "-----BEGIN CERTIFICATE-----\n"
+        "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\n"
+        "-----END CERTIFICATE-----\n";
+
 bool loadBundledRoots(SSL_CTX *context) {
     int loaded = 0;
     X509_STORE *store = SSL_CTX_get_cert_store(context);
+    if (BIO *bio = BIO_new_mem_buf(kIsrgRootX1, -1)) {
+        if (X509 *certificate = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
+            if (X509_STORE_add_cert(store, certificate) != 1) {
+                ERR_clear_error();
+            }
+            X509_free(certificate);
+        }
+        BIO_free(bio);
+        ERR_clear_error();
+    }
     for (size_t i = 0; i < sizeof(kSSLCertCertificateList) / sizeof(kSSLCertCertificateList[0]); ++i) {
         const unsigned char *cursor = kSSLCertCertificateList[i];
         X509 *certificate = d2i_X509(nullptr, &cursor, static_cast<long>(kSSLCertCertificateSizeList[i]));
@@ -438,6 +650,35 @@ static bool TunnelRoute(int32_t network, const std::string &dcAddress, Route *ro
     return true;
 }
 
+static bool CdnRoute(int32_t network, int32_t dcId, Route *route) {
+    Route result;
+    result.network = network;
+    const std::string prefix = "kws" + std::to_string(dcId);
+    result.healthDomain = "cdn-" + prefix;
+    if (routeSuppressed(network, result.healthDomain)) {
+        return false;
+    }
+    uint32_t slot;
+    {
+        std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+        slot = cdnCursorLocked(network);
+    }
+    const CdnFront &front = kCdnFronts[slot % kCdnFrontCount];
+    result.cdnSlot = static_cast<int32_t>(slot);
+    result.cdnDcId = dcId;
+    // The fronts have no -1 media hosts: media rides kwsN too, as in Mirrly,
+    // where DC1 media loads on the user's mobile network.
+    result.domain = prefix + "." + decodeCdnDomain(front.encodedDomain);
+    result.relayHost = front.address[(slot / kCdnFrontCount) % 2];
+    result.relayHostFallback = result.domain;
+    result.relayPort = 443;
+    result.path = kOfficialPath;
+    result.viaFallback = preferFallback(result);
+    result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
+    *route = std::move(result);
+    return true;
+}
+
 bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const std::string &dcAddress, Route *route) {
     if (route != nullptr && !testBackend && dcId == kTunnelOnlyDcId) {
         // DC203 отдаёт медиа аккаунтам без Premium и своего kws-релея не имеет.
@@ -458,12 +699,12 @@ bool OfficialRoute(int32_t dcId, bool mediaConnection, bool testBackend, const s
     result.viaFallback = preferFallback(result);
     result.connectHost = result.viaFallback ? result.relayHostFallback : result.relayHost;
     if (routeSuppressed(result.network, result.domain)) {
-        // Релей этого датацентра недоступен: сначала туннель через Worker, а
-        // если недоступен и он, соединение идёт напрямую. Для медиа пробовали
-        // и прямой путь первым (logs (13)): 27 попыток к медиа DC1, ни одного
-        // TCP-подключения, тогда как задушенный туннель мелкими частями хоть
-        // что-то отдаёт.
-        return TunnelRoute(result.network, dcAddress, route);
+        // Релей этого датацентра недоступен: сначала фронты Cloudflare, затем
+        // туннель через Worker, а если недоступен и он, соединение идёт
+        // напрямую. Для медиа пробовали и прямой путь первым (logs (13)):
+        // 27 попыток к медиа DC1, ни одного TCP-подключения, тогда как
+        // задушенный туннель мелкими частями хоть что-то отдаёт.
+        return CdnRoute(result.network, dcId, route) || TunnelRoute(result.network, dcAddress, route);
     }
     *route = std::move(result);
     return true;
@@ -475,9 +716,15 @@ bool DatacenterTunneled(int32_t dcId, bool mediaConnection, bool testBackend) {
     return OfficialRoute(dcId, mediaConnection, testBackend, "149.154.175.50", &route) && route.tunnel;
 }
 
+bool FollowCdnRoute(const Route &stale, Route *fresh) {
+    return isCdn(stale) && stale.network == currentNetwork.load()
+            && CdnRoute(stale.network, stale.cdnDcId, fresh) && fresh->cdnSlot != stale.cdnSlot;
+}
+
 bool RouteUsable(const Route &route) {
     return route.network == currentNetwork.load()
-            && !routeSuppressed(route.network, route.domain)
+            && !routeSuppressed(route.network, healthName(route))
+            && (!isCdn(route) || cdnSlotCurrent(route))
             && preferFallback(route) == route.viaFallback;
 }
 
@@ -516,6 +763,8 @@ bool Socket::open(const struct sockaddr *address, socklen_t addressLength, std::
     state = State::TcpConnecting;
     phase = transport::HandshakePhase::None;
     failureRecorded = false;
+    upgradeRetries = 0;
+    provenRecorded = false;
     openedAtMs = monotonicMillis();
     summaryTaken = false;
     reachableRecorded = false;
@@ -638,6 +887,12 @@ bool Socket::onEvent(uint32_t events, std::vector<std::vector<uint8_t>> &payload
             noteUpgradeSucceeded();
             if (LOGS_ENABLED) {
                 DEBUG_D("wss_socket upgrade_ok domain=%s", routeConfig.domain.c_str());
+            }
+        } else if (state == State::HttpWrite) {
+            // A front refused the upgrade and it was asked again on this connection.
+            if (!flushPending(diagnostic)) {
+                noteAttemptFailed();
+                return false;
             }
         } else if (!parseDiagnostic.empty()) {
             if (diagnostic != nullptr) {
@@ -803,6 +1058,36 @@ bool Socket::parseHttpResponse(std::string *diagnostic) {
     const std::string response(inputBuffer.begin(), end);
     inputBuffer.erase(inputBuffer.begin(), end + sizeof(delimiter));
     if (response.compare(0, 12, "HTTP/1.1 101") != 0 && response.compare(0, 12, "HTTP/1.0 101") != 0) {
+        if (isCdn(routeConfig) && upgradeRetries < kCdnUpgradeRetries
+                && (response.compare(0, 12, "HTTP/1.1 503") == 0 || response.compare(0, 12, "HTTP/1.1 429") == 0)) {
+            std::string lower = response;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            // Only an empty keep-alive answer leaves the connection clean for
+            // the next request; Cloudflare's 503 here is exactly that.
+            // The header block ends without its last CRLF.
+            const std::string emptyBody = "\r\ncontent-length: 0";
+            const size_t length = lower.find(emptyBody);
+            const size_t after = length == std::string::npos ? 0 : length + emptyBody.size();
+            if (length != std::string::npos && (after == lower.size() || lower[after] == '\r')
+                    && lower.find("connection: close") == std::string::npos
+                    && inputBuffer.empty()) {
+                ++upgradeRetries;
+                if (LOGS_ENABLED) {
+                    DEBUG_D("wss_socket upgrade_retry domain=%s status=%.12s retry=%u",
+                            routeConfig.domain.c_str(), response.c_str(), upgradeRetries);
+                }
+                if (!queueHttpUpgrade(diagnostic)) {
+                    return false;
+                }
+                state = State::HttpWrite;
+                return false;
+            }
+        }
+        if (LOGS_ENABLED) {
+            DEBUG_D("wss_socket upgrade_refused domain=%s status=%.12s retries=%u",
+                    routeConfig.domain.c_str(), response.c_str(), upgradeRetries);
+        }
         setDiagnostic(diagnostic, "wss_http_upgrade_failed");
         return false;
     }
@@ -920,6 +1205,10 @@ bool Socket::parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::strin
             && (!routeConfig.tunnel || bytesIn >= kTunnelProofBytes)) {
         reachableRecorded = true;
         recordRouteReachable(routeConfig);
+    }
+    if (!provenRecorded && isCdn(routeConfig) && bytesIn >= kCdnProofBytes) {
+        provenRecorded = true;
+        recordCdnProven(routeConfig);
     }
     return true;
 }
@@ -1058,6 +1347,15 @@ void Socket::timedOut() {
         if (LOGS_ENABLED) {
             DEBUG_D("wss_socket tunnel_silent");
         }
+    } else if (isCdn(routeConfig) && !speculative && bytesIn > 0 && bytesIn < kCdnProofBytes) {
+        // The front answered and then went quiet with requests pending: the
+        // freeze the tunnel suffers. Counted apart from refusals, and only a
+        // session past kCdnProofBytes clears it.
+        if (LOGS_ENABLED) {
+            DEBUG_D("wss_socket cdn_stalled domain=%s rx=%llu", routeConfig.domain.c_str(), (unsigned long long) bytesIn);
+        }
+        advanceCdn(routeConfig);
+        recordCdnStalled(routeConfig, bytesIn);
     }
 }
 
@@ -1071,6 +1369,9 @@ void Socket::setSpeculative(bool value) {
 void Socket::noteAttemptFailed() {
     if (!failureRecorded && state != State::Ready) {
         failureRecorded = true;
+        // The next connection tries another front, pool spares included: a
+        // spare that met a refusal in the background spares a real one.
+        advanceCdn(routeConfig);
         if (speculative) {
             return;
         }
@@ -1084,8 +1385,16 @@ void Socket::noteAttemptFailed() {
             }
             return;
         }
-        recordAttemptFailed(routeConfig);
-        if (phase == transport::HandshakePhase::None) {
+        if (!isCdn(routeConfig) || phase == transport::HandshakePhase::None) {
+            // A front's 503 says nothing about its address; only a TCP failure
+            // moves it to the DNS name, which the pool cannot keep ready.
+            recordAttemptFailed(routeConfig);
+        }
+        if (isCdn(routeConfig)) {
+            // A front refused at any stage, 503 included: counted, or a
+            // Flowseal-wide outage would never reach the tunnel.
+            recordRouteUnreachable(routeConfig);
+        } else if (phase == transport::HandshakePhase::None) {
             // Не дошли даже до установленного TCP: адрес релея недоступен, а не
             // протокол сломан. Несколько таких подряд — и датацентр уходит на
             // прямое соединение, вместо того чтобы навсегда остаться без медиа.
@@ -1111,7 +1420,10 @@ void Socket::noteAppDataTimeout() {
     // исходов клиент вечно переподключается к той же чёрной дыре и никогда не
     // уходит на прямое соединение.
     failureRecorded = true;
-    recordAttemptFailed(routeConfig);
+    advanceCdn(routeConfig);
+    if (!isCdn(routeConfig)) {
+        recordAttemptFailed(routeConfig);
+    }
     recordRouteUnreachable(routeConfig);
     if (LOGS_ENABLED) {
         DEBUG_D("wss_socket appdata_timeout domain=%s relay=%s fallback=%d",
@@ -1177,7 +1489,8 @@ std::string Socket::takeSessionSummary() {
             "domain=%s relay=%s route=%s pool=%s tx=%llu rx=%llu ready_ms=%lld first_data_ms=%lld life_ms=%lld",
             routeConfig.domain.c_str(),
             routeConfig.connectHost.c_str(),
-            routeConfig.tunnel ? "tunnel" : (routeConfig.viaFallback ? "dns" : "ip"),
+            routeConfig.tunnel ? "tunnel" : (isCdn(routeConfig) ? (routeConfig.viaFallback ? "cdn_dns" : "cdn")
+                    : (routeConfig.viaFallback ? "dns" : "ip")),
             speculative ? "spare" : (fromPool ? "hit" : "no"),
             (unsigned long long) bytesOut,
             (unsigned long long) bytesIn,

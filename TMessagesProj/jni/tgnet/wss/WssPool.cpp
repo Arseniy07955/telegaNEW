@@ -37,6 +37,16 @@ std::string keyFor(const Route &route) {
     return route.connectHost + ":" + std::to_string(route.relayPort) + "|" + route.domain + route.path;
 }
 
+// Any ready front for the same DC serves as well as the one the cursor points
+// at now: with four accounts' pools warming several DCs, each refused spare
+// moves the shared cursor and would strand every other ready spare.
+bool sameCdnTarget(const Route &spare, const Route &wanted) {
+    return spare.cdnSlot >= 0 && wanted.cdnSlot >= 0
+            && spare.network == wanted.network
+            && spare.cdnDcId == wanted.cdnDcId
+            && spare.path == wanted.path;
+}
+
 bool poolable(const Route &route) {
     struct in_addr parsed;
     // The tunnel carries a per-DC destination and freezes on throttled
@@ -96,7 +106,8 @@ std::unique_ptr<Socket> Pool::take(const Route &route, int64_t now) {
     }
     demandIt->second.lastWanted = now;
     for (auto &entry : entries) {
-        if (entry->key != key || entry->readyAt == 0 || !entry->socket->isReady()) {
+        if (entry->readyAt == 0 || !entry->socket->isReady()
+                || (entry->key != key && !sameCdnTarget(entry->socket->route(), route))) {
             continue;
         }
         if (entry->registered) {
@@ -107,7 +118,7 @@ std::unique_ptr<Socket> Pool::take(const Route &route, int64_t now) {
         socket->setSpeculative(false);
         if (LOGS_ENABLED) {
             DEBUG_D("wss_pool hit domain=%s relay=%s idle_ms=%lld",
-                    route.domain.c_str(), route.connectHost.c_str(), (long long) (now - entry->readyAt));
+                    socket->route().domain.c_str(), socket->route().connectHost.c_str(), (long long) (now - entry->readyAt));
         }
         retire(entry.get(), false, nullptr);
         return socket;
@@ -144,6 +155,24 @@ void Pool::tick(int64_t now, bool allowed) {
     for (auto it = demands.begin(); it != demands.end();) {
         Demand &demand = it->second;
         if (now - demand.lastWanted > kDemandTtlMs) {
+            it = demands.erase(it);
+            continue;
+        }
+        // A failed front spare moves the catalog on; warm the front the next
+        // connection will ask for instead of waiting for it to miss first.
+        Route followed;
+        if (!RouteUsable(demand.route) && FollowCdnRoute(demand.route, &followed)) {
+            const std::string followedKey = keyFor(followed);
+            if (demands.find(followedKey) == demands.end()) {
+                Demand moved = demand;
+                moved.route = followed;
+                // The next spare goes to another front and edge, so the
+                // doubling meant for a dead relay only delays it (25 s after
+                // four refusals in the host test).
+                moved.backoffMs = 0;
+                moved.nextOpenAt = std::min(demand.nextOpenAt, now + kMinBackoffMs);
+                demands.emplace(followedKey, std::move(moved));
+            }
             it = demands.erase(it);
             continue;
         }

@@ -731,9 +731,12 @@ bool Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
                 // Telegram Web and keep bytes 60..61 random for direct WSS;
                 // a DC marker belongs only to MTProxy secret transports and to
                 // the Worker tunnel, which reaches the DC over plain TCP.
-                if (useSecret != 0 || isCurrentWssTunnel()) {
+                // Cloudflare fronts get the plain DC, media included: that is
+                // what Mirrly sends them, and its media loads through them.
+                const bool cdnFront = isCurrentWssCdn();
+                if (useSecret != 0 || isCurrentWssTunnel() || cdnFront) {
                     int16_t datacenterId;
-                    if (isMediaConnection) {
+                    if (isMediaConnection && !cdnFront) {
                         if (ConnectionsManager::getInstance(currentDatacenter->instanceNum).testBackend) {
                             datacenterId = -(int16_t) (10000 + currentDatacenter->getDatacenterId());
                         } else {

@@ -3898,6 +3898,9 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
                 ? nullptr
                 : ConnectionsManager::getInstance(instanceNum).takePooledWssSocket(currentWssRoute);
         if (pooled != nullptr) {
+            // A Cloudflare front spare may sit on another front than the one
+            // asked for; the connection reports and marks the one it uses.
+            currentWssRoute = pooled->route();
             currentWssTransport = std::move(pooled);
             if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup pool_hit domain=%s", this, currentWssRoute.domain.c_str());
         } else if (!currentWssTransport->open(address, addressLength, &diagnostic)) {
@@ -4032,6 +4035,10 @@ bool ConnectionSocket::isCurrentTransportWss() {
 
 bool ConnectionSocket::isCurrentWssTunnel() {
     return isCurrentTransportWss() && currentWssRoute.tunnel;
+}
+
+bool ConnectionSocket::isCurrentWssCdn() {
+    return isCurrentTransportWss() && currentWssRoute.cdnSlot >= 0;
 }
 
 bool ConnectionSocket::isCurrentMtProxyConnection() {
