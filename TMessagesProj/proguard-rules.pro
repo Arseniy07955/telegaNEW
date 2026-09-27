@@ -27,12 +27,18 @@
 
 # ===== ZaStoGram plugin engine =====
 # Plugins import Telegram classes by full name and reflect on members by name
-# (get_private_field / getDeclaredMethod / hooks). The project already sets -dontobfuscate,
-# so names are preserved; the real risk is R8 *removing* members that only a plugin
-# references reflectively (R8 fullMode tree-shakes per-member). -keep is a shrink root and
-# prevents that across the whole Telegram surface. Cost: larger DEX — the trade-off for an
-# open plugin engine.
+# (get_private_field / getDeclaredMethod / hooks). Names must stay as they are
+# everywhere, libraries included: exteraGram DEX cores are compiled against
+# unrenamed AndroidX/Kotlin, and with obfuscation on (the upstream default; this
+# file only claimed -dontobfuscate) re_extera crashed with NoSuchMethodError on
+# androidx.collection.LongSparseArray.get(J) (27.09.2026).
+-dontobfuscate
+# R8 still *removes* members that only a plugin references (fullMode tree-shakes
+# per member). -keep is a shrink root and prevents that across the whole Telegram
+# surface. Cost: larger DEX — the trade-off for an open plugin engine.
 -keep class org.telegram.** { *; }
+# Collections used by plugin cores directly (LongSparseArray.get and friends).
+-keep class androidx.collection.** { *; }
 # Engine bridge classes are called from Python by name — keep fully.
 -keep class org.telegram.plugins.** { *; }
 # exteraGram-compatibility bridge classes imported by community plugins (com.exteragram.messenger.*).
