@@ -398,9 +398,35 @@ uint32_t cdnCursorLocked(int32_t network) {
     if (it == cdnCursor.end()) {
         uint32_t start = 0;
         RAND_bytes(reinterpret_cast<uint8_t *>(&start), sizeof(start));
-        it = cdnCursor.emplace(network, start % kCdnFrontCount).first;
+        it = cdnCursor.emplace(network, start % (kCdnFrontCount * 2)).first;
     }
     return it->second;
+}
+
+// Address index (kCdnFront::address) that last completed TCP, per network.
+// On one Wi-Fi every 104.21.x front failed TCP while 172.67.x worked (logs
+// (23)); without this each failure only moved to the next domain on the same
+// address, and the working address came up only after ~20 lost attempts.
+std::map<int32_t, int32_t> cdnPreferredAddress;
+// Counted TCP failures in a row on the preferred address; one lost SYN is
+// flow noise and must not throw a working address away.
+std::map<int32_t, uint32_t> cdnPreferredAddressFailures;
+constexpr uint32_t kCdnAddressFailuresBeforeForget = 2;
+
+void noteCdnAddress(const Route &route, bool connected) {
+    if (route.cdnSlot < 0 || route.cdnAddress < 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(relayPreferencesMutex);
+    auto it = cdnPreferredAddress.find(route.network);
+    if (connected) {
+        cdnPreferredAddress[route.network] = route.cdnAddress;
+        cdnPreferredAddressFailures[route.network] = 0;
+    } else if (it != cdnPreferredAddress.end() && it->second == route.cdnAddress
+            && ++cdnPreferredAddressFailures[route.network] >= kCdnAddressFailuresBeforeForget) {
+        cdnPreferredAddress.erase(it);
+        cdnPreferredAddressFailures[route.network] = 0;
+    }
 }
 
 void advanceCdn(const Route &route) {
@@ -411,6 +437,7 @@ void advanceCdn(const Route &route) {
     uint32_t &cursor = cdnCursor[route.network];
     if (cursor == static_cast<uint32_t>(route.cdnSlot)) {
         cursor = (cursor + 1) % (kCdnFrontCount * 2);
+        // Interleaved (see CdnRoute): consecutive slots alternate the address.
     }
 }
 
@@ -678,17 +705,26 @@ static bool CdnRoute(int32_t network, int32_t dcId, Route *route, bool ignoreSup
         return false;
     }
     uint32_t slot;
+    int32_t address;
+    bool addressKnown;
     {
         std::lock_guard<std::mutex> lock(relayPreferencesMutex);
         slot = cdnCursorLocked(network);
+        auto preferred = cdnPreferredAddress.find(network);
+        addressKnown = preferred != cdnPreferredAddress.end();
+        address = addressKnown ? preferred->second : static_cast<int32_t>(slot % 2);
     }
-    const CdnFront &front = kCdnFronts[slot % kCdnFrontCount];
+    // Without a known-good address consecutive slots alternate the address
+    // on the same domain; with one, every slot is the next domain, so a
+    // failure never repeats the attempt that just failed.
+    const CdnFront &front = kCdnFronts[(addressKnown ? slot : slot / 2) % kCdnFrontCount];
     result.cdnSlot = static_cast<int32_t>(slot);
     result.cdnDcId = dcId;
     // The fronts have no -1 media hosts: media rides kwsN too, as in Mirrly,
     // where DC1 media loads on the user's mobile network.
     result.domain = prefix + "." + decodeCdnDomain(front.encodedDomain);
-    result.relayHost = front.address[(slot / kCdnFrontCount) % 2];
+    result.cdnAddress = address;
+    result.relayHost = front.address[address];
     result.relayHostFallback = result.domain;
     result.relayPort = 443;
     result.path = kOfficialPath;
@@ -806,6 +842,7 @@ bool Socket::open(const struct sockaddr *address, socklen_t addressLength, std::
     reachableRecorded = false;
     readyAtMs = 0;
     firstDataAtMs = 0;
+    lastDataAtMs = 0;
     bytesOut = 0;
     bytesIn = 0;
     const int result = ::connect(socketFd, address, addressLength);
@@ -849,6 +886,9 @@ bool Socket::finishTcpConnect(std::string *diagnostic) {
     }
     phase = transport::HandshakePhase::TcpConnected;
     recordTcpConnected(routeConfig.network, peerAddress, isCdn(routeConfig));
+    if (!routeConfig.viaFallback) {
+        noteCdnAddress(routeConfig, true);
+    }
     if (LOGS_ENABLED) {
         DEBUG_D("wss_socket tcp_connected domain=%s", routeConfig.domain.c_str());
     }
@@ -1228,6 +1268,9 @@ bool Socket::parseFrames(std::vector<std::vector<uint8_t>> &payloads, std::strin
         }
         inputBuffer.erase(inputBuffer.begin(), inputBuffer.begin() + headerLength + static_cast<size_t>(length));
     }
+    if (!payloads.empty()) {
+        lastDataAtMs = monotonicMillis();
+    }
     if (!payloads.empty() && phase == transport::HandshakePhase::WebSocketReady) {
         phase = transport::HandshakePhase::FirstDataReceived;
         firstDataAtMs = monotonicMillis();
@@ -1434,10 +1477,14 @@ void Socket::noteAttemptFailed() {
             }
             return;
         }
-        if (!isCdn(routeConfig) || phase == transport::HandshakePhase::None) {
-            // A front's 503 says nothing about its address; only a TCP failure
-            // moves it to the DNS name, which the pool cannot keep ready.
+        if (!isCdn(routeConfig)) {
+            // Fronts never switch to their DNS name: it resolves to the same
+            // two addresses, the pool cannot keep it ready, and the address
+            // preference and rotation already move away from a dead one.
             recordAttemptFailed(routeConfig);
+        }
+        if (phase == transport::HandshakePhase::None && !routeConfig.viaFallback) {
+            noteCdnAddress(routeConfig, false);
         }
         if (isCdn(routeConfig)) {
             // A front refused at any stage, 503 included: counted, or a
@@ -1535,7 +1582,7 @@ std::string Socket::takeSessionSummary() {
     // went each way and how long it lived.
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
-            "domain=%s relay=%s route=%s pool=%s tx=%llu rx=%llu ready_ms=%lld first_data_ms=%lld life_ms=%lld",
+            "domain=%s relay=%s route=%s pool=%s tx=%llu rx=%llu ready_ms=%lld first_data_ms=%lld last_data_ms=%lld life_ms=%lld",
             routeConfig.domain.c_str(),
             routeConfig.connectHost.c_str(),
             routeConfig.tunnel ? "tunnel" : (isCdn(routeConfig) ? (routeConfig.viaFallback ? "cdn_dns" : "cdn")
@@ -1545,6 +1592,7 @@ std::string Socket::takeSessionSummary() {
             (unsigned long long) bytesIn,
             (long long) (readyAtMs != 0 ? readyAtMs - openedAtMs : -1),
             (long long) (firstDataAtMs != 0 ? firstDataAtMs - openedAtMs : -1),
+            (long long) (lastDataAtMs != 0 ? lastDataAtMs - openedAtMs : -1),
             (long long) (monotonicMillis() - openedAtMs));
     return buffer;
 }

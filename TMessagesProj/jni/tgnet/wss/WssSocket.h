@@ -33,6 +33,8 @@ struct Route {
     // tunnel it needs no destination address and carries the byte stream as is.
     int32_t cdnSlot = -1;
     int32_t cdnDcId = 0;
+    // Which of the front's two Cloudflare addresses this route dials.
+    int32_t cdnAddress = -1;
     // Key for failure counting and suppression when it must not follow the
     // domain: every front domain of a DC shares one health record.
     std::string healthDomain;
@@ -160,6 +162,8 @@ private:
     int64_t openedAtMs = 0;
     int64_t readyAtMs = 0;
     int64_t firstDataAtMs = 0;
+    // With first_data_ms it gives throughput: rx / (last - first).
+    int64_t lastDataAtMs = 0;
     uint64_t bytesOut = 0;
     uint64_t bytesIn = 0;
     bool summaryTaken = false;

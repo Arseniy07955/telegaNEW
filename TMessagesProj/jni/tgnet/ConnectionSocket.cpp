@@ -4749,6 +4749,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
             setTransportState(TransportState::MtprotoReady, "wss_ready");
             if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup on_connected", this);
             if (!canNotifyConnected("wss_ready")) {
+                // EPOLLOUT stays armed until on_connected (adjustWriteOp);
+                // returning here would spin the network thread.
+                closeSocket(1, -1);
                 return;
             }
             onConnected();
@@ -5346,7 +5349,12 @@ void ConnectionSocket::adjustWriteOp() {
         const bool hasPendingWssWrite = currentWssTransport->wantsWrite();
         const bool canWriteQueuedApplicationData = outgoingByteStream->hasData()
                 && currentWssTransport->canWriteApplicationData();
-        if (hasPendingWssWrite || canWriteQueuedApplicationData) {
+        // A pooled socket is ready before the connection has anything to send,
+        // and on_connected only fires from an epoll event: a download
+        // connection, which queues its request after on_connected, waited out
+        // its timeout on every pool hit (logs (23): 19 hits, none connected).
+        const bool readyButNotAnnounced = currentWssTransport->isReady() && !onConnectedSent;
+        if (hasPendingWssWrite || canWriteQueuedApplicationData || readyButNotAnnounced) {
             eventMask.events |= EPOLLOUT;
         }
     } else if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || (proxyAuthState == 11 && hasPendingClientHello)) {
