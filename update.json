@@ -13,8 +13,7 @@
       "server": "pokemon.catpaws.ru",
       "port": 9443,
       "secret": "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275",
-      "priority": true,
-      "active": true
+      "priority": true
     },
     {
       "server": "nsk.cdn.catpaws.ru",
@@ -89,7 +88,8 @@
     {
       "server": "ysgweb.catpaws.ru",
       "secret": "dd7f9ce4321f6cb896170243bb5fc688bf",
-      "priority": true
+      "priority": true,
+      "active": true
     }
   ]
 }
