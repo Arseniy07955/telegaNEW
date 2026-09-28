@@ -83,11 +83,13 @@
     },
     {
       "server": "ysgweb.catpaws.ru",
-      "secret": "7f9ce4321f6cb896170243bb5fc688bf"
+      "secret": "7f9ce4321f6cb896170243bb5fc688bf",
+      "delete": true
     },
     {
       "server": "ysgweb.catpaws.ru",
-      "secret": "dd7f9ce4321f6cb896170243bb5fc688bf"
+      "secret": "dd7f9ce4321f6cb896170243bb5fc688bf",
+      "priority": true
     }
   ]
 }
