@@ -27,6 +27,9 @@ param(
     [int]$BuildNumber = 0,
     [switch]$Install,
     [switch]$NoMirror,
+    # Остановить демон Gradle сразу после сборки (он держит около 9 ГБ памяти).
+    # Без этого ключа демон сам закроется через 10 минут простоя.
+    [switch]$StopDaemon,
     [string]$Device = ''
 )
 
@@ -57,7 +60,8 @@ if (Test-Path $cfgFile) {
         if ($line -match '^\s*([A-Z_]+)\s*=\s*(.*?)\s*$') { $cfg[$Matches[1]] = $Matches[2].Trim('"') }
     }
 }
-$gradleArgs = @('--build-cache', '--no-configuration-cache', '--parallel', "-PzastoAbiFilter=$Abi")
+# Демон по умолчанию живёт 3 часа и всё это время держит около 9 ГБ: здесь 10 минут.
+$gradleArgs = @('--build-cache', '--no-configuration-cache', '--parallel', '-Dorg.gradle.daemon.idletimeout=600000', "-PzastoAbiFilter=$Abi")
 # Зеркало Google Maven: dl.google.com из некоторых сетей рвёт параллельные загрузки Gradle.
 # Отключить: -NoMirror.
 if (-not $NoMirror) { $gradleArgs += '-I', "$PSScriptRoot\gradle-mirror.init.gradle" }
@@ -120,6 +124,10 @@ try {
     if ($secretDir -and (Test-Path $secretDir)) { Remove-Item -Recurse -Force $secretDir }
 }
 $timer.Stop()
+
+if ($StopDaemon) {
+    & "$jdk\bin\java.exe" '-Dorg.gradle.appname=gradlew' -classpath "$repo\gradle\wrapper\gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain --stop | Out-Null
+}
 
 $apk = Get-ChildItem "$repo\TMessagesProj_AppStandalone\build\outputs\apk" -Recurse -Filter *.apk |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
