@@ -41,6 +41,10 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     // Обновления telegaNEW берутся из своего update.json на S3: там же лежит
     // список прокси, который приложение подхватывает при каждой проверке.
     private static final String UPDATE_JSON_URL = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json";
+    // Список прокси ведёт бот и кладёт в отдельный файл рядом с update.json:
+    // так релиз сборки не затирает прокси, а пауза обновлений (когда update.json
+    // убирают с S3) не отключает и раздачу прокси.
+    private static final String PROXIES_JSON_URL = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/proxies.json";
     private static final String APK_URL_PREFIX = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-";
 
     private BetaUpdate pendingUpdate;
@@ -101,32 +105,61 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void checkUpdate(boolean force, Runnable whenDone) {
-        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates and proxies at " + UPDATE_JSON_URL);
+        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates at " + UPDATE_JSON_URL);
         new HttpGetTask(result -> {
+            JSONObject updateJson = null;
             if (result != null) {
                 try {
-                    JSONObject json = new JSONObject(result);
+                    updateJson = new JSONObject(result);
 
-                    int latest = comparableVersionCode(json.getInt("version_code"));
+                    int latest = comparableVersionCode(updateJson.getInt("version_code"));
                     int current = comparableVersionCode(installedVersionCode());
                     if (latest > current) {
-                        pendingUpdate = new BetaUpdate(numericVersionName(json.getString("version_name")), latest, json.optString("changelog", ""));
+                        pendingUpdate = new BetaUpdate(numericVersionName(updateJson.getString("version_name")), latest, updateJson.optString("changelog", ""));
                     } else {
                         pendingUpdate = null;
                     }
                     if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check latest=" + latest + " current=" + current);
+                } catch (Exception e) {
+                    updateJson = null;
+                    FileLog.e("telegaNEW: failed to parse update.json", e);
+                }
+            }
+            checkProxies(updateJson, whenDone);
+        }).setHeader("User-Agent", "telegaNEW/" + installedVersionName()).execute(UPDATE_JSON_URL);
+    }
 
+    // Прокси берутся из proxies.json. Если его нет или он битый, работает
+    // список из update.json: так клиент не остаётся без прокси, пока бот
+    // ещё не выложил файл, и так же живут старые сборки.
+    private void checkProxies(JSONObject updateJson, Runnable whenDone) {
+        new HttpGetTask(result -> {
+            JSONObject source = null;
+            if (result != null) {
+                try {
+                    JSONObject json = new JSONObject(result);
                     if (json.has("proxies") || json.has("web_proxies")) {
-                        applyProxies(json.optJSONArray("proxies"), json.optJSONArray("web_proxies"));
+                        source = json;
                     }
                 } catch (Exception e) {
-                    FileLog.e("telegaNEW: failed to parse update.json", e);
+                    FileLog.e("telegaNEW: failed to parse proxies.json", e);
+                }
+            }
+            if (source == null && updateJson != null
+                    && (updateJson.has("proxies") || updateJson.has("web_proxies"))) {
+                source = updateJson;
+            }
+            if (source != null) {
+                try {
+                    applyProxies(source.optJSONArray("proxies"), source.optJSONArray("web_proxies"));
+                } catch (Exception e) {
+                    FileLog.e("telegaNEW: failed to apply proxies", e);
                 }
             }
             if (whenDone != null) {
                 whenDone.run();
             }
-        }).setHeader("User-Agent", "telegaNEW/" + installedVersionName()).execute(UPDATE_JSON_URL);
+        }).setHeader("User-Agent", "telegaNEW/" + installedVersionName()).execute(PROXIES_JSON_URL);
     }
 
     // Веб-прокси лежат в отдельном массиве web_proxies: у них нет порта, и
