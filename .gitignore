@@ -45,3 +45,7 @@ diff_files.txt
 eror.txt
 guard_output.txt
 upstream_diff.txt
+
+# Локальная сборка: секреты и готовые APK
+local-build.env
+dist-local/

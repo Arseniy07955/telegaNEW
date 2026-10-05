@@ -1,0 +1,25 @@
+// Подменяет Google Maven зеркалом для локальной сборки (передаётся флагом -I).
+// С некоторых сетей dl.google.com рвёт TLS, когда Gradle тянет много файлов
+// параллельно ("SSL peer shut down incorrectly"), а зеркало отвечает быстро.
+// Остальные репозитории не затрагиваются.
+def GOOGLE = 'https://dl.google.com/dl/android/maven2'
+def MIRROR = 'https://maven.aliyun.com/repository/google'
+
+def swap = { repos ->
+    repos.all { repo ->
+        if (repo instanceof MavenArtifactRepository && repo.url.toString().startsWith(GOOGLE)) {
+            repo.url = MIRROR
+        }
+    }
+}
+
+beforeSettings { settings ->
+    swap(settings.pluginManagement.repositories)
+}
+settingsEvaluated { settings ->
+    swap(settings.dependencyResolutionManagement.repositories)
+}
+allprojects {
+    swap(buildscript.repositories)
+    swap(repositories)
+}
