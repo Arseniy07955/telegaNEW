@@ -47,6 +47,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
     private int muteScreenshotRow;
     private int disableAdsRow;
     private int zastogramPromoRow;
+    private int channelPromoRow;
     private int videoNoRecompressRow;
     private int infoRow;
     private int rowCount;
@@ -64,6 +65,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         muteScreenshotRow = rowCount++;
         disableAdsRow = rowCount++;
         zastogramPromoRow = rowCount++;
+        channelPromoRow = rowCount++;
         videoNoRecompressRow = rowCount++;
         infoRow = rowCount++;
         return true;
@@ -108,7 +110,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
             boolean newValue = !ZaStoPrivacy.get(key);
             ZaStoPrivacy.set(key, newValue);
             ((TextCheckCell) view).setChecked(newValue);
-            if (position == zastogramPromoRow) {
+            if (position == zastogramPromoRow || position == channelPromoRow) {
                 for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
                     if (UserConfig.getInstance(a).isClientActivated()) {
                         NotificationCenter.getInstance(a).postNotificationName(NotificationCenter.dialogsNeedReload);
@@ -150,6 +152,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         if (position == muteScreenshotRow) return ZaStoPrivacy.KEY_MUTE_SCREENSHOT_PING;
         if (position == disableAdsRow) return ZaStoPrivacy.KEY_DISABLE_ADS;
         if (position == zastogramPromoRow) return ZaStoPrivacy.KEY_SHOW_ZASTOGRAM_PROMO;
+        if (position == channelPromoRow) return ZaStoPrivacy.KEY_SHOW_CHANNEL_PROMO;
         return null;
     }
 
@@ -162,6 +165,7 @@ public class ZaStoPrivacySettingsActivity extends BaseFragment {
         if (position == muteScreenshotRow) return "Не сообщать о скриншоте (секретные чаты)";
         if (position == disableAdsRow) return "Отключить рекламу";
         if (position == zastogramPromoRow) return "Закреплять канал ZaStoGram в списке чатов";
+        if (position == channelPromoRow) return "Предлагать канал @yonsegram (один раз)";
         return "";
     }
 

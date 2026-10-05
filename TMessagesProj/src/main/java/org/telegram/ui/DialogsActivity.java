@@ -176,6 +176,7 @@ import org.telegram.ui.Cells.RequestPeerRequirementsCell;
 import org.telegram.ui.Cells.ShadowSectionCell;
 import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Cells.TextInfoPrivacyCell;
+import org.telegram.ui.Cells.ChannelPromoHintCell;
 import org.telegram.ui.Cells.UnconfirmedAuthHintCell;
 import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.AlertsCreator;
@@ -619,6 +620,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private ActiveGiftAuctionsHintCell activeGiftAuctionsHintCell;
     private DialogsHintCell dialogsHintCell;
     private UnconfirmedAuthHintCell authHintCell;
+    private ChannelPromoHintCell channelPromoHintCell;
     private Long cacheSize, deviceSize;
     private CommunityRequestsCell communityPendingRequests;
 
@@ -3213,6 +3215,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         AndroidUtilities.runOnUIThread(() -> Theme.createChatResources(context, false));
 
         authHintCell = null;
+        channelPromoHintCell = null;
         activeGiftAuctionsHintCell = null;
         dialogsHintCell = null;
         communityPendingRequests = null;
@@ -6345,6 +6348,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
         checkCommunityPendingRequestsVisible(true);
         checkUnconfirmedAuthHintCellVisibility();
+        checkChannelPromoHintCellVisibility();
         checkActiveGiftAuctionsHintCellVisibility();
     }
 
@@ -6368,6 +6372,37 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
         if (authHintCell != null) {
             topPanelLayout.setViewVisible(authHintCell, isVisible);
+        }
+    }
+
+    // Одноразовое предложение заглянуть в канал клиента. Показывается, пока
+    // человек не откроет канал или не нажмёт «Не сейчас»; отключается в
+    // настройках ZaSto «Приватность».
+    private void checkChannelPromoHintCellVisibility() {
+        if (fragmentView == null || topPanelLayout == null) {
+            return;
+        }
+
+        final boolean isVisible = !isInPreviewMode()
+            && folderId == 0 && communityId == 0 && initialDialogsType == DIALOGS_TYPE_DEFAULT
+            && ZaStoPrivacy.isChannelPromoDue()
+            && (rightSlidingDialogContainer == null || !rightSlidingDialogContainer.hasFragment())
+            && !animatorSearchVisible.getValue();
+
+        if (isVisible && channelPromoHintCell == null) {
+            channelPromoHintCell = new ChannelPromoHintCell(getContext());
+            channelPromoHintCell.set(v -> {
+                ZaStoPrivacy.markChannelPromoSeen();
+                checkChannelPromoHintCellVisibility();
+                getMessagesController().openByUserName(ZaStoPrivacy.CHANNEL_PROMO_USERNAME, DialogsActivity.this, 1);
+            }, v -> {
+                ZaStoPrivacy.markChannelPromoSeen();
+                checkChannelPromoHintCellVisibility();
+            });
+            topPanelLayout.addView(channelPromoHintCell);
+        }
+        if (channelPromoHintCell != null) {
+            topPanelLayout.setViewVisible(channelPromoHintCell, isVisible);
         }
     }
 
@@ -12550,6 +12585,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
         if (authHintCell != null) {
             SimpleThemeDescription.add(arrayList, authHintCell::updateColors, Theme.key_windowBackgroundWhite, Theme.key_windowBackgroundWhiteBlackText, Theme.key_windowBackgroundWhiteGrayText, Theme.key_windowBackgroundWhiteValueText, Theme.key_text_RedBold);
+        }
+        if (channelPromoHintCell != null) {
+            SimpleThemeDescription.add(arrayList, channelPromoHintCell::updateColors, Theme.key_windowBackgroundWhite, Theme.key_windowBackgroundWhiteBlackText, Theme.key_windowBackgroundWhiteGrayText, Theme.key_windowBackgroundWhiteValueText);
         }
         if (activeGiftAuctionsHintCell != null) {
             SimpleThemeDescription.add(arrayList, activeGiftAuctionsHintCell::updateColors, Theme.key_windowBackgroundWhite, Theme.key_windowBackgroundWhiteBlackText, Theme.key_windowBackgroundWhiteGrayText, Theme.key_windowBackgroundWhiteValueText, Theme.key_text_RedBold);

@@ -24,6 +24,9 @@ public final class ZaStoPrivacy {
     public static final String KEY_DISABLE_ADS = "DISABLE_ADS";
     public static final String KEY_HIDE_ALL_CHATS = "HIDE_ALL_CHATS";
     public static final String KEY_SHOW_ZASTOGRAM_PROMO = "SHOW_ZASTOGRAM_PROMO";
+    public static final String KEY_SHOW_CHANNEL_PROMO = "SHOW_CHANNEL_PROMO";
+    private static final String KEY_CHANNEL_PROMO_SEEN = "CHANNEL_PROMO_SEEN";
+    public static final String CHANNEL_PROMO_USERNAME = "yonsegram";
 
     /** Keep messages that the remote side deletes (anti-delete), marked instead of removed. */
     public static boolean KEEP_DELETED = true;
@@ -52,6 +55,12 @@ public final class ZaStoPrivacy {
      */
     public static boolean SHOW_ZASTOGRAM_PROMO = true;
 
+    /**
+     * Offer the telegaNEW channel once, as a dismissible card above the chat list. Turning
+     * the option off hides it for good; turning it on again shows the card one more time.
+     */
+    public static boolean SHOW_CHANNEL_PROMO = true;
+
     /** Hide the built-in "All Chats" tab when at least one custom chat folder exists. */
     public static boolean HIDE_ALL_CHATS = false;
 
@@ -76,6 +85,7 @@ public final class ZaStoPrivacy {
             DISABLE_ADS = p.getBoolean(KEY_DISABLE_ADS, true);
             HIDE_ALL_CHATS = p.getBoolean(KEY_HIDE_ALL_CHATS, false);
             SHOW_ZASTOGRAM_PROMO = p.getBoolean(KEY_SHOW_ZASTOGRAM_PROMO, true);
+            SHOW_CHANNEL_PROMO = p.getBoolean(KEY_SHOW_CHANNEL_PROMO, true);
         } catch (Exception ignore) {
         }
     }
@@ -91,6 +101,7 @@ public final class ZaStoPrivacy {
             case KEY_DISABLE_ADS: return DISABLE_ADS;
             case KEY_HIDE_ALL_CHATS: return HIDE_ALL_CHATS;
             case KEY_SHOW_ZASTOGRAM_PROMO: return SHOW_ZASTOGRAM_PROMO;
+            case KEY_SHOW_CHANNEL_PROMO: return SHOW_CHANNEL_PROMO;
         }
         return false;
     }
@@ -106,10 +117,34 @@ public final class ZaStoPrivacy {
             case KEY_DISABLE_ADS: DISABLE_ADS = value; break;
             case KEY_HIDE_ALL_CHATS: HIDE_ALL_CHATS = value; break;
             case KEY_SHOW_ZASTOGRAM_PROMO: SHOW_ZASTOGRAM_PROMO = value; break;
+            case KEY_SHOW_CHANNEL_PROMO: SHOW_CHANNEL_PROMO = value; break;
             default: return;
         }
         try {
-            prefs().edit().putBoolean(key, value).apply();
+            SharedPreferences.Editor editor = prefs().edit().putBoolean(key, value);
+            if (KEY_SHOW_CHANNEL_PROMO.equals(key) && value) {
+                editor.putBoolean(KEY_CHANNEL_PROMO_SEEN, false);
+            }
+            editor.apply();
+        } catch (Exception ignore) {
+        }
+    }
+
+    /** The channel card is due until the user opens it or dismisses it once. */
+    public static boolean isChannelPromoDue() {
+        if (!SHOW_CHANNEL_PROMO) {
+            return false;
+        }
+        try {
+            return !prefs().getBoolean(KEY_CHANNEL_PROMO_SEEN, false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static void markChannelPromoSeen() {
+        try {
+            prefs().edit().putBoolean(KEY_CHANNEL_PROMO_SEEN, true).apply();
         } catch (Exception ignore) {
         }
     }

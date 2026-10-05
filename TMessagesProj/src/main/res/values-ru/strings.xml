@@ -449,4 +449,8 @@
     <!-- exteraGram ABI: read by DEX plugins (re:extera) via R.string -->
     <string name="RestartRequired">Перезапустите приложение, чтобы применить изменения</string>
     <string name="MainMenuHiddenItems">Скрытые пункты</string>
+    <string name="ChannelPromoTitle">Новости telegaNEW</string>
+    <string name="ChannelPromoMessage">Обновления, свежие прокси и новые функции выходят в канале @yonsegram. Заходить только по желанию.</string>
+    <string name="ChannelPromoOpen">Открыть канал</string>
+    <string name="ChannelPromoDismiss">Не сейчас</string>
 </resources>
