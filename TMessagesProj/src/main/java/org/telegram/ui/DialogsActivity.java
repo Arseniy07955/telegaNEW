@@ -7080,6 +7080,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         if (commentView != null) {
             commentView.onResume();
         }
+        // Настройку «Предлагать канал» меняют на другом экране: при возврате плашку надо перепроверить.
+        checkChannelPromoHintCellVisibility();
         if (!onlySelect && folderId == 0 && communityId == 0) {
             getMediaDataController().checkStickers(MediaDataController.TYPE_EMOJI);
         }

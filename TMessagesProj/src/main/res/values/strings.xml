@@ -2421,8 +2421,8 @@
     <string name="DurovLalka">Дуров лалка</string>
     <string name="OurChannel">Наш канал</string>
     <string name="OurVpn">Наш VPN</string>
-    <string name="ChannelPromoTitle">News about telegaNEW</string>
-    <string name="ChannelPromoMessage">Updates, fresh proxies and new features are posted in the @yonsegram channel. Only if you want to.</string>
+    <string name="ChannelPromoTitle">YonSeGram</string>
+    <string name="ChannelPromoMessage">A new client built on telegaNEW, and much more. Details are in the @yonsegram channel, only if you want to.</string>
     <string name="ChannelPromoOpen">Open channel</string>
     <string name="ChannelPromoDismiss">Not now</string>
     <string name="ZapretVpnBot">Senkapopka VPN</string>
