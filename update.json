@@ -2,7 +2,7 @@
   "version_code": 0,
   "version_name": "dev",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Telegram обновлён до версии 12.10.4\n• Поддержка плагинов exteraGram\n• Точная скорость видео и усиление яркости и громкости\n• Исправления стабильности\n• Добавлены резервные веб-прокси",
+  "changelog": "• Telegram обновлён до версии 12.10.4\n• Поддержка плагинов exteraGram\n• Точная скорость видео и усиление яркости и громкости\n• Добавлены резервные веб-прокси\n• Если веб-прокси не подключается, приложение само переключится на рабочий\n• Список прокси теперь обновляется отдельно от версии приложения\n• Один раз предложим заглянуть в канал нового клиента YonSeGram (отключается в настройках ZaSto Приватность)",
   "proxies": [
     {
       "server": "redflag.yazaebalsyadelatproxy.cc",
@@ -13,7 +13,8 @@
       "server": "pokemon.catpaws.ru",
       "port": 9443,
       "secret": "eeb5039a661942265681b5a34c3ed556cf706f6b656d6f6e2e636174706177732e7275",
-      "priority": true
+      "priority": true,
+      "active": true
     },
     {
       "server": "nsk.cdn.catpaws.ru",
@@ -88,8 +89,7 @@
     {
       "server": "ysgweb.catpaws.ru",
       "secret": "dd7f9ce4321f6cb896170243bb5fc688bf",
-      "priority": true,
-      "active": true
+      "priority": true
     }
   ]
 }
