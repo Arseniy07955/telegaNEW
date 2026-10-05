@@ -29,6 +29,10 @@ public final class ProxyAutoSelector implements NotificationCenter.NotificationC
 
     // Сколько ждём обычного коннекта, прежде чем лезть проверять кандидатов.
     private static final long PROBE_AFTER_CONNECTING_MS = 4_000L;
+    // Веб-прокси держит локальный мост открытым, поэтому «ждём TCP» не бывает:
+    // клиент просто висит в обычном «Подключаемся». Ждём дольше, чем на
+    // обычных прокси: страница-мост в WebView поднимается не мгновенно.
+    private static final long WEB_PROBE_AFTER_CONNECTING_MS = 20_000L;
     // Как часто освежать пинги, пока приложение живо.
     private static final long REFRESH_INTERVAL_MS = 20 * 60 * 1000L;
     // Сколько точек берём в один заход: очередь последовательная, длинный
@@ -64,7 +68,13 @@ public final class ProxyAutoSelector implements NotificationCenter.NotificationC
             cancelScheduledProbe();
             return;
         }
-        if (state != ConnectionsManager.ConnectionStateConnectingToProxy) {
+        long delay;
+        if (state == ConnectionsManager.ConnectionStateConnectingToProxy) {
+            delay = PROBE_AFTER_CONNECTING_MS;
+        } else if (state == ConnectionsManager.ConnectionStateConnecting
+                && SharedConfig.currentProxy != null && SharedConfig.currentProxy.isWebProxy()) {
+            delay = WEB_PROBE_AFTER_CONNECTING_MS;
+        } else {
             return;
         }
         if (!SharedConfig.isProxyEnabled() || SharedConfig.proxyList.size() <= 1) {
@@ -77,8 +87,8 @@ public final class ProxyAutoSelector implements NotificationCenter.NotificationC
             scheduledProbe = null;
             startSweep(true);
         };
-        AndroidUtilities.runOnUIThread(scheduledProbe, PROBE_AFTER_CONNECTING_MS);
-        log("probe scheduled delay_ms=" + PROBE_AFTER_CONNECTING_MS);
+        AndroidUtilities.runOnUIThread(scheduledProbe, delay);
+        log("probe scheduled delay_ms=" + delay);
     }
 
     private void cancelScheduledProbe() {
